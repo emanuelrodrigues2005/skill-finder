@@ -22,8 +22,15 @@ pipeline CI/CD + observabilidade, na arquitetura definida em [`docs/01`](docs/01
 ## Como rodar
 
 Requisitos: Docker Desktop com **Compose ≥ 2.24** (o `compose.yaml` usa `env_file.required` e
-`depends_on.required`) e — para desenvolvimento sem Docker — **Node 22 + pnpm**
-(`corepack enable`). PostgreSQL 16 sobe pelo próprio compose.
+`depends_on.required`) e — para desenvolvimento sem Docker — **Node 22 + pnpm** no WSL:
+
+```bash
+bash scripts/setup-node-wsl.sh    # Node 22 nativo + pnpm 9.15.4 (confira com: command -v node)
+```
+
+Se `command -v node` responder algo em `/mnt/c/...`, você está usando o Node do Windows dentro do
+Ubuntu e o pnpm vai falhar com `exec: node: not found` — é exatamente o que o script corrige.
+PostgreSQL 16 sobe pelo próprio compose.
 
 ```bash
 cp .env.example .env    # preencha POSTGRES_PASSWORD (o compose recusa subir sem ela)

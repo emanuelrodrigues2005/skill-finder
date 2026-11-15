@@ -319,7 +319,21 @@ Explicitando as versões mínimas:
 | `node` | 22 | runtime do backend (NestJS) e build do frontend |
 | `pnpm` | — | gerenciador de pacotes de `backend/` e `frontend/` (`corepack enable`) |
 
-> **Node 22 e pnpm são a toolchain da aplicação** (NestJS + TypeScript; ADR-007 em `docs/app/02-arquitetura.md`). O `scripts/install-toolchain-wsl.sh` **não** instala Node nem pnpm — ele cuida de AWS CLI, Terraform, tflint e Ansible: o Node 22 já vem no ambiente e o pnpm é habilitado com `corepack enable` (confira com `pnpm --version`). O `python3`/`pipx` que continuam na lista do `apt` servem apenas à rota opcional do Ansible (§3.5).
+> **Node 22 e pnpm são a toolchain da aplicação** (NestJS + TypeScript; ADR-007 em `docs/app/02-arquitetura.md`). O `scripts/install-toolchain-wsl.sh` **não** instala Node nem pnpm — ele cuida de AWS CLI, Terraform, tflint e Ansible. Para o Node use o script dedicado:
+>
+> ```bash
+> bash scripts/setup-node-wsl.sh          # instala Node 22 (NodeSource) + pnpm 9.15.4
+> bash scripts/setup-node-wsl.sh --check  # só diagnostica
+> ```
+>
+> **Atalho que morde:** se você já usou Node/corepack no **Windows**, o WSL herda o diretório
+> `/mnt/c/.../corepack-shims` no PATH. O `pnpm` desse caminho é um shim que tenta chamar um
+> `node` que não existe no Linux, e o sintoma é `pnpm: 11: exec: node: not found`. O script
+> detecta isso (`command -v node` resolvendo para `/mnt/...`) e instala o Node nativo, que passa
+> a ter precedência. O `make` também verifica, com mensagem explícita, antes de qualquer alvo.
+> Confira com `command -v node` — precisa começar com `/usr/`, nunca `/mnt/`.
+>
+> O `python3`/`pipx` que continuam na lista do `apt` servem apenas à rota opcional do Ansible (§3.5).
 
 > **Atenção — armadilha real:** o Git **do WSL** e o Git **do Windows** têm configurações
 > separadas. Sua identidade já está configurada no Windows e **não** vale aqui. Configure no
