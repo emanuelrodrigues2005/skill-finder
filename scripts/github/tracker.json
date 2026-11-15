@@ -144,8 +144,9 @@
                                       "area:docs",
                                       "priority:p0"
                                   ],
-                       "state":  "open",
-                       "bodyFile":  "scripts/github/issues/f1.md"
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f1.md",
+                       "closing_comment":  "Aprovado; evidência em docs/evidencias/f1-aprovacao.md."
                    },
                    {
                        "title":  "chore(catalog): descobrir e congelar a fonte de dados do skills.sh",
@@ -155,8 +156,9 @@
                                       "area:api",
                                       "priority:p0"
                                   ],
-                       "state":  "open",
-                       "bodyFile":  "scripts/github/issues/f2.md"
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f2.md",
+                       "closing_comment":  "Decisão D3 (scraping de DOM) com amostra em docs/app/amostras/."
                    },
                    {
                        "title":  "feat(api): congelar contrato OpenAPI v0 com 8 endpoints",
