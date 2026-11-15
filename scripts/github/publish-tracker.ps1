@@ -203,8 +203,19 @@ function Invoke-Gh {
         Write-Step "gh $($Arguments -join ' ')"
         return $null
     }
-    $out = & gh @Arguments 2>&1
-    $code = $LASTEXITCODE
+    # gh escreve mensagens de SUCESSO no stderr ("✓ Closed issue ..."). Com
+    # $ErrorActionPreference = 'Stop' cada linha de stderr virava excecao e o
+    # script abortava no meio. Aqui o stderr volta a ser texto; quem decide
+    # sucesso/fracasso e o exit code.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & gh @Arguments 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($out) { $out = @($out | ForEach-Object { [string]$_ }) }
     if ($code -ne 0) {
         throw "gh $($Arguments -join ' ') falhou (exit $code): $out"
     }
