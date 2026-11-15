@@ -203,7 +203,7 @@ function Invoke-Gh {
         Write-Step "gh $($Arguments -join ' ')"
         return $null
     }
-    # gh escreve mensagens de SUCESSO no stderr ("✓ Closed issue ..."). Com
+    # gh escreve mensagens de SUCESSO no stderr ("âœ“ Closed issue ..."). Com
     # $ErrorActionPreference = 'Stop' cada linha de stderr virava excecao e o
     # script abortava no meio. Aqui o stderr volta a ser texto; quem decide
     # sucesso/fracasso e o exit code.
@@ -236,7 +236,7 @@ $existingIssues = @{}
 if ($Apply) {
     Write-Head 'lendo estado remoto'
     # Fail-closed: se a leitura falhar, a excecao sobe e NADA e escrito. Antes,
-    # uma falha de leitura virava mapa vazio e o script recriava tudo Ã¢â‚¬â€ e a API
+    # uma falha de leitura virava mapa vazio e o script recriava tudo ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â e a API
     # aceita titulo duplicado, entao o resultado seria issue duplicada e fechada
     # com comentario de evidencia (registro falso e permanente).
     $labels = Invoke-Gh -Arguments @('label', 'list', '--repo', $Repo, '--limit', '200', '--json', 'name') -Json
@@ -270,6 +270,15 @@ foreach ($ms in $spec.milestones) {
         $existingMilestones[$ms.title] = $newMilestone.number
     }
     $script:Created++
+}
+
+# Escreve texto num arquivo temporario sem BOM (Set-Content -Encoding UTF8 no
+# PowerShell 5.1 grava BOM, e o BOM ia junto no corpo publicado).
+function Write-TempBody {
+    param([string]$Text)
+    $p = Join-Path ([System.IO.Path]::GetTempPath()) ('gh-body-' + [guid]::NewGuid().ToString('N') + '.md')
+    [System.IO.File]::WriteAllText($p, $Text, (New-Object System.Text.UTF8Encoding($false)))
+    return $p
 }
 
 # --- issues --------------------------------------------------------------------
@@ -307,16 +316,29 @@ foreach ($issue in $spec.issues) {
     $msLabel = if ($issue.milestone) { $issue.milestone } else { '-' }
     Write-New ("[{0}] {1}  ms={2} labels={3}" -f $state, $issue.title, $msLabel, (($issue.labels) -join ','))
     if ($Apply) {
-        $args = @('issue', 'create', '--repo', $Repo, '--title', $issue.title, '--body', (Resolve-Refs -Body (Get-IssueBody -Issue $issue) -Map $issueNumbers))
+        # `--body-file` e nao `--body`: o PowerShell 5.1 quebra argumento nativo que
+        # contem espaco + aspas embutidas ("como X quero Y para Z"), e o corpo tem
+        # as duas coisas. Arquivo elimina o problema de quoting por completo.
+        $bodyPath = Write-TempBody (Resolve-Refs -Body (Get-IssueBody -Issue $issue) -Map $issueNumbers)
+        $args = @('issue', 'create', '--repo', $Repo, '--title', $issue.title, '--body-file', $bodyPath)
         if ($msNum) { $args += @('--milestone', $issue.milestone) }
         foreach ($lb in $issue.labels) { $args += @('--label', $lb) }
-        $url = (Invoke-Gh -Arguments $args) | Select-Object -Last 1
+        try {
+            $url = (Invoke-Gh -Arguments $args) | Select-Object -Last 1
+        } finally {
+            Remove-Item $bodyPath -ErrorAction SilentlyContinue
+        }
         $num = [int]([regex]::Match([string]$url, '/(\d+)$').Groups[1].Value)
         $issueNumbers[$issue.title] = $num
 
         if ($state -eq 'closed') {
             if ($issue.closing_comment) {
-                Invoke-Gh -Arguments @('issue', 'comment', [string]$num, '--repo', $Repo, '--body', $issue.closing_comment) | Out-Null
+                $commentPath = Write-TempBody $issue.closing_comment
+                try {
+                    Invoke-Gh -Arguments @('issue', 'comment', [string]$num, '--repo', $Repo, '--body-file', $commentPath) | Out-Null
+                } finally {
+                    Remove-Item $commentPath -ErrorAction SilentlyContinue
+                }
             }
             Invoke-Gh -Arguments @('issue', 'close', [string]$num, '--repo', $Repo, '--reason', 'completed') | Out-Null
             Write-Step "  fechada #$num (motivo: completed)"
@@ -334,7 +356,8 @@ if ($Apply -and $script:MissingRefs.Count -gt 0) {
         $resolved = Resolve-Refs -Body (Get-IssueBody -Issue $issue) -Map $issueNumbers
         if ($resolved -ne (Get-IssueBody -Issue $issue) -and $resolved -notmatch '\(pendente\)') {
             Write-Step "atualizando corpo de #$num"
-            Invoke-Gh -Arguments @('issue', 'edit', [string]$num, '--repo', $Repo, '--body', $resolved) | Out-Null
+            $editPath = Write-TempBody $resolved
+            try { Invoke-Gh -Arguments @('issue', 'edit', [string]$num, '--repo', $Repo, '--body-file', $editPath) | Out-Null } finally { Remove-Item $editPath -ErrorAction SilentlyContinue }
             $script:Updated++
         }
     }
