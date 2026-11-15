@@ -76,6 +76,25 @@ O revisor recebe o **diff** e os **comandos de verificação com a saída**; sem
 o gate não fecha. Se o revisor pedir ajuste, o autor corrige e pede nova revisão — no máximo duas
 idas e voltas; na terceira, o agente para e reporta o bloqueio ao dono.
 
+## Execução de comandos fora do workspace
+
+O agente pode ler e editar arquivos do workspace livremente. **Executar** comando que saia do
+workspace, use `sudo`, toque no WSL, instale software ou apague algo exige o gate abaixo.
+
+| Passo | Regra |
+| --- | --- |
+| 1. Propor | o agente lista os comandos exatos, um por linha, com o efeito de cada um |
+| 2. Revisar | preset `security` valida a lista: caminho absoluto conferido, nada destrutivo fora do workspace, `sudo` justificado linha a linha, sem `curl \| bash`, sem `rm -rf` em caminho computado |
+| 3. Executar | só os comandos aprovados, na ordem aprovada; saída colada no relatório |
+| 4. Mudança de plano | comando novo = nova revisão, mesmo que "pareça igual" |
+
+Regras fixas:
+
+- `sudo` só em comando aprovado individualmente; nada de `sudo -i`, `sudo su` ou script inteiro sob sudo.
+- Antes de apagar ou mover: imprimir o caminho absoluto resolvido e conferir que está dentro do alvo esperado.
+- Comando destrutivo (`rm -rf`, `git reset --hard`, `docker system prune`, `DROP`) nunca em lote.
+- Se a execução falhar por sandbox/permissão, **parar** e reportar; não tentar contornar com `danger-full-access` por conta própria.
+
 ## Commits: Conventional Commits
 
 Formato internacional, em **inglês**, mensagem imperativa e minúscula:
