@@ -192,6 +192,10 @@ Write-Host "modo        : $script:Mode"
 if (-not $Apply) { Write-Host "              (nada sera escrito; use -Apply para publicar)" -ForegroundColor DarkGray }
 
 # --- wrapper do gh -------------------------------------------------------------
+# Com -Json sai um array "de verdade", inclusive vazio, via `-NoEnumerate`: o
+# pipeline desenrola array vazio em $null, o que tornava "tracker vazio" ([])
+# indistinguivel de "leitura falhou". O chamador atribui DIRETO
+# (`$x = Invoke-Gh ... -Json`); envolver em @(...) aninha o array num elemento so.
 function Invoke-Gh {
     param([string[]]$Arguments, [switch]$Json)
 
@@ -204,9 +208,11 @@ function Invoke-Gh {
     if ($code -ne 0) {
         throw "gh $($Arguments -join ' ') falhou (exit $code): $out"
     }
-    if ($Json -and $out) {
+    if ($Json) {
+        if (-not $out) { throw "gh $($Arguments -join ' ') saiu 0 sem saida: tratado como falha de leitura" }
         if ($out -is [array]) { $out = $out -join "`n" }
-        return ($out | ConvertFrom-Json)
+        Write-Output -NoEnumerate (ConvertFrom-Json $out)
+        return
     }
     return $out
 }
@@ -219,19 +225,16 @@ $existingIssues = @{}
 if ($Apply) {
     Write-Head 'lendo estado remoto'
     # Fail-closed: se a leitura falhar, a excecao sobe e NADA e escrito. Antes,
-    # uma falha de leitura virava mapa vazio e o script recriava tudo — e a API
+    # uma falha de leitura virava mapa vazio e o script recriava tudo â€” e a API
     # aceita titulo duplicado, entao o resultado seria issue duplicada e fechada
     # com comentario de evidencia (registro falso e permanente).
     $labels = Invoke-Gh -Arguments @('label', 'list', '--repo', $Repo, '--limit', '200', '--json', 'name') -Json
-    if ($null -eq $labels) { throw 'leitura de labels falhou: abortar sem escrever' }
     foreach ($l in $labels) { $existingLabels[$l.name] = $true }
 
     $ms = Invoke-Gh -Arguments @('api', "repos/$Repo/milestones?state=all&per_page=100") -Json
-    if ($null -eq $ms) { throw 'leitura de milestones falhou: abortar sem escrever' }
     foreach ($m in $ms) { $existingMilestones[$m.title] = $m.number }
 
     $iss = Invoke-Gh -Arguments @('issue', 'list', '--repo', $Repo, '--state', 'all', '--limit', '300', '--json', 'number,title,state') -Json
-    if ($null -eq $iss) { throw 'leitura de issues falhou: abortar sem escrever' }
     foreach ($i in $iss) { $existingIssues[$i.title] = $i }
 
     Write-Ok ("labels={0} milestones={1} issues={2}" -f $existingLabels.Count, $existingMilestones.Count, $existingIssues.Count)
