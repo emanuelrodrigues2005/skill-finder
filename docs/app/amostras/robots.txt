@@ -1,0 +1,8 @@
+User-Agent: *
+Allow: /
+Disallow: /internal/
+Disallow: /debug-security/
+Disallow: /search
+Disallow: /api/
+
+Sitemap: https://www.skills.sh/sitemap.xml
