@@ -15,9 +15,12 @@ export const DEFAULT_LLM_MODEL = 'deepseek-v4.1-flash';
 /** Default do `compose.yaml` para a árvore limpa validar sem `.env`; proibido em prod. */
 export const DEV_DEFAULT_DB_PASSWORD = 'skillsdev';
 
+// Aceita `true`/`false` (string de env, com qualquer caixa) e também boolean já
+// convertido — que é o que chega quando o `.default()` é aplicado. Comparar só
+// com a string `'true'` transformava o default booleano `true` em `false`.
 const booleanFromEnv = z.preprocess(
   (value) => (typeof value === 'string' ? value.trim().toLowerCase() : value),
-  z.union([z.boolean(), z.enum(['true', 'false'])]).transform((value) => value === 'true'),
+  z.union([z.boolean(), z.enum(['true', 'false'])]).transform((value) => value === true || value === 'true'),
 );
 
 const postgresUrl = z
