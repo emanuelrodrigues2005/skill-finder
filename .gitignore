@@ -1,0 +1,97 @@
+# =============================================================================
+# .gitignore — Projeto 2 (Computação em Nuvem / UFRPE)
+#
+# Regra de ouro: nada que contenha credencial, chave privada ou estado do
+# Terraform entra no Git. Se já entrou, remova do histórico — apagar o arquivo
+# num commit novo NÃO resolve.
+# =============================================================================
+
+# ---------- Terraform ----------
+# .terraform/ é cache de providers: grande e reproduzível com `terraform init`
+.terraform/
+.terraform.tfstate.lock.info
+# estado: contém tudo o que foi criado, incluindo valores sensíveis
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+# planos salvos podem conter segredos
+*.tfplan
+plan.out
+crash.log
+crash.*.log
+# variáveis com valores reais
+*.auto.tfvars
+terraform.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# NÃO ignore .terraform.lock.hcl: é ele que pina as versões dos providers.
+
+# ---------- Segredos, chaves e credenciais ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+.aws/
+*.secret
+secrets.yaml
+secrets.yml
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+junit*.xml
+
+# ---------- Node / frontend ----------
+node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+
+# ---------- Docker ----------
+# artefatos de build locais
+*.tar
+*.tar.gz
+
+# ---------- Logs, artefatos e SO ----------
+*.log
+logs/
+tmp/
+temp/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Editores ----------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*~
+
+# ---------- Este repositório ----------
+# saídas brutas da extração/validação do PDF (ficam em _tools/)
+_tools/*.txt
+_tools/*.zip

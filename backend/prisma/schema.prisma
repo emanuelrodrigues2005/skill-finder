@@ -1,0 +1,185 @@
+// Schema de `docs/app/02-arquitetura.md` §4.1 (o documento vence qualquer outro
+// em matéria de contrato). Nomes de tabela/coluna em snake_case; campo em
+// camelCase para o client TypeScript.
+//
+// Limites do Prisma (o que vai em SQL na migration inicial):
+// - CHECK constraints e índices parciais não existem no Prisma Schema. As colunas
+//   enumeradas abaixo usam `enum` nativo do Postgres, que garante o mesmo conjunto
+//   de valores que o `CHECK (... IN (...))` do doc.
+// - `search_doc` (tsvector), os índices GIN e o índice único parcial
+//   `UNIQUE (status) WHERE status = 'running'` de `ingest_run` entram na migration
+//   como SQL bruto.
+// - `NULLS LAST` em índice não é expressável: a migration declara
+//   `CREATE INDEX ... (stars DESC NULLS LAST)`.
+// - Retenção/expurgo (§4.2) é trabalho de job, não de constraint.
+//
+// ORDEM OBRIGATÓRIA no SQL da migration inicial: a extension precisa existir
+// antes de qualquer índice que use um operator class dela. Inverter isso aborta a
+// primeira migration com `operator class "gin_trgm_ops" does not exist`.
+//   1. CREATE EXTENSION IF NOT EXISTS pg_trgm;
+//   2. CREATE INDEX "skill_name_trgm_idx" ON "skill" USING GIN ("name" gin_trgm_ops);
+//   3. CREATE INDEX "skill_search_doc_idx" ON "skill" USING GIN ("search_doc");
+//   4. CHECK das métricas (§4.1): `stars IS NULL OR stars >= 0`, idem
+//      `installs` e `vulnerability_count` — dado ausente é NULL, nunca negativo.
+//   5. Demais CHECK (`status`, `origin`, `security_status`), o índice único
+//      parcial de `ingest_run` e os índices `DESC NULLS LAST`.
+// Por isso este schema não declara `ops: raw("gin_trgm_ops")`: índice dependente de
+// extension fica fora do Prisma Schema, onde o `migrate` não pode ordená-lo.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SecurityStatus {
+  ok
+  warn
+  fail
+  unknown
+}
+
+enum DocumentOrigin {
+  skills_sh
+  github_raw
+}
+
+enum IngestStatus {
+  running
+  ok
+  partial
+  failed
+}
+
+enum SearchStatus {
+  ok
+  empty
+  degraded
+  error
+}
+
+enum LlmCacheKind {
+  intent
+  explanation
+}
+
+model Category {
+  slug     String    @id @db.Text
+  labelEn  String    @map("label_en") @db.Text
+  position Int       @default(0)
+  seenAt   DateTime  @map("seen_at") @db.Timestamptz(6)
+  skills   Skill[]
+
+  @@map("category")
+}
+
+model Skill {
+  id                 BigInt         @id @default(autoincrement())
+  sourceKey          String         @unique @map("source_key") @db.Text
+  sourceUrl          String?        @map("source_url") @db.Text
+  slug               String?        @db.Text
+  name               String         @db.Text
+  summary            String?        @db.Text
+  repoOwner          String?        @map("repo_owner") @db.Text
+  repoUrl            String?        @map("repo_url") @db.Text
+  categorySlug       String?        @map("category_slug") @db.Text
+  stars              Int?
+  installs           Int?
+  vulnerabilityCount Int?           @map("vulnerability_count")
+  securityStatus     SecurityStatus @default(unknown) @map("security_status")
+  skillMdPresent     Boolean        @default(false) @map("skill_md_present")
+  searchDoc          Unsupported("tsvector")? @map("search_doc")
+  firstSeenAt        DateTime       @map("first_seen_at") @db.Timestamptz(6)
+  lastSeenAt         DateTime       @map("last_seen_at") @db.Timestamptz(6)
+  isActive           Boolean        @default(true) @map("is_active")
+  raw                Json?          @db.JsonB
+
+  category  Category?             @relation(fields: [categorySlug], references: [slug])
+  snapshots SkillMetricSnapshot[]
+  document  SkillDocument?
+
+  @@index([categorySlug, isActive])
+  @@index([stars(sort: Desc)])
+  @@index([installs(sort: Desc)])
+  @@map("skill")
+}
+
+model SkillMetricSnapshot {
+  skillId            BigInt   @map("skill_id")
+  capturedAt         DateTime @map("captured_at") @db.Timestamptz(6)
+  stars              Int?
+  installs           Int?
+  vulnerabilityCount Int?     @map("vulnerability_count")
+
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([skillId, capturedAt])
+  @@map("skill_metric_snapshot")
+}
+
+model SkillDocument {
+  skillId   BigInt         @id @map("skill_id")
+  content   String         @db.Text
+  byteSize  Int            @map("byte_size")
+  truncated Boolean        @default(false)
+  origin    DocumentOrigin
+  fetchedAt DateTime       @map("fetched_at") @db.Timestamptz(6)
+  error     String?        @db.Text
+
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@map("skill_document")
+}
+
+model IngestRun {
+  id               BigInt       @id @default(autoincrement())
+  adapter          String       @db.Text
+  startedAt        DateTime     @map("started_at") @db.Timestamptz(6)
+  finishedAt       DateTime?    @map("finished_at") @db.Timestamptz(6)
+  status           IngestStatus
+  itemsSeen        Int?         @map("items_seen")
+  itemsUpserted    Int?         @map("items_upserted")
+  itemsDeactivated Int?         @map("items_deactivated")
+  errorCode        String?      @map("error_code") @db.Text
+  errorDetail      String?      @map("error_detail") @db.Text
+
+  @@index([startedAt(sort: Desc)])
+  @@map("ingest_run")
+}
+
+model SearchRequest {
+  id              String       @id @default(uuid()) @db.Uuid
+  requestId       String       @unique @map("request_id") @db.Text
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  clientHash      String       @map("client_hash") @db.Text
+  queryHash       String       @map("query_hash") @db.Text
+  queryText       String?      @map("query_text") @db.Text
+  intent          Json?        @db.JsonB
+  categorySlug    String?      @map("category_slug") @db.Text
+  resultIds       BigInt[]     @map("result_ids")
+  candidatesCount Int?         @map("candidates_count")
+  llmStatus       String?      @map("llm_status") @db.Text
+  degraded        Boolean      @default(false)
+  latencyMs       Int?         @map("latency_ms")
+  status          SearchStatus
+
+  @@index([createdAt(sort: Desc)])
+  @@index([queryHash, createdAt(sort: Desc)])
+  @@map("search_request")
+}
+
+model LlmCache {
+  cacheKey         String       @id @map("cache_key") @db.Text
+  kind             LlmCacheKind
+  response         Json         @db.JsonB
+  promptTokens     Int?         @map("prompt_tokens")
+  completionTokens Int?         @map("completion_tokens")
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt        DateTime     @map("expires_at") @db.Timestamptz(6)
+
+  @@index([expiresAt])
+  @@map("llm_cache")
+}

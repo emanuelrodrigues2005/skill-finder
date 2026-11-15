@@ -1,0 +1,89 @@
+import type { INestApplication } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import type { OpenAPIObject } from '@nestjs/swagger';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { Logger } from 'nestjs-pino';
+
+import { AppModule } from './app.module';
+import { requestIdMiddleware } from './common/request-id.middleware';
+import { securityHeaders } from './common/security-headers.middleware';
+import { AppConfigService } from './config/config.module';
+
+export const GLOBAL_PREFIX = 'api/v1';
+
+/** Saúde e métricas ficam fora do prefixo versionado: smoke test e Prometheus. */
+export const PUBLIC_ROUTES = ['healthz', 'readyz', 'metrics'] as const;
+
+export const HTTP_PORT = 8000;
+
+const DEV_CORS_ORIGINS = ['http://localhost:5173', 'http://localhost:8081'];
+
+/**
+ * Documento OpenAPI sem `servers`: os paths já saem com o prefixo global
+ * aplicado (`applyGlobalPrefix`), então declarar `servers: /api/v1` resolvia cada
+ * rota para `/api/v1/api/v1/...` — no Swagger UI e no `openapi.yaml`.
+ */
+export function openApiOptions(): Omit<OpenAPIObject, 'paths'> {
+  return new DocumentBuilder()
+    .setTitle('Skill Finder API')
+    .setVersion('0.1.0')
+    .setDescription('Natural-language search over the skills.sh catalog (F2.2: skeleton).')
+    .build();
+}
+
+export function applyGlobalPrefix(app: INestApplication): void {
+  app.setGlobalPrefix(GLOBAL_PREFIX, { exclude: [...PUBLIC_ROUTES] });
+}
+
+/**
+ * Everything the app needs besides the routes: security headers and request id
+ * first, then the prefix and graceful shutdown for Prisma.
+ *
+ * Exportado para o teste e2e exercitar exatamente a mesma configuração do runtime.
+ */
+export function configureApp(app: INestApplication): INestApplication {
+  const config = app.get(AppConfigService);
+  const express = app as NestExpressApplication;
+
+  // Um único salto de proxy na frente (o nginx do compose): `req.ip` vem do
+  // `X-Forwarded-For` que o nginx escreveu, e não de um header forjado pelo
+  // cliente — do contrário o rate limit por IP (§8.4) seria burlável.
+  express.set('trust proxy', 1);
+  // Fingerprint do framework fora do header; os demais headers vêm do middleware.
+  express.disable('x-powered-by');
+
+  app.use(securityHeaders);
+  app.use(requestIdMiddleware);
+  app.useLogger(app.get(Logger));
+  applyGlobalPrefix(app);
+
+  if (!config.isProd) {
+    // Em produção a SPA e a API compartilham a origem (nginx); estas origens
+    // existem só para o Vite de desenvolvimento.
+    app.enableCors({
+      origin: DEV_CORS_ORIGINS,
+      methods: ['GET', 'POST'],
+      allowedHeaders: ['content-type', 'x-request-id'],
+    });
+  }
+
+  app.enableShutdownHooks();
+  return app;
+}
+
+async function bootstrap(): Promise<void> {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
+  configureApp(app);
+
+  if (!app.get(AppConfigService).isProd) {
+    SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, openApiOptions()));
+  }
+
+  await app.listen(HTTP_PORT, '0.0.0.0');
+}
+
+// Guard para que testes e o gerador de OpenAPI importem `configureApp` sem subir servidor.
+if (require.main === module) {
+  void bootstrap();
+}

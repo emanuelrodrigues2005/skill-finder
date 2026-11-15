@@ -1,0 +1,17 @@
+# Normaliza fim de linha por tipo de arquivo.
+#
+# Motivo: o repositório é editado no Windows e executado no WSL. Sem esta regra,
+# `core.autocrlf=true` converte `scripts/*.sh` para CRLF no checkout e o shebang
+# passa a falhar com `/bin/bash^M: bad interpreter`.
+* text=auto eol=lf
+
+# Scripts de shell rodam no Ubuntu: sempre LF.
+*.sh    text eol=lf
+# Scripts do PowerShell rodam no Windows: sempre CRLF.
+*.ps1   text eol=crlf
+
+# Binários: o Git não deve tentar normalizar nem mostrar diff.
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.ico   binary

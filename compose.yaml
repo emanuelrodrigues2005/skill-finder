@@ -1,0 +1,126 @@
+name: skills-search
+
+# Profiles: `make up` sobe o stack de desenvolvimento (`api-dev`, target `dev`, com
+# devDependencies e hot reload) e `make PROFILE=prod up` sobe o de produção (`api`,
+# target `runtime`, sem devDependencies). `ENV` é **fixo por serviço**, nunca
+# interpolado do `.env`: um `.env` copiado do exemplo (`ENV=` vazio) ou um
+# `--profile prod` sobre um `.env` de dev não podem resultar num "prod em modo dev".
+# O schema (`backend/src/config/env.schema.ts`) ainda aborta o boot se
+# `NODE_ENV=production` com `ENV!=prod`.
+#
+# `env_file.required: false` mantém `docker compose config` válido sem `.env` (CI),
+# mas um stack funcional precisa de `.env` — copie de `.env.example`.
+#
+# Dois serviços de API porque o profile precisa escolher o `build.target`: `api`
+# mantém o nome que o upstream do nginx (`frontend/nginx.conf`: `api:8000`) espera,
+# e `api-dev` declara o alias `api` na rede do compose.
+
+x-api-base: &api-base
+  env_file:
+    - path: .env
+      required: false
+  depends_on:
+    postgres:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8000/healthz"]
+    interval: 15s
+    timeout: 5s
+    retries: 5
+    start_period: 20s
+  restart: unless-stopped
+
+x-api-env: &api-env
+  # Derivada das variáveis do Postgres; um banco gerenciado (F3) sobrescreve esta linha.
+  DATABASE_URL: postgresql://${POSTGRES_USER:-skills}:${POSTGRES_PASSWORD:-skillsdev}@postgres:5432/${POSTGRES_DB:-skills}?schema=public
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["dev", "prod"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-skills}
+      POSTGRES_DB: ${POSTGRES_DB:-skills}
+      # Default `skillsdev` só para a árvore limpa: `docker compose config` precisa
+      # validar sem `.env` e o entrypoint oficial do postgres aborta com senha vazia.
+      # Quem impede esse default de chegar em produção é o backend: em ENV=prod o
+      # `env.schema.ts` recusa boot se a senha da DATABASE_URL for este valor.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-skillsdev}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # Desenvolvimento: devDependencies + `pnpm start:dev`.
+  api-dev:
+    <<: *api-base
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: dev
+    profiles: ["dev"]
+    networks:
+      default:
+        aliases: ["api"]
+    environment:
+      <<: *api-env
+      ENV: dev
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8000"
+    volumes:
+      # Só o que o `start:dev` recompila.
+      - ./backend/src:/app/src
+      - ./backend/prisma:/app/prisma
+
+  # Production profile: imagem de runtime, sem devDependencies e sem o `src/`.
+  api:
+    <<: *api-base
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    profiles: ["prod"]
+    environment:
+      <<: *api-env
+      ENV: prod
+    ports:
+      # O nginx é a borda. Publicar em 0.0.0.0 tornaria o nginx contornável e
+      # exporia `/metrics` e `/docs` direto na internet; com `127.0.0.1` o acesso
+      # do host (smoke em `localhost`) continua funcionando.
+      - "127.0.0.1:${API_PORT:-8080}:8000"
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    profiles: ["dev", "prod"]
+    depends_on:
+      # Um único `web` serve os dois profiles: `required: false` ignora o serviço
+      # que o profile atual não habilita (o compose falharia com "depends on
+      # undefined service" se a dependência fosse obrigatória).
+      api:
+        condition: service_healthy
+        required: false
+      api-dev:
+        condition: service_healthy
+        required: false
+    ports:
+      - "${WEB_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

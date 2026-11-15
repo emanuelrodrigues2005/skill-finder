@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# =============================================================================
+# academy-env.example — modelo do script de sessão do AWS Academy Learner Lab
+#
+# COMO USAR (uma vez, para instalar):
+#   mkdir -p ~/.local/bin
+#   cp scripts/academy-env.example ~/.local/bin/academy-env
+#   chmod 700 ~/.local/bin/academy-env
+#   nano ~/.local/bin/academy-env     # cole as 3 credenciais nas 3 linhas marcadas
+#
+# A CADA NOVA SESSÃO de laboratório (~4 h):
+#   1. Vocareum -> Start Lab -> esperar o círculo do AWS ficar verde
+#   2. AWS Details -> AWS CLI: Show -> copiar as TRÊS linhas
+#   3. nano ~/.local/bin/academy-env   (trocar as 3 linhas)
+#   4. source ~/.local/bin/academy-env
+#
+# Este arquivo é carregado com `source`, portanto NÃO use `set -e` nem `exit`:
+# um erro aqui derrubaria o seu shell.
+# =============================================================================
+
+# ---- EDITAR A CADA SESSÃO DE LAB (3 linhas) ----
+export AWS_ACCESS_KEY_ID='<AWS_ACCESS_KEY_ID>'
+export AWS_SECRET_ACCESS_KEY='<AWS_SECRET_ACCESS_KEY>'
+export AWS_SESSION_TOKEN='<AWS_SESSION_TOKEN>'
+# ---- daqui para baixo não muda ----
+
+export AWS_DEFAULT_REGION='us-east-1'
+export AWS_REGION='us-east-1'
+# troque <SUFIXO> pelo mesmo sufixo usado ao criar o bucket de state (docs/03 §7.2)
+export TF_STATE_BUCKET='bcc-cloud-tfstate-<SUFIXO>'
+
+# Verifica a identidade e explica a falha em português.
+academy_whoami() {
+    local arn
+    if ! arn=$(aws sts get-caller-identity --query Arn --output text 2>/tmp/academy_whoami.err); then
+        echo "FALHA: credenciais inválidas ou expiradas."
+        sed -n '1,3p' /tmp/academy_whoami.err
+        echo "Ação: Start Lab -> AWS Details -> copie os 3 valores ->"
+        echo "      edite ~/.local/bin/academy-env -> source de novo."
+        return 1
+    fi
+    case "$arn" in
+        *:assumed-role/*) echo "OK: sessão de laboratório ativa." ;;
+        *)                echo "ATENÇÃO: ARN não é de sessão de lab (Cenário B?)." ;;
+    esac
+    echo "  ARN:     $arn"
+    echo "  região:  ${AWS_DEFAULT_REGION:-<não definida>}"
+    echo "  bucket:  ${TF_STATE_BUCKET:-<não definido>}"
+}
+
+# conferência automática ao carregar (apague esta linha se não quiser o custo de 1 chamada STS)
+academy_whoami

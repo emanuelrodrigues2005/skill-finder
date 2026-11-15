@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1
+# Estágios: base -> deps -> (dev | build) -> prod-deps -> runtime.
+# Nenhum segredo em ENV/ARG: tudo entra por variável de ambiente em runtime.
+#
+# pnpm: corepack com a MESMA versão de `packageManager` (package.json: pnpm@9.15.4)
+# em TODOS os estágios, inclusive no runtime — o compose roda `pnpm start` e o
+# Makefile roda `pnpm prisma:deploy` dentro do container. `corepack install -g`
+# baixa o pnpm no build e o deixa no `COREPACK_HOME` fixo, então o container não
+# tenta resolver versão (nem rede) no start e não depende do HOME do usuário.
+
+FROM node:22-alpine AS base
+WORKDIR /app
+# openssl/libc6-compat: engine do Prisma em musl.
+ENV COREPACK_HOME=/opt/corepack \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN apk add --no-cache libc6-compat openssl \
+    && corepack enable \
+    && corepack install -g pnpm@9.15.4 \
+    && chmod -R a+rX "${COREPACK_HOME}"
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml ./
+# `--frozen-lockfile`: sem `pnpm-lock.yaml` o build falha aqui, em vez de resolver
+# centenas de transitivas sem auditoria. Gere o lock com `make bootstrap` e
+# commite antes do primeiro build com credencial real (backend/README.md).
+RUN pnpm install --frozen-lockfile
+
+# Profile `dev` do compose: devDependencies + `nest start --watch`.
+FROM deps AS dev
+ENV NODE_ENV=development
+COPY prisma ./prisma
+COPY tsconfig.json tsconfig.build.json nest-cli.json ./
+COPY src ./src
+RUN pnpm prisma generate
+EXPOSE 8000
+CMD ["pnpm", "start:dev"]
+
+FROM deps AS build
+COPY prisma ./prisma
+RUN pnpm prisma generate
+COPY tsconfig.json tsconfig.build.json nest-cli.json ./
+COPY src ./src
+RUN pnpm build
+
+# node_modules sem devDependencies, em estágio próprio. Mesmo efeito de
+# `pnpm deploy --prod` (que exige workspace) ou de `pnpm prune --prod`, mas
+# resolvido a partir do lock num diretório limpo. O client do Prisma é regerado
+# aqui para não depender de sobras do node_modules de build.
+FROM base AS prod-deps
+COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma
+RUN pnpm install --prod --frozen-lockfile \
+    && pnpm prisma generate
+
+FROM base AS runtime
+ENV NODE_ENV=production
+RUN addgroup --system --gid 10001 app \
+    && adduser --system --uid 10001 --ingroup app app
+WORKDIR /app
+COPY --from=prod-deps --chown=10001:10001 /app/node_modules ./node_modules
+COPY --from=build --chown=10001:10001 /app/dist ./dist
+COPY --from=prod-deps --chown=10001:10001 /app/prisma ./prisma
+COPY --chown=10001:10001 package.json ./
+USER 10001
+EXPOSE 8000
+CMD ["node", "dist/main.js"]
