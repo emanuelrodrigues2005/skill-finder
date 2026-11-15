@@ -99,6 +99,12 @@ code_for_parens = re.sub(
     'CASE_PATTERN',
     code_for_parens,
 )
+# e os padrões seguintes de um `case` de uma linha só: `;; *)`, `;; foo)`
+code_for_parens = re.sub(
+    r'(?<=;; )(?:[^\s()|]+)(?:\|[^\s()|]+)*\)',
+    'CASE_PATTERN',
+    code_for_parens,
+)
 
 if code_for_parens.count('(') != code_for_parens.count(')'):
     errors.append(

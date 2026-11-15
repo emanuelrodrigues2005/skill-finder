@@ -1,0 +1,437 @@
+{
+    "milestones":  [
+                       {
+                           "title":  "F0 — Pré-requisitos e sandbox",
+                           "description":  "Provar máquina, conta e credenciais antes de desenhar qualquer coisa: AWS CLI, Terraform \u003e= 1.10, Docker Compose, Node 22/pnpm e a checklist K1–K14 do sandbox AWS Academy, com evidência datada."
+                       },
+                       {
+                           "title":  "F1 — Proposta e decisões",
+                           "description":  "Congelar problema, funcionalidades, arquitetura preliminar e tecnologias (entregável E1) e obter a aprovação do professor antes de gastar esforço em código."
+                       },
+                       {
+                           "title":  "F2 — Aplicação",
+                           "description":  "MVP do Skill Finder rodando local no Compose: contrato OpenAPI, catálogo ingerido, ranking determinístico, intérprete de intenção com provedor fake, endpoints de busca/detalhe, 3 telas em inglês e testes em três níveis."
+                       },
+                       {
+                           "title":  "F3 — Infraestrutura como código",
+                           "description":  "Provisionar por Terraform com estado remoto no S3: EC2 t3.small, EBS gp3, ECR, security group e as 4 saídas do seam; app respondendo em HTTP e destruível sem órfãos."
+                       },
+                       {
+                           "title":  "F4 — Pipeline CI/CD",
+                           "description":  "Ciclar sem passo manual: ci.yml (lint, 3 níveis de teste, gitleaks) e deploy.yml (preflight, build+push no ECR por SHA, tf-plan, deploy por SSH, smoke), com o gate de testes visível no grafo de jobs."
+                       },
+                       {
+                           "title":  "F5 — Observabilidade e segredos",
+                           "description":  "Métrica, log e dashboard vivos no host (Prometheus, Loki, Promtail, Grafana, Telegraf, cAdvisor, node-exporter) e nenhum segredo rastreável: .env gerado pelo Infisical, chmod 600, ::add-mask::."
+                       },
+                       {
+                           "title":  "F6 — Entrega",
+                           "description":  "Fechar a documentação técnica (E5), endurecer a operação e ensaiar a demo até o ciclo completo ser reprodutível: destroy→apply→deploy→smoke em \u003c 15 min e demo de 3 min."
+                       }
+                   ],
+    "labels":  [
+                   {
+                       "name":  "type:feat",
+                       "color":  "1D76DB",
+                       "description":  "Entrega funcional nova (endpoint, módulo, tela, infraestrutura)."
+                   },
+                   {
+                       "name":  "type:fix",
+                       "color":  "D73A4A",
+                       "description":  "Correção de defeito ou de comportamento errado já entregue."
+                   },
+                   {
+                       "name":  "type:chore",
+                       "color":  "6E7781",
+                       "description":  "Trabalho de apoio: toolchain, descoberta, configuração, release."
+                   },
+                   {
+                       "name":  "type:docs",
+                       "color":  "0075CA",
+                       "description":  "Alteração que só toca documentação."
+                   },
+                   {
+                       "name":  "type:test",
+                       "color":  "5319E7",
+                       "description":  "Testes, fixtures, cobertura e prova de offline."
+                   },
+                   {
+                       "name":  "type:infra",
+                       "color":  "0052CC",
+                       "description":  "Terraform, AWS, Docker/compose, provisionamento."
+                   },
+                   {
+                       "name":  "type:gate",
+                       "color":  "000000",
+                       "description":  "Gate/bloqueio: só fecha com decisão externa ou evidência de fase."
+                   },
+                   {
+                       "name":  "area:api",
+                       "color":  "FBCA04",
+                       "description":  "Backend NestJS: domínio, contrato, endpoints, ranking, LLM."
+                   },
+                   {
+                       "name":  "area:web",
+                       "color":  "F9D0C4",
+                       "description":  "Frontend React/Vite: telas, estados, nginx da SPA."
+                   },
+                   {
+                       "name":  "area:infra",
+                       "color":  "BFD4F2",
+                       "description":  "AWS Academy, EC2/ECR/S3, Terraform, pipeline de deploy."
+                   },
+                   {
+                       "name":  "area:docs",
+                       "color":  "D4C5F9",
+                       "description":  "docs/, README, ADRs, runbook, evidências."
+                   },
+                   {
+                       "name":  "area:observability",
+                       "color":  "C5DEF5",
+                       "description":  "Prometheus, Grafana, Loki, métricas e logs."
+                   },
+                   {
+                       "name":  "area:security",
+                       "color":  "E99695",
+                       "description":  "Segredos, injeção, limites de uso, hardening."
+                   },
+                   {
+                       "name":  "priority:p0",
+                       "color":  "B60205",
+                       "description":  "Bloqueia a fase seguinte ou a entrega; resolver primeiro."
+                   },
+                   {
+                       "name":  "priority:p1",
+                       "color":  "D93F0B",
+                       "description":  "Necessário para o gate da fase; não bloqueia outro time."
+                   },
+                   {
+                       "name":  "priority:p2",
+                       "color":  "FEF2C0",
+                       "description":  "Melhoria ou polimento; pode ser cortada sem quebrar o gate."
+                   }
+               ],
+    "issues":  [
+                   {
+                       "title":  "Validar o sandbox AWS Academy (K1–K14)",
+                       "milestone":  "F0 — Pré-requisitos e sandbox",
+                       "labels":  [
+                                      "type:gate",
+                                      "area:infra",
+                                      "priority:p0"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f0.md",
+                       "closing_comment":  "Entregue em `c8b1840` (bootstrap do repositório com `docs/02`, `docs/03` e `docs/evidencias/sandbox.md`) e `b9a3b93` (toolchain do WSL). Evidência K1–K14 datada em `docs/evidencias/sandbox.md`."
+                   },
+                   {
+                       "title":  "chore(toolchain): fixar pnpm 12 e Dockerfiles no WSL",
+                       "milestone":  "F0 — Pré-requisitos e sandbox",
+                       "labels":  [
+                                      "type:chore",
+                                      "area:infra",
+                                      "priority:p1"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f0.md",
+                       "closing_comment":  "Entregue em `acf6a2f` (pnpm 12 + `pnpm-workspace.yaml` com `allowBuilds`, Dockerfiles com `--frozen-lockfile` e `USER` não-root, `make preflight`/`lockfile`) e `b9a3b93` (`scripts/setup-node-wsl.sh`)."
+                   },
+                   {
+                       "title":  "Obter aprovação do professor para a proposta E1",
+                       "milestone":  "F1 — Proposta e decisões",
+                       "labels":  [
+                                      "type:gate",
+                                      "area:docs",
+                                      "priority:p0"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f1.md",
+                       "closing_comment":  "Aprovado; evidência em docs/evidencias/f1-aprovacao.md."
+                   },
+                   {
+                       "title":  "chore(catalog): descobrir e congelar a fonte de dados do skills.sh",
+                       "milestone":  "F2 — Aplicação",
+                       "labels":  [
+                                      "type:chore",
+                                      "area:api",
+                                      "priority:p0"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f2.md",
+                       "closing_comment":  "Decisão D3 (scraping de DOM) com amostra em docs/app/amostras/."
+                   },
+                   {
+                       "title":  "feat(api): congelar contrato OpenAPI v0 com 8 endpoints",
+                       "milestone":  "F2 — Aplicação",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:api",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f2.md"
+                   },
+                   {
+                       "title":  "feat(api): esqueleto NestJS com /healthz, /readyz e /metrics",
+                       "milestone":  "F2 — Aplicação",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:api",
+                                      "priority:p0"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f2.md",
+                       "closing_comment":  "Entregue em `a3efa68` sobre o bootstrap `c8b1840`. Evidência: `pnpm --dir backend typecheck` e `pnpm --dir backend test` verdes (20 testes), `docker compose config -q` exit 0, `/healthz` e `/readyz` respondendo, `/metrics` com `http_requests_total`. Revisado pelos presets `reviewer` e `security` (dois APPROVE)."
+                   },
+                   {
+                       "title":  "feat(catalog): ingestão idempotente com SkillSource e fixture",
+                       "milestone":  "F2 — Aplicação",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:api",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f2.md"
+                   },
+                   {
+                       "title":  "feat(ranking): score determinístico com desempate estável",
+                       "milestone":  "F2 — Aplicação",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:api",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f2.md"
+                   },
+                   {
+                       "title":  "feat(llm): IntentParser com provedor fake e cliente OpenAI-compat",
+                       "milestone":  "F2 — Aplicação",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:api",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f2.md"
+                   },
+                   {
+                       "title":  "feat(api): endpoints de busca, permalink e detalhe da skill",
+                       "milestone":  "F2 — Aplicação",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:api",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f2.md"
+                   },
+                   {
+                       "title":  "feat(web): três telas consumindo o contrato /api/v1",
+                       "milestone":  "F2 — Aplicação",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:web",
+                                      "priority:p1"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f2.md",
+                       "closing_comment":  "Decomposta em 6 issues de frontend na mesma milestone: cliente tipado, busca, resultados, detalhe, estados/acessibilidade e testes de UI."
+                   },
+                   {
+                       "title":  "test(api): três níveis de teste e suíte offline no CI",
+                       "milestone":  "F2 — Aplicação",
+                       "labels":  [
+                                      "type:test",
+                                      "area:api",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f2.md"
+                   },
+                   {
+                       "title":  "fix(api): bloquear prompt injection e aplicar limites de uso",
+                       "milestone":  "F2 — Aplicação",
+                       "labels":  [
+                                      "type:fix",
+                                      "area:security",
+                                      "priority:p1"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f2.md"
+                   },
+                   {
+                       "title":  "feat(infra): base do Terraform com backend S3 e rede",
+                       "milestone":  "F3 — Infraestrutura como código",
+                       "labels":  [
+                                      "type:infra",
+                                      "area:infra",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f3.md"
+                   },
+                   {
+                       "title":  "feat(infra): EC2, ECR e primeiro ciclo de apply e destroy",
+                       "milestone":  "F3 — Infraestrutura como código",
+                       "labels":  [
+                                      "type:infra",
+                                      "area:infra",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f3.md"
+                   },
+                   {
+                       "title":  "ci: workflow de CI com lint, três níveis de teste e gitleaks",
+                       "milestone":  "F4 — Pipeline CI/CD",
+                       "labels":  [
+                                      "type:infra",
+                                      "area:infra",
+                                      "priority:p1"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f4.md"
+                   },
+                   {
+                       "title":  "ci: deploy automatizado com smoke e gate de testes provado",
+                       "milestone":  "F4 — Pipeline CI/CD",
+                       "labels":  [
+                                      "type:infra",
+                                      "area:infra",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f4.md"
+                   },
+                   {
+                       "title":  "feat(observability): Prometheus, Loki, Grafana e 4 painéis",
+                       "milestone":  "F5 — Observabilidade e segredos",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:observability",
+                                      "priority:p1"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f5.md"
+                   },
+                   {
+                       "title":  "feat(security): segredos no Infisical e .env gerado no deploy",
+                       "milestone":  "F5 — Observabilidade e segredos",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:security",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f5.md"
+                   },
+                   {
+                       "title":  "docs: README, runbook, segurança e observabilidade finais",
+                       "milestone":  "F6 — Entrega",
+                       "labels":  [
+                                      "type:docs",
+                                      "area:docs",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f6.md"
+                   },
+                   {
+                       "title":  "chore(release): ensaio cronometrado e demo de 3 minutos",
+                       "milestone":  "F6 — Entrega",
+                       "labels":  [
+                                      "type:chore",
+                                      "area:docs",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f6.md"
+                   },
+                   {
+                       "bodyFile":  "scripts/github/issues/f2-web.md",
+                       "title":  "docs(api): Swagger gerado, Scalar em /docs e openapi.yaml no CI",
+                       "labels":  [
+                                      "type:docs",
+                                      "area:api",
+                                      "priority:p1"
+                                  ],
+                       "state":  "open",
+                       "milestone":  "F2 — Aplicação"
+                   },
+                   {
+                       "bodyFile":  "scripts/github/issues/f2-web.md",
+                       "title":  "feat(web): cliente /api/v1 tipado e validado contra openapi.yaml",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:web",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "milestone":  "F2 — Aplicação"
+                   },
+                   {
+                       "bodyFile":  "scripts/github/issues/f2-web.md",
+                       "title":  "feat(web): tela de busca com categoria e validação 3–500",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:web",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "milestone":  "F2 — Aplicação"
+                   },
+                   {
+                       "bodyFile":  "scripts/github/issues/f2-web.md",
+                       "title":  "feat(web): resultados com score, selo e aviso de degradação",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:web",
+                                      "priority:p1"
+                                  ],
+                       "state":  "open",
+                       "milestone":  "F2 — Aplicação"
+                   },
+                   {
+                       "bodyFile":  "scripts/github/issues/f2-web.md",
+                       "title":  "feat(web): detalhe da skill com SKILL.md seguro e n/a",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:web",
+                                      "priority:p1"
+                                  ],
+                       "state":  "open",
+                       "milestone":  "F2 — Aplicação"
+                   },
+                   {
+                       "bodyFile":  "scripts/github/issues/f2-web.md",
+                       "title":  "feat(web): estados de erro, foco visível e aria-live",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:web",
+                                      "priority:p1"
+                                  ],
+                       "state":  "open",
+                       "milestone":  "F2 — Aplicação"
+                   },
+                   {
+                       "bodyFile":  "scripts/github/issues/f2-web.md",
+                       "title":  "test(web): Vitest e Testing Library com contrato mockado",
+                       "labels":  [
+                                      "type:test",
+                                      "area:web",
+                                      "priority:p1"
+                                  ],
+                       "state":  "open",
+                       "milestone":  "F2 — Aplicação"
+                   }
+               ],
+    "pullRequest":  {
+                        "head":  "fix/wsl-node-toolchain",
+                        "base":  "main",
+                        "title":  "chore(build): move to pnpm 12 and align container builds",
+                        "draft":  true,
+                        "bodyFile":  "scripts/github/pr-body.md"
+                    }
+}

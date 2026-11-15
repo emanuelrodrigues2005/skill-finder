@@ -6,7 +6,10 @@ import { tap } from 'rxjs';
 
 import { MetricsService } from './metrics.service';
 
-interface RoutedRequest extends Request {
+// `@types/express@5` declara `route` e `baseUrl` como obrigatórios; redeclará-los
+// como opcionais viola a extensão da interface (TS2430). O `Omit` remove os dois
+// originais e o interceptor usa a visão opcional que o Express popula em runtime.
+interface RoutedRequest extends Omit<Request, 'route' | 'baseUrl'> {
   route?: { path?: string };
   baseUrl?: string;
 }

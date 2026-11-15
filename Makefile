@@ -10,14 +10,48 @@ PROFILE ?= dev
 API_SERVICE := $(if $(filter prod,$(PROFILE)),api,api-dev)
 API_RUN := $(COMPOSE) --profile $(PROFILE) run --rm $(API_SERVICE)
 
-.PHONY: bootstrap up down logs migrate seed test lint config
+.PHONY: bootstrap up down logs migrate seed test lint config help \
+        preflight lockfile
 
-# Gera `pnpm-lock.yaml` (exige rede) e é pré-requisito do primeiro build: a imagem
-# instala com `--frozen-lockfile` e falha alto sem o lock. Commite o arquivo.
-bootstrap:
+help:
+	@echo "alvos: bootstrap | up | down | logs | migrate | seed | test | lint | config"
+	@echo "  bootstrap  gera pnpm-lock.yaml (exige Node 22 nativo no WSL e rede)"
+	@echo "  up         sobe postgres + API + web no profile $(PROFILE)"
+
+# Falha cedo, com instrução, quando o Node do WSL não serve. Sem isso o erro que
+# aparece é `pnpm: exec: node: not found` — que não diz o que fazer.
+preflight:
+	@command -v node >/dev/null 2>&1 || { \
+	  echo "ERRO: 'node' não existe no Ubuntu. Rode: bash scripts/setup-node-wsl.sh"; exit 1; }
+	@case "$$(command -v node)" in \
+	  /mnt/*) echo "ERRO: o 'node' resolvido é o do Windows ($$(command -v node))."; \
+	          echo "      Rode: bash scripts/setup-node-wsl.sh"; exit 1 ;; \
+	esac
+	@case "$$(command -v pnpm 2>/dev/null)" in \
+	  "") echo "ERRO: 'pnpm' ausente no Ubuntu. Rode: bash scripts/setup-node-wsl.sh"; exit 1 ;; \
+	  /mnt/*) echo "ERRO: o 'pnpm' resolvido é o shim do Windows ($$(command -v pnpm))."; \
+	          echo "      Rode: bash scripts/setup-node-wsl.sh"; exit 1 ;; \
+	esac
+
+# A imagem instala com `--frozen-lockfile`: sem o lock o build falha com um erro
+# de cache key que não explica nada. Aqui a mensagem é explícita.
+lockfile:
+	@test -f backend/pnpm-lock.yaml || { \
+	  echo "ERRO: backend/pnpm-lock.yaml não existe."; \
+	  echo "      Rode 'make bootstrap' (precisa de rede) e commite o arquivo."; exit 1; }
+	@test -f frontend/pnpm-lock.yaml || { \
+	  echo "ERRO: frontend/pnpm-lock.yaml não existe."; \
+	  echo "      Rode 'make bootstrap' (precisa de rede) e commite o arquivo."; exit 1; }
+
+# Gera os dois lockfiles (exige rede). É pré-requisito do build e do lint do
+# frontend — que também roda `tsc`/`eslint` contra `node_modules`.
+bootstrap: preflight
 	$(PNPM) install
+	pnpm --dir frontend install
 
-up:
+# `up` não exige Node/pnpm no host: os comandos rodam dentro dos containers. Só o
+# lockfile é pré-requisito, porque a imagem instala com `--frozen-lockfile`.
+up: lockfile
 	$(COMPOSE) --profile $(PROFILE) up -d --build
 
 down:
@@ -29,24 +63,25 @@ logs:
 # `migrate deploy` é idempotente: aplica só o que ainda não está em
 # `_prisma_migrations`, então pode rodar em todo deploy. Sem `--no-deps`: o `run`
 # sobe o `postgres` e espera o healthcheck antes de aplicar a migration.
-migrate:
+migrate: lockfile
 	$(API_RUN) pnpm prisma:deploy
 
 # TODO(F2.3): virar `pnpm ingest:fixture` quando a ingestão existir.
 seed:
 	@echo "seed: pendente da F2.3 (ingestão pela fixture)"
 
-test:
+test: preflight
 	$(PNPM) test
 	$(PNPM) test:e2e
 
-lint:
+lint: preflight
 	$(PNPM) lint
 	$(PNPM) typecheck
 	@echo "frontend: exige node_modules (sem rede nesta máquina)"
 	pnpm --dir frontend run lint
 
-# Exige `POSTGRES_PASSWORD` no `.env`: o compose falha na interpolação sem ela.
+# Sem `.env` o compose usa o default de desenvolvimento (`skillsdev`); em
+# `ENV=prod` o backend recusa esse default no boot.
 config:
 	$(COMPOSE) config -q
 	@echo "compose OK"

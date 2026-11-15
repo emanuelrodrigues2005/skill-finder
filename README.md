@@ -22,21 +22,33 @@ pipeline CI/CD + observabilidade, na arquitetura definida em [`docs/01`](docs/01
 ## Como rodar
 
 Requisitos: Docker Desktop com **Compose ≥ 2.24** (o `compose.yaml` usa `env_file.required` e
-`depends_on.required`) e — para desenvolvimento sem Docker — **Node 22 + pnpm**
-(`corepack enable`). PostgreSQL 16 sobe pelo próprio compose.
+`depends_on.required`) e — para desenvolvimento sem Docker — **Node 22 + pnpm** no WSL:
+
+```bash
+bash scripts/setup-node-wsl.sh    # Node 22 nativo + pnpm 12.21.0 (confira com: command -v node)
+```
+
+Se `command -v node` responder algo em `/mnt/c/...`, você está usando o Node do Windows dentro do
+Ubuntu e o pnpm vai falhar com `exec: node: not found` — é exatamente o que o script corrige.
+PostgreSQL 16 sobe pelo próprio compose.
 
 ```bash
 cp .env.example .env    # preencha POSTGRES_PASSWORD (o compose recusa subir sem ela)
-make bootstrap          # pnpm install: gera e fixa o pnpm-lock.yaml (commite-o)
+make bootstrap          # pnpm install nos dois pacotes: gera os pnpm-lock.yaml (commite-os)
 make config             # valida o compose
 make up                 # sobe postgres + api + web (profile dev)
 make logs
 make down
 ```
 
-O `pnpm-lock.yaml` entra no repositório no primeiro `make bootstrap`; a imagem de produção
-usa `--frozen-lockfile` e falha se ele não existir — de propósito, para o build nunca resolver
-dependências novas sem auditoria.
+O `pnpm-lock.yaml` de `backend/` e o de `frontend/` entram no repositório no primeiro
+`make bootstrap`; as imagens usam `--frozen-lockfile` e falham se o lock não existir — de
+propósito, para o build nunca resolver dependências novas sem auditoria.
+
+**Em `PROFILE=prod` o boot exige configuração real.** O backend recusa subir com `ENV=prod` sem
+`DATABASE_URL`, sem `IP_HASH_SALT` e sem `LLM_API_KEY` (com a LLM ligada, que é o padrão), e
+recusa o `POSTGRES_PASSWORD` de desenvolvimento (`skillsdev`). Um `.env` em branco só serve para
+`dev`.
 
 A API expõe `/healthz`, `/readyz` e `/metrics` em `http://localhost:8080` (bind em
 `127.0.0.1` — o nginx é a borda). A interface fica em `http://localhost:8081`.

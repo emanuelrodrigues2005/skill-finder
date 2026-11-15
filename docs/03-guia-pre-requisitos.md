@@ -317,9 +317,30 @@ Explicitando as versões mínimas:
 | `make` | 4.x | atalhos (`make plan`, `make destroy`) |
 | `git` | 2.28 | `git init -b main` |
 | `node` | 22 | runtime do backend (NestJS) e build do frontend |
-| `pnpm` | — | gerenciador de pacotes de `backend/` e `frontend/` (`corepack enable`) |
+| `pnpm` | versão do `packageManager` (12.21.0) | gerenciador de pacotes de `backend/` e `frontend/` — instalado pelo script abaixo, **não** pelo corepack |
 
-> **Node 22 e pnpm são a toolchain da aplicação** (NestJS + TypeScript; ADR-007 em `docs/app/02-arquitetura.md`). O `scripts/install-toolchain-wsl.sh` **não** instala Node nem pnpm — ele cuida de AWS CLI, Terraform, tflint e Ansible: o Node 22 já vem no ambiente e o pnpm é habilitado com `corepack enable` (confira com `pnpm --version`). O `python3`/`pipx` que continuam na lista do `apt` servem apenas à rota opcional do Ansible (§3.5).
+> **Node 22 e pnpm são a toolchain da aplicação** (NestJS + TypeScript; ADR-007 em `docs/app/02-arquitetura.md`). O `scripts/install-toolchain-wsl.sh` **não** instala Node nem pnpm — ele cuida de AWS CLI, Terraform, tflint e Ansible. Para o Node use o script dedicado:
+>
+> ```bash
+> bash scripts/setup-node-wsl.sh          # instala Node 22 (NodeSource) + pnpm da versão fixada
+> bash scripts/setup-node-wsl.sh --check  # só diagnostica
+> ```
+>
+> **Atalho que morde (duas vezes):**
+>
+> 1. Se você já usou Node/corepack no **Windows**, o WSL herda `/mnt/c/.../corepack-shims` no
+>    PATH. O `pnpm` desse caminho é um shim que chama um `node` que não existe no Linux, e o
+>    sintoma é `pnpm: 11: exec: node: not found`.
+> 2. Se você tentar resolver com `sudo corepack enable && sudo corepack prepare pnpm@X
+>    --activate`, o "default" fica no `COREPACK_HOME` do **root**; o shim do seu usuário não o
+>    vê, baixa o pnpm **mais recente** e o install aborta com
+>    `ERR_PNPM_BAD_PM_VERSION` (o projeto fixa a versão em `packageManager`).
+>
+> O `scripts/setup-node-wsl.sh` trata os dois: desabilita os shims do corepack e instala via
+> `npm i -g pnpm@<versão do packageManager>`. Confira com `command -v node` (precisa começar
+> com `/usr/`) e `pnpm -v` (precisa ser **12.21.0**, igual ao `packageManager`).
+>
+> O `python3`/`pipx` que continuam na lista do `apt` servem apenas à rota opcional do Ansible (§3.5).
 
 > **Atenção — armadilha real:** o Git **do WSL** e o Git **do Windows** têm configurações
 > separadas. Sua identidade já está configurada no Windows e **não** vale aqui. Configure no

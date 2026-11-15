@@ -1,0 +1,23 @@
+HTTP/1.1 200 OK
+Age: 17
+Cache-Control: public, max-age=0, must-revalidate
+Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://va.vercel-scripts.com https://vercel.live; script-src-elem 'self' 'unsafe-inline' https://va.vercel-scripts.com https://vercel.live; style-src 'self' 'unsafe-inline' https://vercel.live; img-src 'self' data: blob: https://vercel.com https://vercel.live; connect-src 'self' https://vercel.live wss://ws-us3.pusher.com; font-src 'self' https://vercel.live https://assets.vercel.com; frame-src https://vercel.live; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://vercel.com
+Content-Type: text/html; charset=utf-8
+Date: Sun, 15 Nov 2026 15:20:24 GMT
+Etag: "14bgckq2d4p1s8g"
+Link: </_next/static/immutable/media/07a39a8a4660cc7c-s.p.1v5bejj26fx9h.woff2>; rel=preload; as="font"; crossorigin=""; type="font/woff2", </_next/static/immutable/media/605ce01b664af129-s.p.0zr6hhvz-h9nw.woff2>; rel=preload; as="font"; crossorigin=""; type="font/woff2", </_next/static/immutable/media/ee6db54b00f87578-s.p.02nmhx5ck_ir6.woff2>; rel=preload; as="font"; crossorigin=""; type="font/woff2"
+Referrer-Policy: strict-origin-when-cross-origin
+Server: Vercel
+Set-Cookie: region=us; Path=/; Expires=Mon, 16 Nov 2026 15:20:43 GMT; Max-Age=86400
+Strict-Transport-Security: max-age=63072000
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-Matched-Path: /vercel-labs/skills/find-skills
+X-Nextjs-Prerender: 1
+X-Nextjs-Stale-Time: 300
+X-Powered-By: Next.js
+X-Vercel-Cache: HIT
+X-Vercel-Id: gru1::iad1::fhtxp-1794756043081-22cb99a89222
+Transfer-Encoding: chunked
+
