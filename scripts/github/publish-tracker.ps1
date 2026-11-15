@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Publica o tracker do projeto (milestones, labels, issues e PR) a partir de um
     JSON declarativo, de forma idempotente.
@@ -225,7 +225,7 @@ $existingIssues = @{}
 if ($Apply) {
     Write-Head 'lendo estado remoto'
     # Fail-closed: se a leitura falhar, a excecao sobe e NADA e escrito. Antes,
-    # uma falha de leitura virava mapa vazio e o script recriava tudo â€” e a API
+    # uma falha de leitura virava mapa vazio e o script recriava tudo Ã¢â‚¬â€ e a API
     # aceita titulo duplicado, entao o resultado seria issue duplicada e fechada
     # com comentario de evidencia (registro falso e permanente).
     $labels = Invoke-Gh -Arguments @('label', 'list', '--repo', $Repo, '--limit', '200', '--json', 'name') -Json
@@ -255,8 +255,8 @@ foreach ($ms in $spec.milestones) {
     if ($existingMilestones.ContainsKey($ms.title)) { Write-Same $ms.title; $script:Skipped++; continue }
     Write-New $ms.title
     if ($Apply) {
-        $created = Invoke-Gh -Arguments @('api', "repos/$Repo/milestones", '--method', 'POST', '-f', "title=$($ms.title)", '-f', "description=$($ms.description)", '-f', 'state=open') -Json
-        $existingMilestones[$ms.title] = $created.number
+        $newMilestone = Invoke-Gh -Arguments @('api', "repos/$Repo/milestones", '--method', 'POST', '-f', "title=$($ms.title)", '-f', "description=$($ms.description)", '-f', 'state=open') -Json
+        $existingMilestones[$ms.title] = $newMilestone.number
     }
     $script:Created++
 }
