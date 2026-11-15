@@ -2,7 +2,7 @@
 # Estágios: base -> deps -> (dev | build) -> prod-deps -> runtime.
 # Nenhum segredo em ENV/ARG: tudo entra por variável de ambiente em runtime.
 #
-# pnpm: corepack com a MESMA versão de `packageManager` (package.json: pnpm@9.15.4)
+# pnpm: corepack com a MESMA versão de `packageManager` (package.json: pnpm@12.21.0)
 # em TODOS os estágios, inclusive no runtime — o compose roda `pnpm start` e o
 # Makefile roda `pnpm prisma:deploy` dentro do container. `corepack install -g`
 # baixa o pnpm no build e o deixa no `COREPACK_HOME` fixo, então o container não
@@ -15,11 +15,13 @@ ENV COREPACK_HOME=/opt/corepack \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN apk add --no-cache libc6-compat openssl \
     && corepack enable \
-    && corepack install -g pnpm@9.15.4 \
+    && corepack install -g pnpm@12.21.0 \
     && chmod -R a+rX "${COREPACK_HOME}"
 
 FROM base AS deps
-COPY package.json pnpm-lock.yaml ./
+# `pnpm-workspace.yaml` carrega o `allowBuilds`: sem ele o install dentro da imagem
+# roda sem a allowlist revisada, e a política do host não vale no build.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # `--frozen-lockfile`: sem `pnpm-lock.yaml` o build falha aqui, em vez de resolver
 # centenas de transitivas sem auditoria. Gere o lock com `make bootstrap` e
 # commite antes do primeiro build com credencial real (backend/README.md).
@@ -47,7 +49,7 @@ RUN pnpm build
 # resolvido a partir do lock num diretório limpo. O client do Prisma é regerado
 # aqui para não depender de sobras do node_modules de build.
 FROM base AS prod-deps
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY prisma ./prisma
 RUN pnpm install --prod --frozen-lockfile \
     && pnpm prisma generate

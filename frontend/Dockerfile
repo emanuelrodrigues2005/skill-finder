@@ -2,10 +2,19 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-RUN corepack enable
+# Alinhado ao backend/Dockerfile: pnpm fixado pelo `packageManager` e instalado no
+# `COREPACK_HOME` da imagem, para o build não resolver versão nem depender do HOME.
+ENV COREPACK_HOME=/opt/corepack \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable \
+    && corepack install -g pnpm@12.21.0 \
+    && chmod -R a+rX "${COREPACK_HOME}"
 
-COPY package.json ./
-RUN pnpm install --no-frozen-lockfile
+# `pnpm-workspace.yaml` traz o `allowBuilds` (esbuild do Vite). `--frozen-lockfile`
+# faz o build falhar alto se o lock divergir do manifesto, em vez de resolver novas
+# versões sem auditoria.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY tsconfig.json tsconfig.node.json vite.config.ts index.html ./
 COPY src ./src

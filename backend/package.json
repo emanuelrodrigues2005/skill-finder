@@ -4,10 +4,10 @@
   "private": true,
   "description": "Skill Finder API (NestJS 11) — F2.2: health, metrics, configuration and migrations.",
   "license": "UNLICENSED",
-  "packageManager": "pnpm@9.15.4",
+  "packageManager": "pnpm@12.21.0",
   "engines": {
     "node": ">=22.0.0",
-    "pnpm": ">=9.0.0"
+    "pnpm": ">=12.0.0"
   },
   "scripts": {
     "build": "nest build",
@@ -80,7 +80,11 @@
       "^.+\\.ts$": [
         "ts-jest",
         {
-          "tsconfig": "tsconfig.json"
+          "tsconfig": "tsconfig.json",
+          "isolatedModules": true,
+          "diagnostics": {
+            "ignoreCodes": [151002]
+          }
         }
       ]
     },

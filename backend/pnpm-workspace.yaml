@@ -1,0 +1,14 @@
+# Configuração do pnpm para este pacote (pnpm >= 10 lê daqui, não do package.json).
+#
+# `allowBuilds` é a lista de dependências autorizadas a executar script de
+# postinstall. Fora dela, o pnpm bloqueia — o que é bom por padrão, mas quebra o
+# Prisma (que gera o client no install). Cada linha é uma decisão de confiança:
+allowBuilds:
+  # Gera o client tipado do Prisma; sem isso o `tsc` e o boot falham.
+  '@prisma/client': true
+  # Baixa os engines (query engine) usados em runtime pela API.
+  '@prisma/engines': true
+  # CLI do Prisma, usado só por `pnpm prisma:*` (migrate/generate).
+  prisma: true
+  # Telemetria de uso do Prisma. Não precisamos e não deve sair da máquina.
+  '@scarf/scarf': false

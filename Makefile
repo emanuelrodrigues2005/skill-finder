@@ -39,12 +39,19 @@ lockfile:
 	@test -f backend/pnpm-lock.yaml || { \
 	  echo "ERRO: backend/pnpm-lock.yaml não existe."; \
 	  echo "      Rode 'make bootstrap' (precisa de rede) e commite o arquivo."; exit 1; }
+	@test -f frontend/pnpm-lock.yaml || { \
+	  echo "ERRO: frontend/pnpm-lock.yaml não existe."; \
+	  echo "      Rode 'make bootstrap' (precisa de rede) e commite o arquivo."; exit 1; }
 
-# Gera `pnpm-lock.yaml` (exige rede) e é pré-requisito do primeiro build.
+# Gera os dois lockfiles (exige rede). É pré-requisito do build e do lint do
+# frontend — que também roda `tsc`/`eslint` contra `node_modules`.
 bootstrap: preflight
 	$(PNPM) install
+	pnpm --dir frontend install
 
-up: preflight lockfile
+# `up` não exige Node/pnpm no host: os comandos rodam dentro dos containers. Só o
+# lockfile é pré-requisito, porque a imagem instala com `--frozen-lockfile`.
+up: lockfile
 	$(COMPOSE) --profile $(PROFILE) up -d --build
 
 down:

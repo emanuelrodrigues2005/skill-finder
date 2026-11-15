@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # =============================================================================
-# setup-node-wsl.sh — instala Node 22 + pnpm (via corepack) DENTRO do WSL/Ubuntu
+# setup-node-wsl.sh — instala Node 22 + pnpm (versão do packageManager) no WSL
 #
 # Por que existe: o `pnpm` que apareceu no PATH do Ubuntu era o shim do Windows
 # (/mnt/c/.../corepack-shims/pnpm), que tenta executar um `node` que não existe
-# no Linux. Resultado: `pnpm: exec: node: not found`. Este script instala o Node
-# nativo no Ubuntu e ativa o pnpm pelo corepack que vem com ele.
+# no Linux. Resultado: `pnpm: exec: node: not found`. Depois, o corepack passou a
+# baixar a última versão do pnpm e o install abortou com ERR_PNPM_BAD_PM_VERSION.
+# Este script instala o Node nativo e o pnpm na versão que o projeto fixa.
 #
 # Uso, dentro do Ubuntu:
 #   bash scripts/setup-node-wsl.sh
 #   bash scripts/setup-node-wsl.sh --check     # só diagnostica, não instala
 #
-# Requer sudo (apt). É idempotente: se já houver Node 22 nativo, não reinstala.
+# Requer sudo (apt/npm global). É idempotente: se já houver Node 22 nativo, não
+# reinstala; o pnpm é reinstalado na versão fixada para corrigir divergência.
 # =============================================================================
 set -euo pipefail
 
@@ -104,21 +106,39 @@ if [ "$NEED_INSTALL" -eq 1 ]; then
   ok "Node instalado: $(node -v)"
 fi
 
-# ---------- pnpm pelo corepack --------------------------------------------
-# O corepack vem com o Node 22. `corepack enable` escreve os shims no diretório
-# bin do Node (/usr/bin), que vem ANTES de /mnt/c no PATH.
-info "ativando o pnpm pelo corepack (versão fixada no package.json: pnpm@9.15.4)..."
+# ---------- pnpm ------------------------------------------------------------
+# `corepack enable` + `prepare --activate` guarda o "default" no COREPACK_HOME de
+# quem executou. Com `sudo`, esse default fica em /root/.cache e o shim do usuário
+# não o enxerga: ele baixa a última versão do pnpm (12.x) e o `pnpm install`
+# aborta com ERR_PNPM_BAD_PM_VERSION contra o `packageManager` do projeto.
+# Instalar a versão fixada direto pelo npm elimina a troca de versão do caminho.
+PNPM_VERSION="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"pnpm@\([^"]*\)".*/\1/p' \
+  backend/package.json 2>/dev/null | head -1)"
+[ -n "$PNPM_VERSION" ] || PNPM_VERSION="12.21.0"
+
 if [ "$(id -u)" -eq 0 ]; then SUDO2=""; else SUDO2="sudo"; fi
-$SUDO2 corepack enable
-$SUDO2 corepack prepare pnpm@9.15.4 --activate
+
+info "removendo os shims do corepack (eles trocam a versão do pnpm)..."
+$SUDO2 corepack disable >/dev/null 2>&1 || true
+
+info "instalando pnpm@${PNPM_VERSION} via npm (versão que o package.json fixa)..."
+$SUDO2 npm install --global "pnpm@${PNPM_VERSION}"
 hash -r 2>/dev/null || true
 
 PNPM_AFTER="$(describe pnpm)"
 if [ "$PNPM_AFTER" = "ausente" ] || is_windows_path "$PNPM_AFTER"; then
   warn "o pnpm do Linux não assumiu o PATH (resolveu para: ${PNPM_AFTER:-vazio})"
-  echo "      Rode: hash -r ; rehash   (ou abra um terminal novo) e confira 'command -v pnpm'."
-  echo "      Se persistir, o PATH do Windows está à frente: use 'corepack pnpm' ou ajuste o PATH."
+  echo "      Rode: hash -r   (ou abra um terminal novo) e confira 'command -v pnpm'."
+  echo "      Se persistir, /mnt/c está antes de /usr/local/bin no PATH: ajuste a ordem."
   exit 1
+fi
+
+# A versão instalada precisa bater com `packageManager`, senão o pnpm recusa
+# rodar no projeto (ERR_PNPM_BAD_PM_VERSION).
+PNPM_INSTALLED="$(pnpm -v 2>/dev/null || echo '?')"
+if [ "$PNPM_INSTALLED" != "$PNPM_VERSION" ]; then
+  die "pnpm instalado (${PNPM_INSTALLED}) difere do fixado no projeto (${PNPM_VERSION}).
+      Alinhe os dois: `sudo npm i -g pnpm@${PNPM_VERSION}` e o campo packageManager."
 fi
 
 # ---------- verificação final ---------------------------------------------

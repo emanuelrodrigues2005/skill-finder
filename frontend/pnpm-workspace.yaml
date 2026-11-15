@@ -1,0 +1,7 @@
+# Configuração do pnpm para este pacote (pnpm >= 10 lê daqui, não do package.json).
+#
+# `allowBuilds` autoriza (ou não) script de postinstall por dependência. O esbuild,
+# que o Vite usa, baixa o binário da plataforma nesse passo: sem autorização, o
+# `vite build` falha com "esbuild: command not found".
+allowBuilds:
+  esbuild: true
