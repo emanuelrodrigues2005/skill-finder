@@ -19,6 +19,21 @@ Fonte de verdade: `Makefile` (`make up`, `down`, `logs`, `migrate`, `seed`, `tes
 
 Sem internet nesta máquina, `pnpm install` falha — instale quando houver rede.
 
+**Verificação roda em ext4, nunca em `/mnt/c`.** O checkout vive em `/mnt/c`, que no
+WSL é 9p — cada leitura atravessa a ponte com o Windows. Medido neste repositório
+(65.681 arquivos em `node_modules`): `jest --listTests` leva **124 s** e uma suíte de
+4 testes leva **451 s** em `/mnt/c`, contra **5,5 s** da mesma suíte em ext4. 95% do
+tempo era espera de I/O, não CPU — foi isso que fez cada rodada custar ~15 min.
+
+Use `bash scripts/dev/verify.sh [escopo]`: espelha `backend/` + `openapi.yaml` para
+`~/cloud-verify` e roda lá. A cadeia completa cai de ~15 min para **~30 s**.
+Escopos: `typecheck`, `openapi`, `unit`, `e2e`, `docs`, ou vazio para tudo.
+
+- **Filho de agente roda UM escopo** (`verify.sh docs`), nunca a cadeia inteira; a
+  verificação completa é do orquestrador, no fim da issue.
+- `verify.sh --native` roda no `/mnt/c` — só para comparar, nunca no fluxo.
+- O espelho é descartável: `--delete` a cada execução. Nada é escrito no checkout.
+
 ## Regras que não se deduzem do código
 
 1. **O ranking é determinístico.** A ordem sai de `backend/src/ranking`, uma função pura: sem I/O,

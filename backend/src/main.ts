@@ -2,13 +2,14 @@ import type { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { OpenAPIObject } from '@nestjs/swagger';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { DocumentBuilder } from '@nestjs/swagger';
 import { Logger } from 'nestjs-pino';
 
 import { AppModule } from './app.module';
 import { requestIdMiddleware } from './common/request-id.middleware';
 import { securityHeaders } from './common/security-headers.middleware';
 import { AppConfigService } from './config/config.module';
+import { setupApiDocs } from './docs/setup-api-docs';
 
 export const GLOBAL_PREFIX = 'api/v1';
 
@@ -87,9 +88,10 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
   configureApp(app);
 
-  if (!app.get(AppConfigService).isProd) {
-    SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, openApiOptions()));
-  }
+  // A UI de referência (§Documentação da API) tem fiação própria em
+  // `src/docs/setup-api-docs.ts`: `/docs`, `/docs-json` e o bundle local da UI.
+  // A guarda de produção está lá — em produção esta chamada não monta nada.
+  await setupApiDocs(app);
 
   await app.listen(HTTP_PORT, '0.0.0.0');
 }

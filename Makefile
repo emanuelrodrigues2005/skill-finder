@@ -11,12 +11,14 @@ API_SERVICE := $(if $(filter prod,$(PROFILE)),api,api-dev)
 API_RUN := $(COMPOSE) --profile $(PROFILE) run --rm $(API_SERVICE)
 
 .PHONY: bootstrap up down logs migrate seed test lint config help \
-        preflight lockfile
+        preflight lockfile openapi openapi-check
 
 help:
-	@echo "alvos: bootstrap | up | down | logs | migrate | seed | test | lint | config"
+	@echo "alvos: bootstrap | up | down | logs | migrate | seed | test | lint | config | openapi | openapi-check"
 	@echo "  bootstrap  gera pnpm-lock.yaml (exige Node 22 nativo no WSL e rede)"
 	@echo "  up         sobe postgres + API + web no profile $(PROFILE)"
+	@echo "  openapi    regenera openapi.yaml a partir dos decorators do backend"
+	@echo "  openapi-check  falha quando openapi.yaml diverge do documento gerado"
 
 # Falha cedo, com instrução, quando o Node do WSL não serve. Sem isso o erro que
 # aparece é `pnpm: exec: node: not found` — que não diz o que fazer.
@@ -79,6 +81,24 @@ lint: preflight
 	$(PNPM) typecheck
 	@echo "frontend: exige node_modules (sem rede nesta máquina)"
 	pnpm --dir frontend run lint
+
+# `openapi.yaml` é gerado, nunca editado à mão (AGENTS.md §Documentação da API).
+# `preflight` como nos demais alvos: sem o Node do WSL o erro que aparece é
+# `pnpm: exec: node: not found`, que não diz o que fazer.
+openapi: preflight
+	$(PNPM) openapi:generate
+
+# Gate do contrato: o artefato versionado e o documento dos decorators não podem
+# divergir. `git ls-files --error-unmatch` vem antes da geração de propósito: sem
+# ele o alvo ficaria verde com `openapi.yaml` fora do versionamento (arquivo
+# ignorado ou nunca adicionado), que é justamente o caso em que o gate mente.
+# O `git diff HEAD` cobre staged e unstaged: sem isso, um `git add openapi.yaml`
+# com o conteúdo novo deixaria o alvo verde antes do commit — a mesma classe de
+# verde falso que o `ls-files` acima existe para impedir.
+openapi-check: preflight
+	git ls-files --error-unmatch -- openapi.yaml >/dev/null
+	$(PNPM) openapi:generate
+	git diff --exit-code HEAD -- openapi.yaml
 
 # Sem `.env` o compose usa o default de desenvolvimento (`skillsdev`); em
 # `ENV=prod` o backend recusa esse default no boot.

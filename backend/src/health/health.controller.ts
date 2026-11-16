@@ -25,7 +25,13 @@ export class HealthController {
    */
   @Get('healthz')
   @Header('Cache-Control', 'no-cache, no-store, must-revalidate')
-  @ApiOperation({ summary: 'Liveness probe (no dependencies)' })
+  @ApiOperation({
+    summary: 'Liveness probe (no dependencies)',
+    description:
+      'Process liveness only: answers 200 while the event loop runs. No dependency is ' +
+      'touched, so a database outage never restarts the container. Lives outside ' +
+      '`/api/v1` (`PUBLIC_ROUTES`), like the other two internal endpoints.',
+  })
   @ApiExtension('x-internal', true)
   @ApiResponse({ status: 200, description: 'The process is alive.', type: HealthResponse })
   @ApiErrorResponses(500)
@@ -44,7 +50,13 @@ export class HealthController {
    * daqui são as únicas documentadas.
    */
   @Get('readyz')
-  @ApiOperation({ summary: 'Readiness probe (Postgres answering)' })
+  @ApiOperation({
+    summary: 'Readiness probe (Postgres answering)',
+    description:
+      'Answers 200 only when every dependency answers. A Postgres that does not answer ' +
+      'becomes `503 NOT_READY` in the §5.5 envelope, with `details.reason = ' +
+      '"db_unavailable"` — never a 200 with stale data.',
+  })
   @ApiExtension('x-internal', true)
   @ApiResponse({ status: 200, description: 'Every dependency answered.', type: HealthResponse })
   @ApiErrorResponses(500, {

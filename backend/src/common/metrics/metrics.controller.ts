@@ -16,7 +16,13 @@ export class MetricsController {
    * descrita com `content['text/plain']` em vez de um schema de sucesso JSON.
    */
   @Get('metrics')
-  @ApiOperation({ summary: 'Prometheus metrics (application + HTTP instrumentation)' })
+  @ApiOperation({
+    summary: 'Prometheus metrics (application + HTTP instrumentation)',
+    description:
+      'Prometheus text exposition format (`text/plain`), scraped by the collector — not ' +
+      'JSON. Lives outside `/api/v1` (`PUBLIC_ROUTES`) so the scrape path stays stable ' +
+      'across API versions.',
+  })
   @ApiExtension('x-internal', true)
   @ApiResponse({
     status: 200,

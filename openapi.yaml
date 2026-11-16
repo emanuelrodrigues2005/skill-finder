@@ -2,6 +2,9 @@ openapi: 3.0.0
 paths:
   /metrics:
     get:
+      description: Prometheus text exposition format (`text/plain`), scraped by the
+        collector — not JSON. Lives outside `/api/v1` (`PUBLIC_ROUTES`) so the
+        scrape path stays stable across API versions.
       operationId: MetricsController_render
       parameters: []
       responses:
@@ -33,6 +36,10 @@ paths:
       x-internal: true
   /healthz:
     get:
+      description: "Process liveness only: answers 200 while the event loop runs. No
+        dependency is touched, so a database outage never restarts the
+        container. Lives outside `/api/v1` (`PUBLIC_ROUTES`), like the other two
+        internal endpoints."
       operationId: HealthController_liveness
       parameters: []
       responses:
@@ -64,6 +71,9 @@ paths:
       x-internal: true
   /readyz:
     get:
+      description: Answers 200 only when every dependency answers. A Postgres that
+        does not answer becomes `503 NOT_READY` in the §5.5 envelope, with
+        `details.reason = "db_unavailable"` — never a 200 with stale data.
       operationId: HealthController_readiness
       parameters: []
       responses:
