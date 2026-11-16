@@ -110,6 +110,10 @@ Formato: `US-nn` · persona · história. Cada critério de aceitação (AC) é 
 - **AC3** quando o documento não existe ou falhou, `skill_md_present = false` **ou** `skill_md_excerpt = null`, e a UI mostra `n/a` com a frase "No full description available for this skill" — nunca um bloco vazio ou um erro.
 - **AC4** `skill_id` malformado retorna `404`/`422`, nunca `500`.
 
+> **Limites de texto na resposta** (fonte dos `maxLength` do contrato, `docs/app/02-arquitetura.md` §5.4):
+> `summary` é truncado na ingestão em **280** caracteres; `skill_md_excerpt` em **600**. O corte acontece
+> na ingestão, não na leitura — a resposta nunca promete mais do que o catálogo guarda.
+
 ### US-07 — Saber quando nada foi encontrado (Ana, Carla)
 **Como** usuário, **quero** entender que a busca não achou nada e o que fazer, **para** não concluir que o app quebrou.
 

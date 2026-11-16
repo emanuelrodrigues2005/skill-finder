@@ -54,6 +54,23 @@ export class ApiError extends HttpException {
 }
 
 /**
+ * Chaves que o contrato de §5.5 admite em `error.details`.
+ *
+ * `details` chega aqui como pass-through: sem allowlist, um `catch` futuro que
+ * copiasse `error.message` de um client de banco (`P1001: Can't reach database
+ * server at db:5432`) publicaria host e porta no corpo, sob um 503 já
+ * documentado, e ninguém veria nada anômalo.
+ */
+const ALLOWED_DETAIL_KEYS: readonly string[] = [
+  'fields',
+  'reason',
+  'limit',
+  'window_seconds',
+  'run_id',
+  'expires_at',
+];
+
+/**
  * Único formato de erro da API (`docs/app/02-arquitetura.md` §5.5):
  * `{request_id, error: {code, message, details}}`. Stack trace vai para o log,
  * nunca para a resposta.
@@ -81,7 +98,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       error: {
         code: normalized.code,
         message: normalized.message,
-        details: normalized.details,
+        details: this.contractDetails(normalized.details),
         ...(normalized.retryAfterSeconds === undefined
           ? {}
           : { retry_after_seconds: normalized.retryAfterSeconds }),
@@ -89,6 +106,32 @@ export class HttpExceptionFilter implements ExceptionFilter {
     };
 
     response.status(normalized.status).json(envelope);
+  }
+
+  /**
+   * Publica só as chaves do catálogo fechado de §5.5, em **todo** status — 4xx
+   * incluído, porque é a classe mais alcançável por um cliente e um `catch` de
+   * driver embrulhado num 409 publicaria host, porta e nome de constraint.
+   * Objeto vazio continua objeto (o schema exige a chave) e o descarte vai para o
+   * log **sem o valor**, porque é justamente o valor que pode carregar o segredo.
+   */
+  private contractDetails(details: Record<string, unknown>): Record<string, unknown> {
+    const allowed: Record<string, unknown> = {};
+    const dropped: string[] = [];
+
+    for (const [key, value] of Object.entries(details)) {
+      if (ALLOWED_DETAIL_KEYS.includes(key)) {
+        allowed[key] = value;
+      } else {
+        dropped.push(key);
+      }
+    }
+
+    if (dropped.length > 0) {
+      this.logger.warn(`dropped non-contract error detail keys: ${dropped.join(', ')}`);
+    }
+
+    return allowed;
   }
 }
 
@@ -142,9 +185,7 @@ function messageText(message: unknown, status: number): string {
   if (Array.isArray(message) && message.length > 0) {
     return 'Request body failed validation.';
   }
-  return status >= HttpStatus.INTERNAL_SERVER_ERROR
-    ? 'Internal server error.'
-    : 'Request failed.';
+  return status >= HttpStatus.INTERNAL_SERVER_ERROR ? 'Internal server error.' : 'Request failed.';
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

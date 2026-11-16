@@ -1,0 +1,1315 @@
+openapi: 3.0.0
+paths:
+  /metrics:
+    get:
+      operationId: MetricsController_render
+      parameters: []
+      responses:
+        "200":
+          description: Prometheus text exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "500":
+          description: Unclassified internal error. Never exposes a stack trace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - INTERNAL
+      summary: Prometheus metrics (application + HTTP instrumentation)
+      tags:
+        - metrics
+      x-internal: true
+  /healthz:
+    get:
+      operationId: HealthController_liveness
+      parameters: []
+      responses:
+        "200":
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "500":
+          description: Unclassified internal error. Never exposes a stack trace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - INTERNAL
+      summary: Liveness probe (no dependencies)
+      tags: &a1
+        - health
+      x-internal: true
+  /readyz:
+    get:
+      operationId: HealthController_readiness
+      parameters: []
+      responses:
+        "200":
+          description: Every dependency answered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "500":
+          description: Unclassified internal error. Never exposes a stack trace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - INTERNAL
+        "503":
+          description: "Postgres did not answer: `NOT_READY` in the §5.5 envelope."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - NOT_READY
+      summary: Readiness probe (Postgres answering)
+      tags: *a1
+      x-internal: true
+  /api/v1/search:
+    post:
+      description: Interprets the intent, retrieves candidates, ranks them
+        deterministically and explains the top matches (§5.2, §5.3, §6).
+      operationId: SearchController_search
+      parameters:
+        - name: strict_llm
+          required: false
+          in: query
+          schema:
+            type: boolean
+          description: "Opt in to failing instead of degrading when the provider answers
+            invalid: only with this flag can the call end in 502."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Ranked results, at most `limit` items.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: "Bad request: the body is not JSON or a required field is missing."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - BAD_REQUEST
+        "422":
+          description: Request failed validation; the offending paths travel in
+            `error.details.fields`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - VALIDATION_ERROR
+        "429":
+          description: Client rate limit exceeded; see `Retry-After` and
+            `error.retry_after_seconds`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - RATE_LIMITED
+        "500":
+          description: Unclassified internal error. Never exposes a stack trace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - INTERNAL
+        "502":
+          description: The LLM answered invalid and the single repair failed (only with
+            `strict_llm=true`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - LLM_BAD_RESPONSE
+        "503":
+          description: No cached catalog / required dependency unavailable.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - SOURCE_UNAVAILABLE
+      summary: Search the catalog with a natural-language query
+      tags:
+        - search
+  /api/v1/searches/{request_id}:
+    get:
+      description: Same shape as the search response, with `llm.cached=true` (§5.4).
+      operationId: SearchesController_byRequestId
+      parameters:
+        - name: request_id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The stored search.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "404":
+          description: Resource not found.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - NOT_FOUND
+        "410":
+          description: Search history expired (30-day retention).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - HISTORY_EXPIRED
+        "500":
+          description: Unclassified internal error. Never exposes a stack trace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - INTERNAL
+      summary: Read a stored search
+      tags:
+        - search
+  /api/v1/categories:
+    get:
+      description: Slugs, English labels and skill counts of the current snapshot (§5.4).
+      operationId: CategoriesController_list
+      parameters: []
+      responses:
+        "200":
+          description: Every category of the catalog.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryListResponse"
+        "500":
+          description: Unclassified internal error. Never exposes a stack trace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - INTERNAL
+        "503":
+          description: No cached catalog / required dependency unavailable.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - SOURCE_UNAVAILABLE
+      summary: List the categories for the UI selector
+      tags:
+        - catalog
+  /api/v1/skills:
+    get:
+      description: Deterministic ordering by `sort_by`; `page`/`page_size` have hard
+        ceilings (§5.6).
+      operationId: SkillsController_list
+      parameters:
+        - name: page_size
+          required: false
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Items per page (1–100).
+        - name: page
+          required: false
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+          description: 1-based page.
+        - name: sort_by
+          required: false
+          in: query
+          schema:
+            type: string
+            enum:
+              - installs
+              - stars
+              - name
+            default: installs
+          description: Ordering key. Only these three fields; there is no free-form sort.
+        - name: category
+          required: false
+          in: query
+          schema:
+            type: string
+          description: Category slug filter.
+      responses:
+        "200":
+          description: A page of skills.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillListResponse"
+        "400":
+          description: "Bad request: the body is not JSON or a required field is missing."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - BAD_REQUEST
+        "422":
+          description: Request failed validation; the offending paths travel in
+            `error.details.fields`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - VALIDATION_ERROR
+        "500":
+          description: Unclassified internal error. Never exposes a stack trace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - INTERNAL
+      summary: Browse the catalog with filters and pagination
+      tags: &a2
+        - catalog
+  /api/v1/skills/{skill_id}:
+    get:
+      description: Detail view of the catalog row (§5.4).
+      operationId: SkillsController_detail
+      parameters:
+        - name: skill_id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The skill.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillDetailResponse"
+        "404":
+          description: Resource not found.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - NOT_FOUND
+        "500":
+          description: Unclassified internal error. Never exposes a stack trace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - INTERNAL
+      summary: Read one skill, including the SKILL.md excerpt
+      tags: *a2
+  /api/v1/admin/ingest:
+    post:
+      description: Requires the `X-Admin-Token` header. Answers 409 while another run
+        is in progress (§5.1).
+      operationId: AdminIngestController_start
+      parameters:
+        - name: X-Admin-Token
+          in: header
+          description: Server-side operator token.
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Ingestion accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestStartedResponse"
+        "401":
+          description: Missing or invalid `X-Admin-Token`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - UNAUTHORIZED
+        "409":
+          description: An ingestion run is already in progress.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - CONFLICT
+        "500":
+          description: Unclassified internal error. Never exposes a stack trace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - INTERNAL
+      security: &a3
+        - adminToken: []
+      summary: Trigger a manual catalog ingestion
+      tags: &a4
+        - admin
+      x-internal: true
+  /api/v1/admin/ingest/runs:
+    get:
+      description: Requires the `X-Admin-Token` header; paginated by
+        `page`/`page_size` (§5.6).
+      operationId: AdminIngestController_runs
+      parameters:
+        - name: page_size
+          required: false
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Items per page (1–100).
+        - name: page
+          required: false
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+          description: 1-based page.
+        - name: X-Admin-Token
+          in: header
+          description: Server-side operator token.
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of ingestion runs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestRunsResponse"
+        "401":
+          description: Missing or invalid `X-Admin-Token`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - UNAUTHORIZED
+        "500":
+          description: Unclassified internal error. Never exposes a stack trace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - INTERNAL
+      security: *a3
+      summary: List the latest ingestion runs
+      tags: *a4
+      x-internal: true
+info:
+  title: Skill Finder API
+  description: "Natural-language search over the skills.sh catalog (F2.2: skeleton)."
+  version: 0.1.0
+  contact: {}
+tags: []
+servers: []
+components:
+  securitySchemes:
+    adminToken:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+  schemas:
+    ErrorBody:
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - BAD_REQUEST
+            - VALIDATION_ERROR
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - NOT_FOUND
+            - CONFLICT
+            - HISTORY_EXPIRED
+            - RATE_LIMITED
+            - LLM_BAD_RESPONSE
+            - SOURCE_UNAVAILABLE
+            - NOT_READY
+            - INTERNAL
+          description: Stable UPPER_SNAKE code of docs/app/02-arquitetura.md §5.5. Clients
+            pick the message by code, never by text.
+        message:
+          type: string
+          description: Human-readable message. Never a stack trace.
+        details:
+          type: object
+          additionalProperties: true
+          description: "Closed set, on every status: `fields` (422 validation errors),
+            `reason` (503 readiness), `limit` and `window_seconds` (429),
+            `run_id` (409 ingest already running) and `expires_at` (410 history
+            expired). Any other key is dropped by the error filter, so upstream
+            messages, stack traces and driver errors never reach the public
+            body. Empty object when there is no detail."
+        retry_after_seconds:
+          type: integer
+          nullable: true
+          description: Seconds until the client may retry. Only meaningful on 429; omitted
+            everywhere else.
+      required:
+        - code
+        - message
+        - details
+    ErrorEnvelope:
+      type: object
+      properties:
+        request_id:
+          type: string
+          nullable: true
+          description: Request id echoed back (header `X-Request-Id`); null only when the
+            request never reached the middleware.
+        error:
+          $ref: "#/components/schemas/ErrorBody"
+      required:
+        - request_id
+        - error
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+          description: "`ok` when every indicator passed."
+        info:
+          type: object
+          additionalProperties: true
+          description: Indicators that passed.
+        error:
+          type: object
+          additionalProperties: true
+          description: Indicators that failed.
+        details:
+          type: object
+          additionalProperties: true
+          description: Detail per indicator.
+      required:
+        - status
+    SearchRequest:
+      type: object
+      properties:
+        query:
+          type: string
+          minLength: 3
+          maxLength: 500
+          example: I need a skill that reviews pull requests for security problems in
+            Python services
+          description: Natural-language description of the skill the user needs, after
+            strip and NFKC normalisation (3–500 characters, no control
+            characters).
+        category:
+          type: string
+          nullable: true
+          minLength: 1
+          description: Existing category slug, validated against the `category` table.
+            null or omitted means every category (the frontend client sends
+            `null` when the user picks none).
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 5
+          description: "How many ranked results to return (1–20). Hard ceiling: 20."
+      required:
+        - query
+    IntentFilters:
+      type: object
+      properties:
+        exclude_with_vulnerabilities:
+          type: boolean
+          description: Drop skills with a reported vulnerability.
+      required:
+        - exclude_with_vulnerabilities
+    Intent:
+      type: object
+      properties:
+        category:
+          type: string
+          nullable: true
+          description: Category slug, when the request names one.
+        keywords:
+          description: Keywords extracted from the natural-language query.
+          type: array
+          items:
+            type: string
+        filters:
+          $ref: "#/components/schemas/IntentFilters"
+        language:
+          type: string
+          description: Language the query was written in.
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Confidence of the extraction.
+      required:
+        - category
+        - keywords
+        - filters
+        - language
+        - confidence
+    TokenUsage:
+      type: object
+      properties:
+        prompt:
+          type: integer
+          minimum: 0
+          description: Prompt tokens billed for the call.
+        completion:
+          type: integer
+          minimum: 0
+          description: Completion tokens billed for the call.
+      required:
+        - prompt
+        - completion
+    LlmInfo:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - cached
+            - repaired
+            - invalid_ids
+            - low_confidence
+            - unavailable
+            - disabled
+          description: How the LLM step ended. `disabled` is the LLM_ENABLED=false mode.
+        model:
+          type: string
+          nullable: true
+          description: Model that answered; null without a call.
+        cached:
+          type: boolean
+          description: True when the answer came from the search cache.
+        tokens:
+          nullable: true
+          description: null when no provider call happened.
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/TokenUsage"
+      required:
+        - status
+        - model
+        - cached
+        - tokens
+    SearchData:
+      type: object
+      properties:
+        degraded:
+          type: boolean
+          description: True when the answer fell back to a degraded path.
+        degraded_reason:
+          type: string
+          enum:
+            - source_stale
+            - llm_unavailable
+          nullable: true
+          description: Why the answer is degraded; null when `degraded` is false.
+        source:
+          type: string
+          example: cache
+          description: Where the candidate set came from. §5.3 documents only `cache`;
+            other values are not contracted yet.
+        catalog_snapshot:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC of the catalog snapshot.
+        age_seconds:
+          type: integer
+          minimum: 0
+          description: Age of the snapshot in seconds.
+      required:
+        - degraded
+        - degraded_reason
+        - source
+        - catalog_snapshot
+        - age_seconds
+    ScoreBreakdown:
+      type: object
+      properties:
+        stars:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Normalised stars factor.
+        vulnerabilities:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Normalised vulnerability factor (1 = no reported vulnerability).
+        installs:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Normalised installs factor.
+        missing_fields:
+          type: integer
+          minimum: 0
+          description: How many inputs were missing.
+        penalty_factor:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Multiplier applied for the gaps.
+      required:
+        - stars
+        - vulnerabilities
+        - installs
+        - missing_fields
+        - penalty_factor
+    EvidenceCompleteness:
+      type: object
+      properties:
+        missing_fields:
+          type: integer
+          minimum: 0
+          description: Fields absent from the catalog row.
+        penalty_factor:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Confidence multiplier for the gaps.
+      required:
+        - missing_fields
+        - penalty_factor
+    SkillSummary:
+      type: object
+      properties:
+        skill_id:
+          type: string
+          example: sk_01JCV8Y6Q4
+        name:
+          type: string
+          example: python-security-review
+        source_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Absolute https URL from the catalog. Reject any other scheme.
+        category:
+          type: string
+          nullable: true
+          example: backend
+          description: Category slug. null until ingestion classifies the skill (the
+            column has no NOT NULL).
+        stars:
+          type: integer
+          nullable: true
+          description: null when the source omits it.
+        installs:
+          type: integer
+          nullable: true
+          description: null when the source omits it.
+        vulnerability_count:
+          type: integer
+          nullable: true
+          description: null when the vulnerability scan has not run for this skill.
+        security_status:
+          type: string
+          enum: &a5
+            - ok
+            - warn
+            - fail
+            - unknown
+          example: ok
+          description: Security verdict of the last scan; the only values the catalog
+            column accepts.
+        skill_md_present:
+          type: boolean
+          description: Whether the catalog stored a `SKILL.md` for it.
+      required:
+        - skill_id
+        - name
+        - source_url
+        - category
+        - stars
+        - installs
+        - vulnerability_count
+        - security_status
+        - skill_md_present
+    ResultItem:
+      type: object
+      properties:
+        rank:
+          type: integer
+          minimum: 1
+          description: 1-based position in the ranked list.
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Final score; ordering key.
+        score_breakdown:
+          $ref: "#/components/schemas/ScoreBreakdown"
+        evidence_completeness:
+          $ref: "#/components/schemas/EvidenceCompleteness"
+        skill:
+          description: Always rebuilt from the database; never taken from the LLM output.
+          allOf:
+            - $ref: "#/components/schemas/SkillSummary"
+        explanation:
+          type: string
+          maxLength: 1200
+          description: Plain text from an untrusted source. Render escaped; never as HTML
+            or markdown.
+        flags:
+          description: Validation flags for this item (e.g. `explanation_repaired`); empty
+            when clean.
+          type: array
+          items:
+            type: string
+        caveats:
+          type: string
+          nullable: true
+          maxLength: 160
+          description: Free-text caveat about missing evidence; null when there is nothing
+            to call out. Plain text from an untrusted source. Render escaped;
+            never as HTML or markdown.
+      required:
+        - rank
+        - score
+        - score_breakdown
+        - evidence_completeness
+        - skill
+        - explanation
+        - flags
+        - caveats
+    Recommendation:
+      type: object
+      properties:
+        skill_id:
+          type: string
+          description: skill_id the text argues for; must be in `results`.
+        text:
+          type: string
+          description: Plain text from an untrusted source. Render escaped; never as HTML
+            or markdown.
+      required:
+        - skill_id
+        - text
+    SearchResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          example: req_01JCV8Y6Q4
+        search_id:
+          type: string
+          description: Stored search id; every stored search response carries one (§5.3).
+        intent:
+          $ref: "#/components/schemas/Intent"
+        llm:
+          $ref: "#/components/schemas/LlmInfo"
+        data:
+          $ref: "#/components/schemas/SearchData"
+        results:
+          description: Ranked results; at most `limit` (≤ 20).
+          type: array
+          items:
+            $ref: "#/components/schemas/ResultItem"
+        recommendation:
+          nullable: true
+          description: null when there is nothing worth recommending.
+          type: object
+          allOf:
+            - $ref: "#/components/schemas/Recommendation"
+        warnings:
+          type: array
+          items:
+            type: string
+            description: Plain text from an untrusted source. Render escaped; never as HTML
+              or markdown.
+          description: Non-fatal problems the user should see (e.g. degraded source).
+      required:
+        - request_id
+        - search_id
+        - intent
+        - llm
+        - data
+        - results
+        - recommendation
+        - warnings
+    CategoryItem:
+      type: object
+      properties:
+        slug:
+          type: string
+          example: backend
+        label_en:
+          type: string
+          example: Backend
+        skill_count:
+          type: integer
+          minimum: 0
+          description: Skills currently in this category.
+      required:
+        - slug
+        - label_en
+        - skill_count
+    CategoryListResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          description: Request id echo (`X-Request-Id`).
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/CategoryItem"
+        data_snapshot:
+          type: string
+          format: date-time
+          description: Catalog snapshot the list came from.
+      required:
+        - request_id
+        - data
+        - data_snapshot
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          description: 1-based page.
+        page_size:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Items per page.
+        total_items:
+          type: integer
+          minimum: 0
+          description: Total items matching the filters.
+        total_pages:
+          type: integer
+          minimum: 0
+          description: Total pages for this page size.
+      required:
+        - page
+        - page_size
+        - total_items
+        - total_pages
+    SkillListResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          description: Request id echo (`X-Request-Id`).
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillSummary"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required:
+        - request_id
+        - data
+        - pagination
+    SkillDetail:
+      type: object
+      properties:
+        skill_id:
+          type: string
+          example: sk_01JCV8Y6Q4
+        name:
+          type: string
+          example: python-security-review
+        source_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Absolute https URL from the catalog. Reject any other scheme.
+        category:
+          type: string
+          nullable: true
+          example: backend
+          description: Category slug. null until ingestion classifies the skill (the
+            column has no NOT NULL).
+        stars:
+          type: integer
+          nullable: true
+          description: null when the source omits it.
+        installs:
+          type: integer
+          nullable: true
+          description: null when the source omits it.
+        vulnerability_count:
+          type: integer
+          nullable: true
+          description: null when the vulnerability scan has not run for this skill.
+        security_status:
+          type: string
+          enum: *a5
+          example: ok
+          description: Security verdict of the last scan; the only values the catalog
+            column accepts.
+        skill_md_present:
+          type: boolean
+          description: Whether the catalog stored a `SKILL.md` for it.
+        summary:
+          type: string
+          nullable: true
+          maxLength: 280
+          description: One-paragraph summary; null if absent. Plain text from an untrusted
+            source. Render escaped; never as HTML or markdown. Ingestion
+            truncates to 280 characters, so the client never receives more.
+        repo_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Absolute https URL from the catalog. Reject any other scheme.
+        skill_md_excerpt:
+          type: string
+          nullable: true
+          maxLength: 600
+          description: Excerpt of `SKILL.md` (≤ 600 characters, no raw markdown); null if
+            absent. Plain text from an untrusted source. Render escaped; never
+            as HTML or markdown.
+      required:
+        - skill_id
+        - name
+        - source_url
+        - category
+        - stars
+        - installs
+        - vulnerability_count
+        - security_status
+        - skill_md_present
+        - summary
+        - repo_url
+        - skill_md_excerpt
+    SkillDetailResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          description: Request id echo (`X-Request-Id`).
+        data:
+          $ref: "#/components/schemas/SkillDetail"
+      required:
+        - request_id
+        - data
+    IngestStartedResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          description: Request id echo (`X-Request-Id`).
+        run_id:
+          type: string
+          description: Id of the run that was accepted.
+        status:
+          type: string
+          enum:
+            - running
+            - ok
+            - partial
+            - failed
+          example: running
+          description: State of the new run.
+      required:
+        - request_id
+        - run_id
+        - status
+    IngestRun:
+      type: object
+      properties:
+        run_id:
+          type: string
+          description: Run identifier.
+        started_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC.
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: null while the run is still in progress.
+        status:
+          type: string
+          enum:
+            - running
+            - ok
+            - partial
+            - failed
+          example: running
+          description: Run state. `ok` ingested everything, `partial` kept some skills out
+            and `failed` wrote nothing.
+        skills_ingested:
+          type: integer
+          minimum: 0
+          description: Skills written by this run.
+      required:
+        - run_id
+        - started_at
+        - finished_at
+        - status
+        - skills_ingested
+    IngestRunsResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          description: Request id echo (`X-Request-Id`).
+        data:
+          description: Most recent runs first.
+          type: array
+          items:
+            $ref: "#/components/schemas/IngestRun"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required:
+        - request_id
+        - data
+        - pagination

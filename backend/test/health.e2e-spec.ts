@@ -11,8 +11,8 @@ import { PrismaService } from '@/prisma/prisma.service';
 class PrismaStub {
   reachable = true;
 
-  async ping(): Promise<boolean> {
-    return this.reachable;
+  ping(): Promise<boolean> {
+    return Promise.resolve(this.reachable);
   }
 }
 
@@ -65,6 +65,39 @@ describe('health, readiness and metrics (e2e)', () => {
     expect(response.headers['x-powered-by']).toBeUndefined();
   });
 
+  it('marks the two probes as non-cacheable', async () => {
+    const healthz = await request(app.getHttpServer()).get('/healthz').expect(200);
+    expect(healthz.headers['cache-control']).toBe('no-cache, no-store, must-revalidate');
+
+    prisma.reachable = true;
+    const readyz = await request(app.getHttpServer()).get('/readyz').expect(200);
+    expect(readyz.headers['cache-control']).toBe('no-cache, no-store, must-revalidate');
+  });
+
+  it('mounts none of the contract routes before F2.4 (D0)', async () => {
+    // O contrato v0 documenta rotas que o runtime ainda nao serve: se um
+    // controller de src/contract vazar para o AppModule, estes caminhos
+    // respondem 500 (o handler contractOnly lanca) em vez de 404.
+    const contractRoutes = [
+      ['post', '/api/v1/search'],
+      ['get', '/api/v1/searches/req_01JCV8Y6Q4'],
+      ['get', '/api/v1/categories'],
+      ['get', '/api/v1/skills'],
+      ['get', '/api/v1/skills/sk_01JCV8Y6Q4'],
+      ['post', '/api/v1/admin/ingest'],
+      ['get', '/api/v1/admin/ingest/runs'],
+    ] as const;
+
+    for (const [method, path] of contractRoutes) {
+      const response =
+        method === 'post'
+          ? await request(app.getHttpServer()).post(path).expect(404)
+          : await request(app.getHttpServer()).get(path).expect(404);
+
+      expect({ path, code: response.body.error.code }).toEqual({ path, code: 'NOT_FOUND' });
+    }
+  });
+
   it('keeps health endpoints outside the /api/v1 prefix', async () => {
     await request(app.getHttpServer()).get('/healthz').expect(200);
 
@@ -79,14 +112,14 @@ describe('health, readiness and metrics (e2e)', () => {
     expect(response.body.status).toBe('ok');
   });
 
-  it('GET /readyz answers 503 NOT_READY with the postgres dependency', async () => {
+  it('GET /readyz answers 503 NOT_READY with reason db_unavailable', async () => {
     prisma.reachable = false;
 
     const response = await request(app.getHttpServer()).get('/readyz').expect(503);
 
     expect(response.body.request_id).toMatch(/^req_/);
     expect(response.body.error.code).toBe('NOT_READY');
-    expect(response.body.error.details.dependency).toBe('postgres');
+    expect(response.body.error.details.reason).toBe('db_unavailable');
     expect(response.body.error.message).toBeTruthy();
     expect(response.body.error.stack).toBeUndefined();
     expect(response.body.error).not.toHaveProperty('statusCode');
