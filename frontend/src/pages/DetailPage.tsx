@@ -2,14 +2,14 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Link, useParams } from "react-router-dom";
 
-import { ApiError, getSkill } from "../api";
+import { ApiError, describeApiError, getSkill } from "../api";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import type { SkillDetail } from "../types";
 
 type LoadState =
   | { status: "loading" }
   | { status: "ready"; data: SkillDetail }
-  | { status: "error"; message: string; requestId: string | null };
+  | { status: "error"; message: string; code: string | null; requestId: string | null };
 
 function show(value: string | number | null): string {
   return value === null ? "n/a" : String(value);
@@ -30,9 +30,12 @@ export default function DetailPage() {
       })
       .catch((error: unknown) => {
         if (!cancelled) {
+          // `describeApiError` traduz por código: `TypeError`/`Failed to fetch` nunca viram interface.
+          const described = describeApiError(error);
           setState({
             status: "error",
-            message: error instanceof Error ? error.message : "could not load this skill",
+            message: described.message,
+            code: described.code,
             requestId: error instanceof ApiError ? error.requestId : null,
           });
         }
@@ -47,7 +50,7 @@ export default function DetailPage() {
   }
 
   if (state.status === "error") {
-    return <ErrorState message={state.message} requestId={state.requestId} />;
+    return <ErrorState message={state.message} code={state.code} requestId={state.requestId} />;
   }
 
   const skill = state.data;

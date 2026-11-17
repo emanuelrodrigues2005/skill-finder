@@ -45,7 +45,8 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   HISTORY_EXPIRED: "This search has expired. Start a new search.",
   RATE_LIMITED: "Too many requests.",
   LLM_BAD_RESPONSE: "The language model answer could not be used. Try again.",
-  SOURCE_UNAVAILABLE: "The skill catalog is unavailable right now. Try again later.",
+  // Texto fixado pelo AC3 de US-08 (`docs/app/01-spec-produto.md` §4).
+  SOURCE_UNAVAILABLE: "Data source unavailable — try again later.",
   NOT_READY: "The service is not ready yet. Try again in a moment.",
   INTERNAL: "Something went wrong on our side. Try again.",
   [TIMEOUT_CODE]: "The request took too long. Check your connection and try again.",
@@ -102,6 +103,42 @@ export class ApiError extends Error {
     this.details = init.details ?? {};
     this.serverMessage = init.serverMessage ?? "";
   }
+}
+
+/** O que a tela precisa para mostrar uma falha — a mensagem e o código que a decidiu. */
+export interface ApiErrorDescription {
+  message: string;
+  code: string | null;
+}
+
+/**
+ * O contrato congelado não tem `UNKNOWN_CATEGORY`: o backend devolve `VALIDATION_ERROR` com
+ * `details.reason = "UNKNOWN_CATEGORY"` e `details.fields = ["category"]`
+ * (`backend/src/search/search.service.ts`). Aqui o alias é reconstruído pelo `details`, para a
+ * tela decidir pelo **código** e não pelo texto do servidor.
+ */
+function isUnknownCategory(details: Record<string, unknown>): boolean {
+  if (details.reason === "UNKNOWN_CATEGORY") return true;
+  const fields: unknown[] = Array.isArray(details.fields) ? details.fields : [];
+  return fields.includes("category");
+}
+
+/**
+ * Traduz qualquer falha de chamada em `{ message, code }` para a interface.
+ *
+ * - `VALIDATION_ERROR` com categoria inválida vira `UNKNOWN_CATEGORY` (mensagem do alias);
+ * - outro `ApiError` usa a mensagem do mapa de código (nunca `serverMessage`);
+ * - qualquer outra coisa (rede caiu, `TypeError` do `fetch`, JSON inválido) cai na genérica com
+ *   `code: null` — a mensagem crua de um `TypeError` é detalhe de implementação, não interface.
+ */
+export function describeApiError(error: unknown): ApiErrorDescription {
+  if (!(error instanceof ApiError)) {
+    return { message: UNKNOWN_CODE_MESSAGE, code: null };
+  }
+  if (error.code === "VALIDATION_ERROR" && isUnknownCategory(error.details)) {
+    return { message: messageForCode("UNKNOWN_CATEGORY"), code: "UNKNOWN_CATEGORY" };
+  }
+  return { message: error.message, code: error.code };
 }
 
 /** Category slug sent to the API: `null`, `""` and whitespace all mean "every category". */
