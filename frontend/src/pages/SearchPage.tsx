@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { loadMockCategories } from "../api";
+import { getCategories } from "../api";
 import { ErrorState } from "../components/States";
 import { QUERY_MAX_LENGTH, QUERY_MIN_LENGTH, type Category } from "../types";
 
@@ -14,11 +14,10 @@ export default function SearchPage() {
 
   useEffect(() => {
     let cancelled = false;
-    // TODO(F2.6): trocar loadMockCategories() por getCategories().
-    loadMockCategories()
-      .then((data) => {
+    getCategories()
+      .then((response) => {
         if (!cancelled) {
-          setCategories(data);
+          setCategories(response.data);
         }
       })
       .catch((error: unknown) => {

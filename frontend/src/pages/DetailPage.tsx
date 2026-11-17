@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { Link, useParams } from "react-router-dom";
 
-import { ApiError, loadMockSkill } from "../api";
+import { ApiError, getSkill } from "../api";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import type { SkillDetail } from "../types";
 
@@ -22,11 +22,10 @@ export default function DetailPage() {
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    // TODO(F2.6): trocar loadMockSkill() por getSkill(skill_id).
-    loadMockSkill(id ?? "")
-      .then((data) => {
+    getSkill(id ?? "")
+      .then((response) => {
         if (!cancelled) {
-          setState({ status: "ready", data });
+          setState({ status: "ready", data: response.data });
         }
       })
       .catch((error: unknown) => {

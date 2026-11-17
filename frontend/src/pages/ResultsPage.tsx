@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
-import { ApiError, loadMockSearch } from "../api";
+import { ApiError, searchSkills } from "../api";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
-import type { ResultItem, SearchResponse } from "../types";
+import { QUERY_MIN_LENGTH, type ResultItem, type SearchResponse } from "../types";
 
 type LoadState =
+  | { status: "idle" }
   | { status: "loading" }
   | { status: "ready"; data: SearchResponse }
   | { status: "error"; message: string; requestId: string | null };
@@ -33,13 +34,21 @@ function Meta({ item }: { item: ResultItem }) {
 export default function ResultsPage() {
   const location = useLocation();
   const typed = (location.state ?? {}) as LocationState;
+  const query = (typed.query ?? "").trim();
+  const category = typed.category ?? null;
   const [state, setState] = useState<LoadState>({ status: "loading" });
 
   useEffect(() => {
     let cancelled = false;
+    if (query.length < QUERY_MIN_LENGTH) {
+      // No usable query in the route state (e.g. a direct visit to /results).
+      setState({ status: "idle" });
+      return () => {
+        cancelled = true;
+      };
+    }
     setState({ status: "loading" });
-    // TODO(F2.6): trocar loadMockSearch() por searchSkills(query, category).
-    loadMockSearch()
+    searchSkills(query, category)
       .then((data) => {
         if (!cancelled) {
           setState({ status: "ready", data });
@@ -57,7 +66,11 @@ export default function ResultsPage() {
     return () => {
       cancelled = true;
     };
-  }, [typed.query, typed.category]);
+  }, [query, category]);
+
+  if (state.status === "idle") {
+    return <EmptyState message="no search yet — describe the skill you need on the search page" />;
+  }
 
   if (state.status === "loading") {
     return <LoadingState label="Searching…" />;
