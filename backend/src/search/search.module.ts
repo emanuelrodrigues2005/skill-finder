@@ -26,6 +26,7 @@ import { CategoriesController } from './categories.controller';
 import { PrismaSearchCatalogRepository } from './prisma-search-catalog.repository';
 import { PrismaSearchStoreRepository } from './prisma-search-store.repository';
 import { SearchController } from './search.controller';
+import { SearchThrottlerGuard } from './search-throttler.guard';
 import { SEARCH_CATALOG, SEARCH_STORE } from './search.tokens';
 import type { SearchCatalog } from './search-catalog.port';
 import type { SearchStore } from './search-store.port';
@@ -54,6 +55,11 @@ export class SearchModule {
       ],
       providers: [
         SearchService,
+        // O guard precisa ser provider do módulo para o `onModuleInit` do
+        // `ThrottlerGuard` rodar: é ele que monta a lista de throttlers e amarra
+        // `getTracker`/`generateKey`. O `ThrottlerModule` é `@Global()`, então
+        // as opções chegam aqui sem import extra (D1: guard na rota, não global).
+        SearchThrottlerGuard,
         {
           provide: SEARCH_CATALOG,
           inject: [PrismaService],

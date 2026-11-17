@@ -35,10 +35,11 @@ const DAY_MS = 24 * 60 * 60_000;
       imports: [AppConfigModule],
       inject: [AppConfigService],
       useFactory: (config: AppConfigService) => ({
-        // Dois throttlers nomeados de §8.4 (10/min e 60/dia). O guard entra na
-        // #13: hoje a rota **não tem** limite nenhum — esta configuração sozinha
-        // não limita nada, e um comentário que prometesse o contrário seria pior
-        // que a config ausente.
+        // Dois throttlers nomeados de §8.4 (10/min e 60/dia). O guard que os
+        // aplica é o `SearchThrottlerGuard`, montado na rota `POST /search`
+        // (#13) — **não** `APP_GUARD`: limitar `/healthz`, `/readyz` e
+        // `/metrics` faria o probe falhar e o container reiniciar em loop (D1).
+        // Um endpoint novo só entra no limite se declarar o `@UseGuards`.
         throttlers: [
           {
             name: 'search-minute',

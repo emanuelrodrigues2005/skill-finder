@@ -1,0 +1,10 @@
+{
+  "category": "backend",
+  "keywords": ["pull request", "security"],
+  "filters": { "exclude_with_vulnerabilities": false },
+  "language": "en",
+  "confidence": 0.72,
+  "score": 0.99,
+  "weight": 1,
+  "rank_first": "sk_00000000000000000000"
+}

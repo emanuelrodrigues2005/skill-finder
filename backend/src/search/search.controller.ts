@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 
@@ -10,7 +10,9 @@ import type { RequestWithRequestId } from '../common/request-id.middleware';
 import { DEFAULT_SEARCH_LIMIT } from './constants';
 import { queryValue } from './query-params';
 import { stampSearchRequestId } from './request-id';
+import { resolveClientIp } from './client-hash';
 import { SearchService } from './search.service';
+import { SearchThrottlerGuard } from './search-throttler.guard';
 
 /**
  * `POST /api/v1/search` (§5.2–§5.3).
@@ -29,6 +31,11 @@ export class SearchController {
   constructor(private readonly searchService: SearchService) {}
 
   @Post()
+  // D1 (#13): o rate limit vive **nesta rota**, não em `APP_GUARD` — um guard
+  // global contaria `/healthz`, `/readyz` e `/metrics`, e um probe limitado
+  // reinicia o container em loop. O guard roda antes do handler: busca barrada
+  // não persiste no histórico.
+  @UseGuards(SearchThrottlerGuard)
   // `POST` responde 200 no contrato (§5.1), não o 201 que o Nest dá por padrão:
   // a busca não cria um recurso endereçável pela URI chamada.
   @HttpCode(HttpStatus.OK)
@@ -61,7 +68,7 @@ export class SearchController {
       category: body.category ?? null,
       limit: body.limit ?? DEFAULT_SEARCH_LIMIT,
       strictLlm: queryValue(request.query, 'strict_llm') === 'true',
-      clientIp: request.ip ?? '',
+      clientIp: resolveClientIp(request),
       // O header entra só como rastro: a chave do histórico é cunhada adiante.
       requestId: request.requestId ?? '',
     });

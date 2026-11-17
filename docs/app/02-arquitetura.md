@@ -523,7 +523,7 @@ Barreiras, em ordem de execução:
 
 | Escopo | Limite default | Implementação | Resposta |
 | --- | --- | --- | --- |
-| Por cliente (`sha256(ip + salt)`) | 10 buscas/min e 60/dia | Token bucket em memória, janela deslizante | `429 RATE_LIMITED` + `Retry-After` |
+| Por cliente (`sha256(salt:ip)`) | 10 buscas/min e 60/dia | Contador de hits por janela (`@nestjs/throttler`), em memória | `429 RATE_LIMITED` + `Retry-After` |
 | Global de chamadas à LLM | 500/dia (`LLM_DAILY_CALL_BUDGET`) | Contador no processo + `llm_cache` | Degrada para template, `llm.status="unavailable"` |
 | Chamadas ao skills.sh | 1 req/s, 4 ciclos/dia, só no ingestor | `SKILL_SOURCE_RPS` + agendador | `ingest_run` `partial`, sem impacto no usuário |
 | `POST /admin/ingest` | 1 por 5 min | Lock em `ingest_run` | `409` |

@@ -15,8 +15,6 @@
  *   `data.degraded` e `warnings`, nunca a resposta em silêncio;
  * - o `request_id` da resposta é cunhado aqui (C4), não vem do header.
  */
-import { createHash } from 'node:crypto';
-
 import { HttpStatus, Inject, Injectable, Optional } from '@nestjs/common';
 
 import { ERROR_CODES } from '../common/errors/error-codes';
@@ -32,6 +30,7 @@ import type { IntentParser, IntentParserResult } from '../llm/intent-parser';
 import { rank } from '../ranking';
 import type { RankingWeights } from '../ranking';
 
+import { clientHash, sha256Hex } from './client-hash';
 import {
   CANDIDATE_POOL_SIZE,
   SEARCH_HISTORY_RETENTION_MS,
@@ -151,7 +150,7 @@ export class SearchService {
     const record: StoredSearchInput = {
       request_id: mintSearchRequestId(),
       created_at: now,
-      client_hash: this.clientHash(input.clientIp),
+      client_hash: clientHash(input.clientIp, this.config.env.ipHashSalt),
       query_hash: sha256Hex(input.query),
       // §8.5: sem `SEARCH_LOG_STORE_TEXT` o histórico guarda só o hash.
       query_text: this.config.env.searchLogStoreText ? input.query : null,
@@ -405,15 +404,6 @@ export class SearchService {
       installs: this.config.env.rankWInstalls,
     };
   }
-
-  /** §8.5: o histórico guarda o hash com sal, nunca o IP. */
-  private clientHash(clientIp: string): string {
-    return sha256Hex(`${this.config.env.ipHashSalt ?? ''}:${clientIp}`);
-  }
-}
-
-function sha256Hex(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 /** Milissegundos inteiros desde `startedAt` (`latency_ms`). */

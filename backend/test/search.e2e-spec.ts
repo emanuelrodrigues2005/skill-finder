@@ -304,6 +304,23 @@ describe('search endpoints (e2e)', () => {
     expect(known.body.data.degraded_reason).toBe('llm_unavailable');
   });
 
+  it('rejects a query of 501 characters as 422 without echoing it (issue #13)', async () => {
+    const tooLong = 'a'.repeat(501);
+
+    const rejected = await postSearch({ query: tooLong }).expect(422);
+    expect(rejected.body.error.code).toBe('VALIDATION_ERROR');
+    expect(rejected.body.error.details.fields).toContain('query');
+    // Sem amplificação: o texto rejeitado não volta dentro do envelope.
+    expect(JSON.stringify(rejected.body)).not.toContain(tooLong);
+    expect(store.saved).toHaveLength(0);
+
+    // Contrapositivo: exatamente 500 cabe no `@MaxLength(500)` e é buscado.
+    const atLimit = await postSearch({ query: 'a'.repeat(500) }).expect(200);
+    expect(atLimit.body.request_id).toMatch(/^req_/);
+    expect(atLimit.body.results).toHaveLength(3);
+    expect(store.saved).toHaveLength(1);
+  });
+
   it('POST /api/v1/search ranks, explains and stamps the catalog snapshot', async () => {
     const response = await postSearch({ query: OK_QUERY, limit: 5 }).expect(200);
     const body = response.body as SearchResponse;
