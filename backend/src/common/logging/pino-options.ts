@@ -37,6 +37,12 @@ export const REDACT_PATHS: string[] = [
   '*.api_key',
   '*.token',
   '*.authorization',
+  // O erro do axios carrega a requisição inteira, header `authorization`
+  // incluído: `*.authorization` não alcança `config.headers.authorization`
+  // (três níveis), então os caminhos explícitos abaixo são obrigatórios.
+  'err.config.headers.authorization',
+  '*.config.headers.authorization',
+  '*.headers.authorization',
   '*.llmApiKey',
   '*.databaseUrl',
   '*.ipHashSalt',

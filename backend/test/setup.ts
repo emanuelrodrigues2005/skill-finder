@@ -20,10 +20,22 @@ for (const [key, value] of Object.entries(TEST_ENV)) {
 
 // Nenhum teste fala com a rede. O loopback fica liberado porque o Supertest sobe a
 // aplicação em uma porta local efêmera — não é tráfego externo.
+//
+// A comparação é de hostname exato, nunca `includes`: `localhost.exemplo.invalido`
+// contém "localhost" e abriria socket real, mentindo sobre a regra 5.
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+function isLoopbackHost(host: string): boolean {
+  const candidate = host.includes('://') ? host : `http://${host}`;
+  try {
+    return LOOPBACK_HOSTNAMES.has(new URL(candidate).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 nock.disableNetConnect();
-nock.enableNetConnect(
-  (host: string) => host.includes('127.0.0.1') || host.includes('localhost'),
-);
+nock.enableNetConnect(isLoopbackHost);
 
 afterAll(() => {
   nock.cleanAll();
