@@ -1,6 +1,6 @@
 # CI do Skill Finder — issue #16 (F4).
 #
-# O que este arquivo é: o portão único de qualidade do monorepo. Todo PR, de
+# O que este arquivo é: o portão único de qualidade do monorepo. Todo PR e todo
 # qualquer origem para qualquer destino, passa por aqui — não há filtro de
 # branch no `pull_request` de propósito (um PR de fork para `main` e um PR entre
 # branches de trabalho têm de rodar o mesmo conjunto de checagens).
@@ -40,8 +40,12 @@ name: CI
 on:
   # Sem filtro de `branches`: qualquer origem, qualquer destino.
   pull_request:
+  # `main` é a entrega e `dev` é a integração: as duas merecem o gate no push
+  # direto, não só no PR que as alimenta. Um merge em `dev` pode juntar duas
+  # branches que passaram separadas e falhar juntas — foi o que o merge da F2
+  # não teria pego, porque o push em `dev` não disparava nada.
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 # Menor privilégio: o CI só precisa ler o repositório. Nenhum job escreve na

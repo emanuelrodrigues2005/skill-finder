@@ -18,7 +18,7 @@ for (const [name, job] of Object.entries(doc.jobs)) {
   if (name.startsWith('-')) problems.push(`${name}: id invalido`);
 }
 if (doc.on?.pull_request !== null) problems.push('pull_request tem filtro (deveria ser null)');
-if (JSON.stringify(doc.on?.push?.branches) !== '["main"]') problems.push('push.branches != [main]');
+if (JSON.stringify(doc.on?.push?.branches) !== '["main","dev"]') problems.push('push.branches != [main, dev]');
 if (doc.permissions?.contents !== 'read') problems.push('permissions.contents != read');
 if (doc.permissions?.['pull-requests'] !== 'read') problems.push('permissions.pull-requests != read');
 if (!doc.concurrency?.['cancel-in-progress']) problems.push('sem cancel-in-progress');
