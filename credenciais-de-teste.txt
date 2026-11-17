@@ -1,5 +1,8 @@
 # ARQUIVO DE TESTE — prova de que o job `secrets` reprova o PR.
-# A chave abaixo é a de exemplo publicada na documentação da AWS, não uma
-# credencial real. Este arquivo e a branch inteira são apagados depois do run.
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+# Bloco de chave privada FALSO (corpo aleatorio, nao abre nada). O gitleaks tem
+# regra propria para `BEGIN ... PRIVATE KEY`, e a regra do access key da AWS
+# ignora valores de exemplo — foi por isso que a primeira tentativa passou verde.
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEAx7Vn0pQ2mKq8sT4bY6cJ9fL3hN1rW5dE0gA2uZ7iO4kP8sX6v
+B3nM9qR2tY5wC7bF1jH4lK0pS8dG6hA3zX9vN2mQ7rT5yU1iO8pL4kJ6hG9fD2sA
+-----END RSA PRIVATE KEY-----
