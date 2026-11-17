@@ -61,6 +61,8 @@ junit*.xml
 
 # ---------- Node / frontend ----------
 node_modules/
+# artefatos do Jest: relatório JUnit e relatório de cobertura (`make test-coverage`)
+backend/coverage/
 dist/
 build/
 .vite/
