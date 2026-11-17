@@ -30,6 +30,7 @@ import { OpenAICompatParser } from '@/llm/openai-compat';
 import type { OpenAiCompatOptions } from '@/llm/openai-compat';
 
 const ORIGIN = 'https://llm.test';
+const REDIRECT_ORIGIN = 'https://redirected.test';
 const CHAT_PATH = '/v1/chat/completions';
 const MODEL = 'deepseek-v4.1-flash';
 const API_KEY = 'sk-test-not-a-real-key';
@@ -112,6 +113,65 @@ describe('openai-compatible client (docs/app/02-arquitetura.md 6.3 e 8.3)', () =
     await expect(axios.get('https://not-intercepted.example/v1/models')).rejects.toThrow(
       /Nock: Disallowed net connect/,
     );
+  });
+
+  /**
+   * F5 do setup de teste: o filtro de `enableNetConnect` compara **hostname
+   * exato**, nunca `includes`. Um host que apenas contem "localhost" nao e
+   * loopback: se passasse, o teste abriria socket real e mentiria sobre a regra 5.
+   * O controle garante que o loopback continua liberado (Supertest depende disso).
+   */
+  it('denies a hostname that merely contains "localhost" and keeps loopback open', async () => {
+    await expect(
+      axios.get('http://localhost.exemplo.invalido/v1/models', { proxy: false, timeout: 2_000 }),
+    ).rejects.toThrow(/Nock: Disallowed net connect/);
+
+    // Loopback: nock deixa passar (o erro, se houver, e de conexao do sistema).
+    const loopback = await axios
+      .get('http://127.0.0.1:45999/v1/models', { proxy: false, timeout: 2_000 })
+      .then(() => 'connected')
+      .catch((error: Error) => error.message);
+    expect(loopback).not.toMatch(/Nock: Disallowed net connect/);
+  });
+
+  /**
+   * Teto de corpo (`maxContentLength`): resposta gigante nao e bufferizada, o
+   * passo degrada.
+   *
+   * O corpo gigante e JSON **valido** (intencao boa + campo extra de 256 KiB, que
+   * o schema descarta): sem tese, `unavailable` nao provaria nada, porque um corpo
+   * lixo tambem degradaria por violacao de schema. Com o teto, o axios aborta
+   * antes de ler; o retry de rede roda uma vez porque esse erro nao traz
+   * `response` — por isso dois interceptores.
+   */
+  it('refuses a body above the content cap instead of buffering it', async () => {
+    const padding = 'x'.repeat(256 * 1024);
+    const huge = JSON.stringify({ ...JSON.parse(VALID_CONTENT), padding });
+    const scope = nock(ORIGIN).post(CHAT_PATH).twice().reply(200, completion(huge));
+
+    const result = await parser().parse(QUERY, CATEGORIES);
+
+    expect(scope.isDone()).toBe(true);
+    // Sem teto, este corpo parsearia como `ok`: a assercao distingue o teto de
+    // qualquer outra falha.
+    expect(result.status).toBe('unavailable');
+  });
+
+  /**
+   * `maxRedirects: 0`: um 3xx nao e seguido, porque o redirect levaria o header
+   * `authorization` para outra origem. O interceptor da origem de destino existe
+   * justamente para provar que ele nunca e usado.
+   */
+  it('never follows a redirect to another origin', async () => {
+    nock(ORIGIN)
+      .post(CHAT_PATH)
+      .reply(302, '', { location: `${REDIRECT_ORIGIN}/v1/chat/completions` });
+    const followed = nock(REDIRECT_ORIGIN).post(CHAT_PATH).reply(200, completion(VALID_CONTENT));
+
+    const result = await parser().parse(QUERY, CATEGORIES);
+
+    expect(followed.isDone()).toBe(false);
+    expect(result.status).toBe('unavailable');
   });
 
   it('returns unavailable on non-JSON body', async () => {

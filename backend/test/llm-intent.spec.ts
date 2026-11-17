@@ -20,7 +20,13 @@
  * A `Intent` nunca carrega `score` nem pesos de ranking: o ranking e deterministico (regra 1).
  */
 import type { Intent, LlmStatus } from '@/contract/dto/search-response.dto';
-import { MAX_KEYWORDS, MIN_CONFIDENCE, parseIntentPayload } from '@/llm/intent-schema';
+import {
+  IntentPayloadError,
+  MAX_FIELD_CHARS,
+  MAX_KEYWORDS,
+  MIN_CONFIDENCE,
+  parseIntentPayload,
+} from '@/llm/intent-schema';
 
 const CONTEXT = {
   query: 'review python pull requests for security issues',
@@ -40,6 +46,23 @@ const VALID = {
 function parse(payload: unknown): { intent: Intent; status: LlmStatus } {
   const raw = typeof payload === 'string' ? payload : JSON.stringify(payload);
   return parseIntentPayload(raw, CONTEXT);
+}
+
+/**
+ * `parseIntentPayload` nao devolve `unavailable`: ele **lanca**. Quem traduz o
+ * erro em `unavailable` e o cliente (`openai-compat.ts`), coberto no spec dele;
+ * aqui interessa que o corpo fora do schema seja recusado, com o status que a
+ * porta publica carrega.
+ */
+function payloadError(run: () => unknown): IntentPayloadError {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(IntentPayloadError);
+  return thrown as IntentPayloadError;
 }
 
 describe('intent schema (docs/app/02-arquitetura.md 6.3)', () => {
@@ -130,5 +153,50 @@ describe('intent schema (docs/app/02-arquitetura.md 6.3)', () => {
     expect(status).toBe('ok');
     expect(intent.category).toBe('security');
     expect(intent.keywords).toEqual(VALID.keywords);
+  });
+
+  /**
+   * F3: teto de `MAX_FIELD_CHARS` por campo. No limite o valor passa intacto; um
+   * caractere acima o corpo sai do schema e derruba o passo. Sem teste, um teto
+   * removido numa refatoração vira canal de texto livre vindo do modelo.
+   */
+  it('keeps a keyword at the field cap and rejects one character above it', () => {
+    const atCap = 'k'.repeat(MAX_FIELD_CHARS);
+    const accepted = parse({ ...VALID, keywords: [atCap] });
+
+    expect(accepted.status).toBe('ok');
+    expect(accepted.intent.keywords).toEqual([atCap]);
+
+    expect(payloadError(() => parse({ ...VALID, keywords: [`${atCap}k`] })).status).toBe(
+      'unavailable',
+    );
+  });
+
+  it('rejects a language field above the field cap', () => {
+    const tooLong = 'l'.repeat(MAX_FIELD_CHARS + 1);
+
+    expect(payloadError(() => parse({ ...VALID, language: tooLong })).status).toBe('unavailable');
+  });
+
+  /**
+   * F3: `language` e `en | pt | other` (§6.3) — caixa e espaços não importam, mas
+   * nome de linguagem de programação não entra como texto livre na `Intent`
+   * (regra 3: dado inválido não vira palpite).
+   */
+  it('coerces language to en | pt | other', () => {
+    const pt = parse({ ...VALID, language: 'pt' });
+    expect(pt.intent.language).toBe('pt');
+    expect(pt.status).toBe('ok');
+
+    const upper = parse({ ...VALID, language: ' EN ' });
+    expect(upper.intent.language).toBe('en');
+    expect(upper.status).toBe('ok');
+
+    const unknown = parse({ ...VALID, language: 'javascript' });
+    expect(unknown.intent.language).toBe('other');
+    expect(unknown.status).toBe('repaired');
+
+    // `pt-BR` e um codigo valido de verdade, mas o contrato e de duas letras.
+    expect(parse({ ...VALID, language: 'pt-BR' }).intent.language).toBe('other');
   });
 });

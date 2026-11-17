@@ -12,6 +12,7 @@ import { OpenAICompatParser } from '@/llm/openai-compat';
 
 const ORIGIN = 'https://llm.test';
 const CHAT_PATH = '/v1/chat/completions';
+const MODEL = 'deepseek-v4.1-flash';
 const QUERY = 'review python pull requests for security issues';
 const CATEGORIES = ['security', 'dev', 'data', 'testing'] as const;
 
@@ -45,7 +46,7 @@ function completion(content: string): Record<string, unknown> {
 function parser(): OpenAICompatParser {
   return new OpenAICompatParser({
     baseUrl: `${ORIGIN}/v1`,
-    model: 'deepseek-v4.1-flash',
+    model: MODEL,
     apiKey: 'sk-test-not-a-real-key',
     timeoutS: 8,
   });
@@ -105,6 +106,12 @@ describe('intent cache', () => {
     // Veio do cache mesmo (uma requisicao so)...
     expect(scope.isDone()).toBe(true);
     expect(second.intent).toEqual(first.intent);
+    // Contrato do hit ("null without a call"): nesta requisicao nao houve chamada
+    // ao provedor, entao nada e atribuido a ela — nem modelo, nem tokens.
+    expect(first.model).toBe(MODEL);
+    expect(first.tokens).toEqual({ prompt: 120, completion: 45 });
+    expect(second.model).toBeNull();
+    expect(second.tokens).toBeNull();
     // ...e a degradacao sobreviveu ao hit.
     expect(second.status).toBe('low_confidence');
     expect(second.status).not.toBe('cached');

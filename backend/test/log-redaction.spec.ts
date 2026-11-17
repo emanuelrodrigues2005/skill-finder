@@ -24,6 +24,24 @@ function captureLogger(): { logger: pino.Logger; output: () => string } {
   return { logger, output: () => chunks.join('') };
 }
 
+/**
+ * Erro com a forma de um `AxiosError`: o axios anexa ao erro a configuração
+ * inteira da requisição, e é por `config.headers.authorization` que a chave
+ * vazaria para o log (§8.5).
+ */
+function axiosError(secret: string): Error {
+  return Object.assign(new Error('request failed with status code 401'), {
+    name: 'AxiosError',
+    code: 'ERR_BAD_REQUEST',
+    isAxiosError: true,
+    config: {
+      method: 'post',
+      url: 'https://llm.test/v1/chat/completions',
+      headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+    },
+  });
+}
+
 describe('log redaction (§8.5)', () => {
   it('builds a logger with every declared path (fast-redact rejects invalid paths)', () => {
     expect(REDACT_PATHS.length).toBeGreaterThan(0);
@@ -105,5 +123,55 @@ describe('log redaction (§8.5)', () => {
     );
 
     expect(output()).not.toContain('203.0.113.9');
+  });
+
+  /**
+   * F4: o erro do axios carrega a requisição inteira em `config`, header
+   * `authorization` incluído. `REDACT_PATHS` declara três aninhamentos possíveis
+   * (`err.config.…`, `*.config.…`, `*.headers.…`); este caso exercita os três no
+   * logger real, porque um path declarado e inerte é indistinguível de um path
+   * que protege.
+   */
+  it('redacts the axios error authorization header at every depth', () => {
+    const secret = 'sk-axios-must-not-leak';
+    const message = 'intent call failed: upstream 401';
+    const payloads: Array<{ name: string; payload: Record<string, unknown> }> = [
+      { name: 'err.config.headers.authorization', payload: { err: axiosError(secret) } },
+      {
+        name: '*.config.headers.authorization',
+        payload: { failure: { config: { headers: { authorization: `Bearer ${secret}` } } } },
+      },
+      {
+        name: '*.headers.authorization',
+        payload: { upstream: { headers: { authorization: `Bearer ${secret}` } } },
+      },
+    ];
+
+    const leaks: string[] = [];
+    const noCensor: string[] = [];
+    const noControl: string[] = [];
+
+    for (const { name, payload } of payloads) {
+      const { logger, output } = captureLogger();
+      logger.error(payload, message);
+      const line = output();
+
+      if (line.includes(secret)) {
+        leaks.push(name);
+      }
+      // A censura precisa aparecer: prova que o caminho existe e censurou, e não
+      // que o pino descartou o payload inteiro (o que também esconderia o segredo).
+      if (!line.includes(REDACTED)) {
+        noCensor.push(name);
+      }
+      // Controle negativo: o que não é segredo sobrevive ao mesmo payload.
+      if (!line.includes(message)) {
+        noControl.push(name);
+      }
+    }
+
+    expect(leaks).toEqual([]);
+    expect(noCensor).toEqual([]);
+    expect(noControl).toEqual([]);
   });
 });
