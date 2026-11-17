@@ -225,9 +225,11 @@ flowchart LR
 **Tarefas.**
 1. Definir `rank(candidates: SkillRecord[], intent: Intent): Scored[]` como função **pura** em `backend/src/ranking/score.ts` (sem I/O, sem relógio global, sem `Math.random`).
 2. Implementar a fórmula ponderada **exatamente como `docs/app/01-spec-produto.md` §5.3–§5.4**: normalização logarítmica com âncoras fixas (20 000 estrelas, 5 vulnerabilidades, 200 000 instalações), `P = 1 − min(1, vulns/5)`, fator neutro `0,5` e penalidade de `10%` por campo ausente. **Os pesos vêm da configuração** (`RANK_W_STARS`, `RANK_W_VULNS`, `RANK_W_INSTALLS`), nunca da `Intent` — a LLM não influencia a ordenação. Declare-os em um único `WEIGHTS` revisável.
-3. Definir desempate **total e estável**: score → estrelas → `skill_id` (nunca por ordem de chegada da API).
-4. Tratar dado ausente explicitamente: campo `null` **não** pontua nem penaliza; item com < 2 campos vira `evidence_completeness: "low"`.
-5. Escrever o *golden test* `backend/test/ranking.spec.ts`: entrada fixa → ordem exata esperada, mais casos de empate e de campo `null`.
+3. Definir desempate **total e estável**: `score` ↓ → `vulnerability_count ?? 2,5` ↑ → `installs ?? 0` ↓ → `stars ?? 0` ↓ → `skill_id` (ordinal, code unit — nunca `localeCompare`, que depende de ICU). Cinco chaves, não três: `skill_id` por último é o que fecha a ordem total e impede a ordem de chegada da API de vazar na resposta.
+4. Tratar dado ausente **como a spec §5.5 manda**: o fator recebe o neutro `0,5` **e** o item acumula `m += 1` (10% por campo ausente, teto 30%). Ausente **não** é "sem bônus nem penalidade": paga duas vezes, porque ausência de evidência não é evidência de qualidade (regra 3 do `AGENTS.md`). Em `evidence_completeness`, o contrato usa **objeto** `{ missing_fields, penalty_factor }`, não a string `"low"`.
+5. Escrever o *golden test* `backend/test/ranking.spec.ts`: entrada fixa → ordem exata esperada (tabela A/B/C da §5.7), mais casos de empate e de campo `null`.
+
+> **Nuance de arredondamento:** `score` usa `Math.round` (half-up) em 4 casas. `penalty_factor` vem de tabela literal `[1, 0.9, 0.8, 0.7]` — não por artefato de ponto flutuante (`1 − 0.1·m` dá exatamente esses valores em IEEE-754, medido), mas para **pinar o valor** de forma auditável contra a §5.5 e impedir que o cálculo do fator dependa de aritmética no caminho do score.
 
 **Critérios de aceitação.**
 
@@ -236,7 +238,7 @@ flowchart LR
 | 1 | Determinismo | `pnpm --dir backend exec jest test/unit -t ranking` verde; rodar duas vezes com `--randomize` → mesmo resultado |
 | 2 | Pureza | `grep -nE 'axios\|fetch\|Date\.now\|Math\.random' backend/src/ranking/` → vazio |
 | 3 | Cobertura do módulo | `pnpm --dir backend exec jest test/ranking --coverage` → limiar de 90% em `src/ranking` no `jest.config` |
-| 4 | Dado ausente não inventado | teste com `stars=null` → item não recebe bônus nem penalidade; `evidence_completeness=="low"` |
+| 4 | Dado ausente não inventado | teste com `stars=null` → fator `0,5`, `missing_fields=1`, `penalty_factor=0,9`; nunca `0` nem nota máxima |
 
 **Artefatos.** `backend/src/ranking/**`; `backend/test/ranking.spec.ts`.
 **Estimativa:** **0,4 pd**.

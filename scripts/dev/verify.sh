@@ -31,6 +31,13 @@ done
 
 if [ -n "$MIRROR" ]; then
   mkdir -p "$MIRROR"
+  # Trava de concorrência: vários agentes rodam verify.sh ao mesmo tempo e o
+  # espelho é único. Sem isto, o `rsync --delete` de um apaga os arquivos do
+  # outro no meio da execução (já aconteceu: um stub sumiu durante uma sondagem).
+  # Quem chega depois espera a vez em vez de corromper o trabalho alheio.
+  LOCK="$MIRROR/.verify.lock"
+  exec 9>"$LOCK"
+  flock 9
   # --delete mantém o espelho fiel; exclui o que é gerado (e o que é caro copiar).
   rsync -a --delete \
     --exclude node_modules --exclude dist --exclude coverage --exclude '*.log' \
