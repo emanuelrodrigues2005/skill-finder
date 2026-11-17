@@ -1,0 +1,5 @@
+# ARQUIVO DE TESTE — prova de que o job `secrets` reprova o PR.
+# A chave abaixo é a de exemplo publicada na documentação da AWS, não uma
+# credencial real. Este arquivo e a branch inteira são apagados depois do run.
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
