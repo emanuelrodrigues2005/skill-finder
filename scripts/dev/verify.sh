@@ -42,9 +42,10 @@ if [ -n "$MIRROR" ]; then
   rsync -a --delete \
     --exclude node_modules --exclude dist --exclude coverage --exclude '*.log' \
     "$ROOT/backend/" "$MIRROR/backend/" || { echo "rsync falhou"; exit 1; }
-  # `openapi.yaml` mora na RAIZ do monorepo e os testes o leem como
-  # `../../openapi.yaml` a partir de backend/test: sem esta cópia, três casos de
-  # contrato falham por ENOENT e o vermelho mente sobre o código.
+  # `openapi.yaml` mora na RAIZ do monorepo e os testes o leem relativo a si
+  # mesmos — hoje `../../../openapi.yaml` a partir de `backend/test/unit`.
+  # Sem esta cópia, os casos de contrato falham por ENOENT e o vermelho mente
+  # sobre o código (foi exatamente o que aconteceu na primeira versão do espelho).
   rsync -a "$ROOT/openapi.yaml" "$MIRROR/openapi.yaml" 2>/dev/null \
     || { echo "openapi.yaml ausente na raiz"; exit 1; }
   WORK="$MIRROR/backend"
