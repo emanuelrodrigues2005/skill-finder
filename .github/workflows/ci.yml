@@ -1,0 +1,427 @@
+# CI do Skill Finder — issue #16 (F4).
+#
+# O que este arquivo é: o portão único de qualidade do monorepo. Todo PR, de
+# qualquer origem para qualquer destino, passa por aqui — não há filtro de
+# branch no `pull_request` de propósito (um PR de fork para `main` e um PR entre
+# branches de trabalho têm de rodar o mesmo conjunto de checagens).
+#
+# Regras que valem para o arquivo inteiro:
+#
+# 1. Os `id` dos jobs são os nomes das checagens que a proteção de branch (#17)
+#    vai exigir: `lint`, `test-unit`, `test-integration`, `secrets`. Por isso
+#    nenhum job tem `name:` — no GitHub o nome da check run é o `name:` do job
+#    quando ele existe, e um rótulo bonito quebraria a proteção em silêncio.
+# 2. Pinagem por tag de major (`actions/checkout@v7`, `pnpm/action-setup@v6`).
+#    Nada de `@latest`: `latest` transforma cada run em uma versão diferente do
+#    pipeline. Endurecer para SHA depois é uma linha por `uses:`.
+# 3. Não existe `package.json` na raiz nem `pnpm-workspace.yaml` raiz: são dois
+#    projetos pnpm independentes (`backend/`, `frontend/`), cada um com o seu
+#    lockfile e o seu `allowBuilds`. Todo comando usa `pnpm --dir <projeto>` e
+#    instala com `--frozen-lockfile`; `pnpm install` na raiz não existe.
+# 4. Nenhum segredo neste arquivo. As credenciais dos serviços de teste
+#    (`skills`/`skills`) são descartáveis, presas ao `127.0.0.1` do runner e
+#    morrem com o job — mesma decisão do `Makefile` e de
+#    `backend/test/integration/db.ts`.
+# 5. Armadilhas que este arquivo deixa de fora, de propósito:
+#    - o gatilho de PR na variante que roda o código do fork com o token de
+#      escrita do repositório (só o gatilho padrão, que em fork recebe token
+#      somente-leitura);
+#    - cache manual de `node_modules`: o cache do store do pnpm já vem da opção
+#      `cache` do `setup-node`, e cachear a árvore instalada é pior que não
+#      cachear (cache velho com `--frozen-lockfile` mente);
+#    - matriz de Node: uma versão só, a do runtime;
+#    - espera de banco por duração fixa: aqui é laço com prazo e prova de TCP.
+# 6. A função de status sempre-verdadeiro fica de fora: o `if:` dos relatórios é
+#    `!cancelled()`, então eles sobem quando a suíte falha e não sobem quando o
+#    run foi cancelado por concorrência.
+
+name: CI
+
+on:
+  # Sem filtro de `branches`: qualquer origem, qualquer destino.
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Menor privilégio: o CI só precisa ler o repositório. Nenhum job escreve na
+# API do GitHub (`checks: write` ficou de fora por isso — nada de publicar
+# resultado de teste como check run).
+permissions:
+  contents: read
+
+# Um run por ref; push novo cancela o anterior. Economiza runner e evita que um
+# commit antigo termine verde depois de um mais novo.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# `bash` explícito: a espera do Postgres usa `/dev/tcp`, que é recurso do bash.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          # Sem `version`: a versão vem de `packageManager` no package.json.
+          # Passar `version` junto com `packageManager` faz a action falhar.
+          # `package_json_file` aponta para o backend porque não existe
+          # package.json na raiz — os dois projetos usam a mesma versão.
+          package_json_file: backend/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          # Os dois lockfiles: são dois projetos independentes, e um cache que
+          # só olhasse um deles instalaria o outro com o store errado.
+          cache-dependency-path: |
+            backend/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Install backend dependencies
+        run: pnpm --dir backend install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
+
+      - name: Lint backend
+        run: pnpm --dir backend lint
+
+      - name: Lint frontend
+        run: pnpm --dir frontend lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: backend/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: |
+            backend/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      # O install do backend roda o postinstall do `@prisma/client` (autorizado
+      # em `backend/pnpm-workspace.yaml`), então o client tipado existe aqui —
+      # sem esse passo o `tsc` falharia por tipos ausentes do Prisma.
+      - name: Install backend dependencies
+        run: pnpm --dir backend install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
+
+      - name: Typecheck backend
+        run: pnpm --dir backend typecheck
+
+      - name: Typecheck frontend
+        run: pnpm --dir frontend typecheck
+
+  # Este job roda `test:cov`, não `test`, e publica JUnit + cobertura. Duas
+  # escolhas, ambas deliberadas:
+  #
+  # - `test:cov` em vez de `test`: `test` é só o nível unitário; `test:cov`
+  #   (`test/jest-cov.json`) roda os três níveis — unit + integração + api —
+  #   numa passada só, e é dela que saem `backend/coverage/junit.xml` (reporter
+  #   próprio, `test/reporters/junit-xml.js`) e `coverage-summary.json`. O
+  #   `coverageThreshold` de 80 por diretório de domínio reprova o job sozinho.
+  # - nenhum job `coverage` separado: rodar a mesma suíte duas vezes para
+  #   publicar artefato é desperdício de runner sem ganho de sinal.
+  #
+  # Consequência de `jest-cov.json` agregar os três níveis: este job precisa do
+  # Postgres de teste igual ao `test-integration` — `test/integration/setup-env.ts`
+  # aponta `DATABASE_URL`/`TEST_DATABASE_URL` para a 55432 e `db.ts` reprova
+  # (nunca pula) quando o banco falta.
+  test-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: skills
+          POSTGRES_PASSWORD: skills
+          POSTGRES_DB: skills_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 55432:5432
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: backend/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: |
+            backend/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Install backend dependencies
+        run: pnpm --dir backend install --frozen-lockfile
+
+      - name: Wait for Postgres
+        run: |
+          # Laço com prazo, não espera por duração fixa: o health check do
+          # service já segura a maior parte da espera, e a prova que interessa é
+          # uma conexão TCP que aceita — `/dev/tcp` é exatamente essa prova.
+          for attempt in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/55432) 2>/dev/null; then
+              exec 3<&- 3>&-
+              echo "postgres: aceitou conexao TCP em 127.0.0.1:55432 (tentativa ${attempt})"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::postgres nao aceitou conexao em 127.0.0.1:55432 em 30s"
+          exit 1
+
+      - name: Apply migrations
+        run: pnpm --dir backend prisma:deploy
+        env:
+          # `DATABASE_URL` no step, nunca no job: exportada no escopo do job ela
+          # chegaria aos testes unitários e mexeria na guarda de loopback de
+          # `backend/test/setup.ts`. `migrate deploy` é idempotente.
+          # Credencial descartável, presa ao loopback — não é segredo.
+          DATABASE_URL: postgresql://skills:skills@127.0.0.1:55432/skills_test
+
+      - name: Run backend tests with coverage
+        run: pnpm --dir backend test:cov
+
+      - name: Upload coverage and JUnit report
+        # `!cancelled()`: o relatório precisa subir justamente quando a suíte
+        # falha, e não deve subir em cancelamento por concorrência.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-coverage
+          path: backend/coverage/
+          # Artefato ausente não pode esconder a falha real do job.
+          if-no-files-found: warn
+          retention-days: 7
+
+  # O "e2e" do projeto é o nível de api: Supertest sobe a aplicação inteira sem
+  # porta externa. Não precisa de banco — `test/setup.ts` deixa tudo em memória
+  # e o `nock` só libera loopback.
+  test-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: backend/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: |
+            backend/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Install backend dependencies
+        run: pnpm --dir backend install --frozen-lockfile
+
+      - name: Run backend api tests
+        run: pnpm --dir backend test:e2e
+
+  # Nível de integração contra Postgres real. A porta publicada tem de ser
+  # 55432: o default do harness (`backend/test/integration/db.ts`) é
+  # `postgresql://skills:skills@127.0.0.1:55432/skills_test`.
+  test-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: skills
+          POSTGRES_PASSWORD: skills
+          POSTGRES_DB: skills_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 55432:5432
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: backend/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: |
+            backend/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Install backend dependencies
+        run: pnpm --dir backend install --frozen-lockfile
+
+      - name: Wait for Postgres
+        run: |
+          for attempt in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/55432) 2>/dev/null; then
+              exec 3<&- 3>&-
+              echo "postgres: aceitou conexao TCP em 127.0.0.1:55432 (tentativa ${attempt})"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::postgres nao aceitou conexao em 127.0.0.1:55432 em 30s"
+          exit 1
+
+      - name: Apply migrations
+        run: pnpm --dir backend prisma:deploy
+        env:
+          DATABASE_URL: postgresql://skills:skills@127.0.0.1:55432/skills_test
+
+      - name: Run backend integration tests
+        run: pnpm --dir backend test:integration
+
+  # Suíte de UI: Vitest + jsdom + MSW, sem rede. Fora do job do backend de
+  # propósito — são projetos independentes, com lockfile e cache próprios.
+  test-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: backend/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: |
+            backend/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
+
+      - name: Run frontend tests
+        run: pnpm --dir frontend test
+
+  # Contrato: `openapi.yaml` é gerado pelos decorators do backend e as tipos do
+  # frontend são escritos à mão; o job prova que os dois lados e o artefato
+  # versionado continuam de acordo.
+  #
+  # Não usa `make openapi-check`: o alvo é um wrapper destes mesmos comandos, e
+  # o `preflight` dele existe para o Node do WSL (recusa `node` vindo de
+  # `/mnt/*`), o que não descreve um runner. Os dois guardas do Makefile que
+  # importam foram mantidos e um foi endurecido — o diff é contra `HEAD`, então
+  # um `git add openapi.yaml` não deixa o gate verde antes do commit.
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: backend/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: |
+            backend/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      # O guard precisa dos dois lados: `openapi:generate` roda com ts-node do
+      # backend; `check-contract.mjs` lê os tipos declarados com o `typescript`
+      # do frontend.
+      - name: Install backend dependencies
+        run: pnpm --dir backend install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
+
+      - name: Assert the contract file is tracked
+        run: git ls-files --error-unmatch -- openapi.yaml
+
+      - name: Regenerate openapi.yaml
+        run: pnpm --dir backend openapi:generate
+
+      - name: Fail when the versioned contract diverges
+        run: git diff --exit-code HEAD -- openapi.yaml
+
+      - name: Check frontend declarations against the contract
+        run: node frontend/scripts/check-contract.mjs
+
+  # Segredo no diff. `fetch-depth: 0` é obrigatório: o gitleaks varre o
+  # histórico de commits, e um clone raso esconderia o segredo antigo.
+  #
+  # Conta pessoal, não organização: `GITLEAKS_LICENSE` não é necessária (é exigida
+  # só para orgs no GitHub). Se a action pedir licença no run real, o plano B é o
+  # binário oficial em container (`zricethezav/gitleaks`), sem action no meio.
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `permissions: contents: read` é o contrato do arquivo: nada de
+          # comentar no PR (exigiria `pull-requests: write`, que em PR de fork
+          # nem existe).
+          GITLEAKS_ENABLE_COMMENTS: 'false'
