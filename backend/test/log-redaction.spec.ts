@@ -25,6 +25,29 @@ function captureLogger(): { logger: pino.Logger; output: () => string } {
 }
 
 /**
+ * Logger com as opções que o processo usa **incluindo `serializers`** (issue
+ * #10): o `serializers.req` é o que decide o que do request vai para o log de
+ * acesso, e ele é exercitado pelo caminho real do pino, não por uma cópia.
+ */
+function captureHttpLogger(): { logger: pino.Logger; output: () => string } {
+  const chunks: string[] = [];
+  const stream = new Writable({
+    write(chunk: Buffer, _encoding, callback: (error?: Error | null) => void): void {
+      chunks.push(chunk.toString());
+      callback();
+    },
+  });
+
+  const options = pinoHttpOptions(loadEnv({ ENV: 'dev' }));
+  const logger = pino(
+    { level: 'debug', redact: options.redact, serializers: options.serializers },
+    stream,
+  );
+
+  return { logger, output: () => chunks.join('') };
+}
+
+/**
  * Erro com a forma de um `AxiosError`: o axios anexa ao erro a configuração
  * inteira da requisição, e é por `config.headers.authorization` que a chave
  * vazaria para o log (§8.5).
@@ -43,6 +66,51 @@ function axiosError(secret: string): Error {
 }
 
 describe('log redaction (§8.5)', () => {
+  /**
+   * Issue #10 (revisão): o permalink é **capability URL** — o `request_id` no
+   * path é a credencial. O serializer padrão do pino-http loga `url` (e o
+   * Express expõe `params`), então `serializers.req` os descarta; os headers
+   * continuam, porque a redação de §8.5 é justamente sobre eles.
+   */
+  it('drops url/params from the request serializer and keeps headers redacted (issue #10)', () => {
+    const capabilityId = 'req_01JCV8Y6Q4CAPABILITYURL0000';
+    const serverRequestId = 'b0d1f3a2-7c1e-4a55-9f0e-2d4a1c6b8e11';
+    const { logger, output } = captureHttpLogger();
+
+    logger.info(
+      {
+        req: {
+          id: serverRequestId,
+          method: 'GET',
+          url: `/api/v1/searches/${capabilityId}`,
+          params: { request_id: capabilityId },
+          headers: {
+            authorization: 'Bearer sk-live-must-not-leak',
+            cookie: 'sid=must-not-leak',
+            accept: 'application/json',
+          },
+        },
+      },
+      'request completed',
+    );
+
+    const line = output();
+
+    // A credencial do permalink não chega ao log de acesso.
+    expect(line).not.toContain(capabilityId);
+    expect(line).not.toContain('/api/v1/searches/');
+    expect(line).not.toContain('"url"');
+    expect(line).not.toContain('"params"');
+    // O que identifica o request continua lá: o teste não passa por linha vazia.
+    expect(line).toContain(serverRequestId);
+    expect(line).toContain('"method":"GET"');
+    expect(line).toContain('"accept":"application/json"');
+    // E a redação de §8.5 continua valendo dentro do objeto serializado.
+    expect(line).toContain(REDACTED);
+    expect(line).not.toContain('sk-live-must-not-leak');
+    expect(line).not.toContain('sid=must-not-leak');
+  });
+
   it('builds a logger with every declared path (fast-redact rejects invalid paths)', () => {
     expect(REDACT_PATHS.length).toBeGreaterThan(0);
     expect(() => captureLogger()).not.toThrow();

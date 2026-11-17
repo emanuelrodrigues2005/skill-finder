@@ -11,6 +11,7 @@ import { MetricsModule } from './common/metrics/metrics.module';
 import { AppConfigModule, AppConfigService } from './config/config.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { SearchModule } from './search/search.module';
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * 60_000;
@@ -21,6 +22,10 @@ const DAY_MS = 24 * 60 * 60_000;
     PrismaModule,
     MetricsModule,
     HealthModule,
+    // Os cinco endpoints públicos de §5.1 (F2.6). As duas rotas de admin
+    // continuam fora do runtime (D-E): elas entram no documento pelo
+    // `ContractAdminModule`, que só o gerador importa.
+    SearchModule.forRoot(),
     LoggerModule.forRootAsync({
       imports: [AppConfigModule],
       inject: [AppConfigService],
@@ -30,8 +35,10 @@ const DAY_MS = 24 * 60 * 60_000;
       imports: [AppConfigModule],
       inject: [AppConfigService],
       useFactory: (config: AppConfigService) => ({
-        // Dois throttlers nomeados de §8.4 (10/min e 60/dia). O guard entra no
-        // `POST /api/v1/search` na F2.6; aqui só existe a configuração.
+        // Dois throttlers nomeados de §8.4 (10/min e 60/dia). O guard entra na
+        // #13: hoje a rota **não tem** limite nenhum — esta configuração sozinha
+        // não limita nada, e um comentário que prometesse o contrário seria pior
+        // que a config ausente.
         throttlers: [
           {
             name: 'search-minute',

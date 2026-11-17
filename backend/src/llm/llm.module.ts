@@ -67,7 +67,16 @@ export class LlmModule {
   }
 }
 
-function createIntentParser(options: LlmModuleOptions): IntentParser {
+/**
+ * Seleção do parser a partir das opções já resolvidas.
+ *
+ * Exportada para quem precisa da porta sem o módulo inteiro: o `SearchModule`
+ * monta `INTENT_PARSER` numa factory que injeta `AppConfigService` (as opções só
+ * existem em runtime), e essa factory tem de decidir exatamente como `forRoot` —
+ * duas cópias da regra "`enabled` escolhe o provedor" divergiriam no primeiro
+ * ajuste.
+ */
+export function createIntentParser(options: LlmModuleOptions): IntentParser {
   if (!options.enabled) {
     return new DisabledIntentParser();
   }

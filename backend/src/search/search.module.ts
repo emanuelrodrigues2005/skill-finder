@@ -1,0 +1,90 @@
+/**
+ * Módulo da busca (§3, F2.6): as cinco rotas públicas e as duas portas que as
+ * sustentam.
+ *
+ * O grafo é montado por `forRoot()` porque **nada** aqui pode depender do
+ * ambiente no momento em que o decorator é avaliado: `SEARCH_CATALOG`,
+ * `SEARCH_STORE` e `INTENT_PARSER` nascem de fábricas que injetam
+ * `PrismaService` e `AppConfigService`. O mesmo `forRoot` aceita portas prontas
+ * (`catalog`/`store`) — é o seam dos duplos em memória, sem nenhum `if` de teste
+ * no código de produção.
+ *
+ * `INTENT_PARSER` vem do `LlmModule` (a factory dele), nunca daqui: quem decide
+ * entre provedor real e modo degradado é a configuração `LLM_ENABLED`, num lugar
+ * só.
+ */
+import { type DynamicModule, Module } from '@nestjs/common';
+
+import { MetricsModule } from '../common/metrics/metrics.module';
+import { AppConfigService } from '../config/config.module';
+import type { Env } from '../config/env.schema';
+import type { IntentParser } from '../llm/intent-parser';
+import { createIntentParser, INTENT_PARSER, type LlmModuleOptions } from '../llm/llm.module';
+import { PrismaService } from '../prisma/prisma.service';
+
+import { CategoriesController } from './categories.controller';
+import { PrismaSearchCatalogRepository } from './prisma-search-catalog.repository';
+import { PrismaSearchStoreRepository } from './prisma-search-store.repository';
+import { SearchController } from './search.controller';
+import { SEARCH_CATALOG, SEARCH_STORE } from './search.tokens';
+import type { SearchCatalog } from './search-catalog.port';
+import type { SearchStore } from './search-store.port';
+import { SearchService } from './search.service';
+import { SearchesController } from './searches.controller';
+import { SkillsController } from './skills.controller';
+
+/** Portas já construídas; vazio em produção, onde o adaptador Postgres entra. */
+export interface SearchModulePorts {
+  readonly catalog?: SearchCatalog;
+  readonly store?: SearchStore;
+}
+
+@Module({})
+export class SearchModule {
+  /** Módulo dinâmico com as cinco rotas públicas e as portas resolvidas. */
+  static forRoot(ports: SearchModulePorts = {}): DynamicModule {
+    return {
+      module: SearchModule,
+      imports: [MetricsModule],
+      controllers: [
+        SearchController,
+        SearchesController,
+        CategoriesController,
+        SkillsController,
+      ],
+      providers: [
+        SearchService,
+        {
+          provide: SEARCH_CATALOG,
+          inject: [PrismaService],
+          useFactory: (prisma: PrismaService): SearchCatalog =>
+            ports.catalog ?? new PrismaSearchCatalogRepository(prisma),
+        },
+        {
+          provide: SEARCH_STORE,
+          inject: [PrismaService],
+          useFactory: (prisma: PrismaService): SearchStore =>
+            ports.store ?? new PrismaSearchStoreRepository(prisma),
+        },
+        {
+          provide: INTENT_PARSER,
+          inject: [AppConfigService],
+          useFactory: (config: AppConfigService): IntentParser =>
+            createIntentParser(llmOptions(config.env)),
+        },
+      ],
+      exports: [SEARCH_CATALOG, SEARCH_STORE],
+    };
+  }
+}
+
+/** `AppConfigService` -> opções do `LlmModule` (§3, variáveis `LLM_*`). */
+function llmOptions(env: Env): LlmModuleOptions {
+  return {
+    enabled: env.llmEnabled,
+    baseUrl: env.llmBaseUrl,
+    model: env.llmModel,
+    apiKey: env.llmApiKey,
+    timeoutS: env.llmTimeoutS,
+  };
+}
