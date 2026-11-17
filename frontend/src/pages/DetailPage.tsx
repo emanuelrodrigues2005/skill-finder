@@ -26,6 +26,17 @@ function show(value: string | number | null | undefined): string {
 }
 
 /**
+ * Data legível a partir do RFC 3339 do contrato (`data_snapshot`). O contrato guarda o
+ * instante completo porque ele vem do `ingest_run`; a tela responde "de quando é o dado".
+ * Valor que não começa com `YYYY-MM-DD` cai em `n/a` em vez de virar texto quebrado.
+ */
+function showDate(value: string | null | undefined): string {
+  if (typeof value !== "string") return NA;
+  const date = value.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : NA;
+}
+
+/**
  * URL externa: só sai clicável com esquema `http`/`https`, decidido no esquema **parseado**.
  *
  * `javascript:` é URI sintaticamente válida (RFC 3986), então procurar `http` no começo do texto
@@ -158,9 +169,11 @@ export default function DetailPage() {
       <p style={{ marginTop: 0 }}>{show(skill.summary)}</p>
 
       {/*
-        Sem data de referência do dado: `components.schemas.SkillDetail` não tem `fetched_at`,
-        `catalog_snapshot`, `first_seen_at` nem `last_seen_at` — só a resposta de busca publica
-        `data.catalog_snapshot`. Campo inexistente não é inventado aqui.
+        A data de referência do dado (`data_snapshot`) vem do snapshot do catálogo — a mesma
+        fonte de `data.catalog_snapshot` na busca. Sem snapshot o contrato manda `null` e é
+        `n/a`, nunca uma data inventada (regra 3).
+        O contrato entrega RFC 3339 completo; a tela mostra só a data, porque a pergunta do
+        usuário é "de quando é este dado", não o instante exato da ingestão.
       */}
       <dl
         style={{
@@ -191,6 +204,8 @@ export default function DetailPage() {
         </dd>
         <dt style={{ fontWeight: 600 }}>SKILL.md</dt>
         <dd style={{ margin: 0 }}>{skill.skill_md_present ? "present" : NA}</dd>
+        <dt style={{ fontWeight: 600 }}>Snapshot date</dt>
+        <dd style={{ margin: 0 }} title={skill.data_snapshot ?? undefined}>{showDate(skill.data_snapshot)}</dd>
       </dl>
 
       <h3 style={{ fontSize: "1rem" }}>SKILL.md</h3>

@@ -291,6 +291,12 @@ export class SearchService {
   /**
    * Detalhe de uma skill (§5.4).
    *
+   * A data de referência do dado (`data_snapshot`) não é coluna da linha: ela vem
+   * do `snapshot()` do catálogo — a mesma fonte que a busca publica em
+   * `data.catalog_snapshot` —, formatada em RFC 3339 UTC pelo `toISOString()`, o
+   * mesmo formato de `/categories`. Sem snapshot (catálogo nunca ingerido) o campo
+   * é `null` e a tela mostra `n/a` (regra 3).
+   *
    * @throws ApiError 404 quando o id não existe — o mesmo 404 de um id malformado,
    *   que o controller nem chega a decodificar.
    */
@@ -299,7 +305,13 @@ export class SearchService {
     if (detail === null) {
       throw new ApiError(HttpStatus.NOT_FOUND, ERROR_CODES.NOT_FOUND, 'Skill not found.');
     }
-    return detail;
+    // O `snapshot()` é consultado só depois do 404: um id inexistente não paga
+    // uma segunda ida ao catálogo.
+    const snapshot = await this.catalog.snapshot();
+    return {
+      ...detail,
+      data_snapshot: snapshot === null ? null : snapshot.toISOString(),
+    };
   }
 
   /** Ranqueia, explica e monta o envelope comum a busca e permalink. */
@@ -410,6 +422,7 @@ export class SearchService {
 function elapsedMs(startedAt: bigint): number {
   return Number((process.hrtime.bigint() - startedAt) / 1_000_000n);
 }
+
 
 /** `search_request.status` (§4.1): a lacuna e a degradação são estados distintos. */
 function storedStatus(resultCount: number, degraded: boolean): StoredSearchStatus {

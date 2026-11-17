@@ -184,6 +184,7 @@ export const skillDetailFixture = {
     security_status: "unknown",
     skill_md_present: true,
     skill_md_excerpt: "Extract the text layer first, then run the table pass.",
+    data_snapshot: "2026-11-15T03:00:00.000Z",
   },
 } satisfies SkillDetailResponse;
 

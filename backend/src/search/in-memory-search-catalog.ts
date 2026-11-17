@@ -41,7 +41,9 @@ export class InMemorySearchCatalog implements SearchCatalog {
       new Map(
         seed.skills.map((skill) => [
           skill.skill_id,
-          { ...skill, summary: null, repo_url: null, skill_md_excerpt: null },
+          // `data_snapshot` é do snapshot, não da linha: `SearchService.skillDetail`
+          // preenche a partir de `snapshot()`, como no adaptador Postgres.
+          { ...skill, summary: null, repo_url: null, skill_md_excerpt: null, data_snapshot: null },
         ]),
       );
     this.categories =

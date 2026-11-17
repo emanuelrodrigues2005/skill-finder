@@ -126,6 +126,9 @@ export class PrismaSearchCatalogRepository implements SearchCatalog {
       summary: row.summary === null ? null : plainSummary(row.summary),
       repo_url: row.repo_url,
       skill_md_excerpt: row.document === null ? null : skillMdExcerpt(row.document),
+      // `data_snapshot` não é coluna da linha: é o instante do snapshot, que
+      // `SearchService.skillDetail` lê de `snapshot()` na mesma resposta.
+      data_snapshot: null,
     };
   }
 

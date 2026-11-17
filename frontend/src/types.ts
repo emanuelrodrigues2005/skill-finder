@@ -126,6 +126,8 @@ export interface SkillDetail extends SkillSummary {
   summary: string | null;
   repo_url: string | null;
   skill_md_excerpt: string | null;
+  /** RFC 3339 (`date-time`) of the catalog snapshot; `null` when never ingested. */
+  data_snapshot: string | null;
 }
 
 /** `openapi.yaml` › components.schemas.SkillDetailResponse — the envelope `getSkill` returns. */

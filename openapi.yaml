@@ -1225,6 +1225,13 @@ components:
           description: Excerpt of `SKILL.md` (≤ 600 characters, no raw markdown); null if
             absent. Plain text from an untrusted source. Render escaped; never
             as HTML or markdown.
+        data_snapshot:
+          type: string
+          format: date-time
+          nullable: true
+          description: RFC 3339 UTC of the catalog snapshot the record came from; null
+            when the catalog was never ingested. Same format as
+            `SearchData.catalog_snapshot`.
       required:
         - skill_id
         - name
@@ -1238,6 +1245,7 @@ components:
         - summary
         - repo_url
         - skill_md_excerpt
+        - data_snapshot
     SkillDetailResponse:
       type: object
       properties:

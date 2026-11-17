@@ -48,6 +48,8 @@ describe("DetailPage", () => {
     expect(detailValue("Vulnerabilities")).toHaveTextContent("n/a");
     expect(detailValue("Repository")).toHaveTextContent("n/a");
     expect(detailValue("SKILL.md")).toHaveTextContent("present");
+    // data_snapshot vem em RFC 3339 do contrato; a tela fatia a data (issue #33).
+    expect(detailValue("Snapshot date")).toHaveTextContent("2026-11-15");
 
     const source = screen.getByRole("link", { name: skillDetailFixture.data.source_url });
     expect(source).toHaveAttribute("href", skillDetailFixture.data.source_url);
@@ -70,6 +72,23 @@ describe("DetailPage", () => {
     expect(await screen.findByText("No full description available for this skill")).toBeVisible();
     expect(screen.getByText("SKILL.md: n/a")).toBeVisible();
     expect(detailValue("SKILL.md")).toHaveTextContent("n/a");
+  });
+
+  it("renders n/a for the data snapshot when the catalog was never ingested", async () => {
+    server.use(
+      http.get(apiUrl(`${SKILL_PATH}`), () =>
+        HttpResponse.json({
+          ...skillDetailFixture,
+          data: { ...skillDetailFixture.data, data_snapshot: null },
+        }),
+      ),
+    );
+
+    renderDetail();
+
+    expect(await screen.findByRole("heading", { name: "pdf-extract" })).toBeVisible();
+    // Regra 3: `null` do contrato é `n/a` — a tela nunca inventa uma data.
+    expect(detailValue("Snapshot date")).toHaveTextContent("n/a");
   });
 
   it("keeps the request id on a missing skill", async () => {

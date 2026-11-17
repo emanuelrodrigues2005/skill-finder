@@ -117,6 +117,8 @@ describe('InMemorySearchCatalog — findByIds e detail', () => {
       summary: 'resumo',
       repo_url: 'https://github.com/acme/alpha',
       skill_md_excerpt: 'trecho',
+      // A data de referência vem do `snapshot()`; `null` aqui é o valor semeado.
+      data_snapshot: null,
     };
     const instance = catalog({ skills, details: new Map([[encodeSkillId(7n), detail]]) });
 
@@ -133,6 +135,7 @@ describe('InMemorySearchCatalog — findByIds e detail', () => {
       summary: null,
       repo_url: null,
       skill_md_excerpt: null,
+      data_snapshot: null,
     });
   });
 

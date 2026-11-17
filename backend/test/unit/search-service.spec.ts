@@ -137,7 +137,7 @@ class CatalogStub implements SearchCatalog {
     return Promise.resolve(
       found === undefined
         ? null
-        : { ...found, summary: null, repo_url: null, skill_md_excerpt: null },
+        : { ...found, summary: null, repo_url: null, skill_md_excerpt: null, data_snapshot: null },
     );
   }
 

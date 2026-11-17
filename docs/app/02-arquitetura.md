@@ -300,7 +300,7 @@ Regras do contrato:
 }
 ```
 
-`GET /api/v1/skills/{skill_id}` → `200` inclui `summary`, `repo_url`, `security_status`, `skill_md_present` e `skill_md_excerpt` (≤ 600 caracteres, sem markdown cru).
+`GET /api/v1/skills/{skill_id}` → `200` inclui `summary`, `repo_url`, `security_status`, `skill_md_present`, `skill_md_excerpt` (≤ 600 caracteres, sem markdown cru) e `data_snapshot` (RFC 3339 UTC do snapshot do catálogo; `null` quando nunca houve ingestão).
 
 `GET /api/v1/searches/{request_id}` → mesma forma do `POST /search`, com `llm.cached=true`; `410 Gone` quando o histórico expirou (30 dias).
 

@@ -88,6 +88,16 @@ export class SkillDetail extends SkillSummary {
       'Excerpt of `SKILL.md` (≤ 600 characters, no raw markdown); null if absent. Plain text from an untrusted source. Render escaped; never as HTML or markdown.',
   })
   skill_md_excerpt!: string | null;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    description:
+      'RFC 3339 UTC of the catalog snapshot the record came from; null when the catalog ' +
+      'was never ingested. Same format as `SearchData.catalog_snapshot`.',
+  })
+  data_snapshot!: string | null;
 }
 
 /** Bloco `pagination` de toda listagem (§5.6). */

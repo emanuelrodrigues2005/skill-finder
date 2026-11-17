@@ -101,6 +101,9 @@ const SKILL_NULLS: SkillDetail = {
   summary: null,
   repo_url: null,
   skill_md_excerpt: null,
+  // O detalhe do dublê não sabe a data por linha: quem a preenche é o serviço,
+  // a partir de `snapshot()`. `null` aqui prova que a resposta não a copiou.
+  data_snapshot: null,
 };
 
 const CATEGORIES: readonly CategoryItem[] = [
@@ -471,6 +474,31 @@ describe('search endpoints (e2e)', () => {
     for (const value of [data.stars, data.installs, data.vulnerability_count]) {
       expect(value).not.toBe(0);
     }
+  });
+
+  it('stamps data_snapshot with the catalog snapshot in RFC 3339', async () => {
+    const snapshotAt = catalog.snapshotAt;
+    if (snapshotAt === null) {
+      throw new Error('o dublê deveria ter um snapshot fresco neste caso');
+    }
+
+    const response = await get(`/api/v1/skills/${encodeSkillId(SKILL_NULLS_ID)}`).expect(200);
+    const data = response.body.data as SkillDetail;
+
+    // Mesma fonte de `data.catalog_snapshot` na busca: o `snapshot()` da porta,
+    // não um campo da linha que o catálogo teria mandado (`null` no dublê).
+    expect(data.data_snapshot).toMatch(RFC3339);
+    expect(data.data_snapshot).toBe(snapshotAt.toISOString());
+  });
+
+  it('answers data_snapshot null when the catalog was never ingested', async () => {
+    catalog.snapshotAt = null;
+
+    const response = await get(`/api/v1/skills/${encodeSkillId(SKILL_NULLS_ID)}`).expect(200);
+    const data = response.body.data as SkillDetail;
+
+    // Regra 3: sem snapshot o campo é `null` (a tela mostra `n/a`), nunca uma data inventada.
+    expect(data.data_snapshot).toBeNull();
   });
 
   it('GET /categories lists the snapshot categories with data_snapshot', async () => {

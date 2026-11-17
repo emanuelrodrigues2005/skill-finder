@@ -152,6 +152,8 @@ function skill(
     security_status: 'ok',
     skill_md_present: false,
     summary: null,
+    // `data_snapshot` (issue #33) é preenchido pelo `SearchService`, não pelo catálogo.
+    data_snapshot: null,
     repo_url: null,
     skill_md_excerpt: null,
   };
