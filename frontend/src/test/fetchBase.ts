@@ -17,6 +17,38 @@ export const TEST_ORIGIN = "http://localhost:5173";
 export type FetchImplementation = typeof globalThis.fetch;
 
 /**
+ * O `AbortSignal` do jsdom pertence a outro realm e o `undici` (o `fetch` do Node, que é quem
+ * executa mesmo sob `jsdom`) recusa: `TypeError: RequestInit: Expected signal ("AbortSignal {}")
+ * to be an instance of AbortSignal`. Como `src/api.ts` passa `AbortSignal.timeout(...)` em toda
+ * chamada, **toda** tela que buscava dados caía no erro genérico.
+ *
+ * A sonda abaixo mede isso em vez de supor: `Request` recebe o mesmo converter de `RequestInit`
+ * que o `fetch`, então a rejeição aparece na construção. Em ambiente `node` (que é onde
+ * `src/api.test.ts` roda) a sonda aceita o sinal e nada é descartado.
+ */
+function realmSignalAccepted(): boolean {
+  if (typeof Request === "undefined") return false;
+  try {
+    new Request("http://localhost/", { signal: new AbortController().signal });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Devolve `init` sem `signal`. Usado só quando o realm não é compatível: o sinal existe para
+ * cancelar a requisição, e cancelamento não é o que os testes de tela medem — o caminho do
+ * timeout continua coberto em `src/api.test.ts` (ambiente `node`, `fetch` espiado).
+ */
+function withoutSignal(init: RequestInit | undefined): RequestInit | undefined {
+  if (init === undefined || init.signal === undefined || init.signal === null) return init;
+  const next: RequestInit = { ...init };
+  delete next.signal;
+  return next;
+}
+
+/**
  * Envolve o `fetch` corrente para resolver caminho relativo contra `origin` e devolve a função
  * que restaura o `fetch` anterior.
  *
@@ -29,10 +61,12 @@ export type FetchImplementation = typeof globalThis.fetch;
  */
 export function installFetchBase(origin: string = TEST_ORIGIN): () => void {
   const previous = globalThis.fetch;
+  // Medido uma vez por arquivo de teste: a resposta não muda durante a execução.
+  const signalsAccepted = realmSignalAccepted();
 
   const patched: FetchImplementation = (input, init) => {
     const target = typeof input === "string" && input.startsWith("/") ? new URL(input, origin).toString() : input;
-    return previous(target, init);
+    return previous(target, signalsAccepted ? init : withoutSignal(init));
   };
 
   globalThis.fetch = patched;

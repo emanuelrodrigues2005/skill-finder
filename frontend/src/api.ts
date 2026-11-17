@@ -43,7 +43,7 @@ const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
   NOT_FOUND: "We could not find what you asked for.",
   CONFLICT: "That operation is already running. Try again in a moment.",
   HISTORY_EXPIRED: "This search has expired. Start a new search.",
-  RATE_LIMITED: "Too many requests.",
+  RATE_LIMITED: "Too many searches.",
   LLM_BAD_RESPONSE: "The language model answer could not be used. Try again.",
   // Texto fixado pelo AC3 de US-08 (`docs/app/01-spec-produto.md` §4).
   SOURCE_UNAVAILABLE: "Data source unavailable — try again later.",

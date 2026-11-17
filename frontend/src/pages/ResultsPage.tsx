@@ -216,6 +216,51 @@ function RecommendationPanel({
   );
 }
 
+const EXAMPLE_QUERIES = ["extract tables from a pdf", "summarise a changelog"] as const;
+
+const actionStyle = { color: "#1d4ed8" } as const;
+const actionLineStyle = { margin: "0.35rem 0 0", fontSize: "0.9rem" } as const;
+
+/**
+ * Ações do estado vazio (issue #28; `docs/app/01-spec-produto.md` US-07 AC2): as três saídas são
+ * remover a categoria, simplificar a descrição e tentar um dos dois exemplos sugeridos.
+ *
+ * Cada link volta para `/` levando em `location.state` o que a tela de busca deve mudar — sem essa
+ * dica, "remover a categoria" e "tentar um exemplo" seriam todos o mesmo link para o formulário.
+ * Não é `<ul>`: o estado vazio já é um `role="status"` e a lista de resultados é o único `list`
+ * da tela (o teste da #29 afirma exatamente isso).
+ */
+function EmptyActions() {
+  return (
+    <div style={{ borderTop: "1px solid #e2e8f0", marginTop: "0.75rem", paddingTop: "0.75rem" }}>
+      <p style={{ margin: 0, fontWeight: 600 }}>What you can try</p>
+      <p style={actionLineStyle}>
+        <Link to="/" state={{ clearCategory: true }} style={actionStyle}>
+          Remove the category filter
+        </Link>{" "}
+        — search every category instead of one
+      </p>
+      <p style={actionLineStyle}>
+        <Link to="/" style={actionStyle}>
+          Simplify the description
+        </Link>{" "}
+        — fewer words usually match more skills
+      </p>
+      <p style={actionLineStyle}>
+        Or try an example:{" "}
+        {EXAMPLE_QUERIES.map((query, index) => (
+          <span key={query}>
+            {index === 0 ? null : " · "}
+            <Link to="/" state={{ exampleQuery: query }} style={actionStyle}>
+              {query}
+            </Link>
+          </span>
+        ))}
+      </p>
+    </div>
+  );
+}
+
 function ResultCard({ item, isRecommended }: { item: ResultItem; isRecommended: boolean }) {
   const badge = evidenceBadge(item.evidence_completeness);
   const badgeTone =
@@ -314,6 +359,11 @@ export default function ResultsPage() {
       ? stateResponse
       : null;
   const [reloadKey, setReloadKey] = useState(0);
+  /**
+   * Aviso de limite de uso que **convive** com o resultado anterior (US-11 AC2): quando o 429
+   * chega, a lista já na tela continua válida e não pode ser substituída por um erro.
+   */
+  const [rateLimitNotice, setRateLimitNotice] = useState<string | null>(null);
   const [state, setState] = useState<LoadState>(() => {
     if (paintData !== null) return { status: "ready", data: paintData };
     return permalinkId === "" ? { status: "idle" } : { status: "loading" };
@@ -326,6 +376,8 @@ export default function ResultsPage() {
       return;
     }
     let cancelled = false;
+    // O aviso pertence à tentativa que falhou: um reload novo começa sem ele.
+    setRateLimitNotice(null);
     // Primeiro frame com o que veio na navegação (sem "Searching…" numa resposta já pronta)…
     if (paintData !== null) {
       setState({ status: "ready", data: paintData });
@@ -341,12 +393,21 @@ export default function ResultsPage() {
       .catch((error: unknown) => {
         if (cancelled) return;
         const described = describeApiError(error);
+        const answered = error instanceof ApiError ? error : null;
+        // 429 no replay: a lista já pintada continua sendo o resultado anterior e fica na tela;
+        // o que muda é o aviso acima dela (US-11 AC2). Sem resposta anterior não há o que manter,
+        // e aí o caminho é o estado de erro comum.
+        if (answered !== null && answered.status === 429 && paintData !== null) {
+          setRateLimitNotice(described.message);
+          setState({ status: "ready", data: paintData });
+          return;
+        }
         setState({
           status: "error",
           message: described.message,
           code: described.code,
-          httpStatus: error instanceof ApiError ? error.status : null,
-          requestId: error instanceof ApiError ? error.requestId : null,
+          httpStatus: answered === null ? null : answered.status,
+          requestId: answered === null ? null : answered.requestId,
         });
       });
     return () => {
@@ -424,8 +485,10 @@ export default function ResultsPage() {
   const recommendedId = recommendation?.skill_id ?? null;
 
   return (
-    <section>
-      <h2 style={{ fontSize: "1.1rem" }}>Results</h2>
+    <section aria-labelledby="results-heading">
+      <h2 id="results-heading" style={{ fontSize: "1.1rem" }}>
+        Results
+      </h2>
 
       {/* Permalink estável: endereçado pelo `request_id`, a mesma resposta em aba nova ou ao
           compartilhar. O reload da mesma aba revalida com `GET /searches/{id}` e, se o histórico
@@ -445,20 +508,50 @@ export default function ResultsPage() {
 
       <DegradedBanner data={data} />
 
+      {/* Limite de uso: o aviso entra acima da lista e não apaga o resultado anterior (US-11). */}
+      {rateLimitNotice === null ? null : (
+        <div
+          role="alert"
+          style={{
+            border: "1px solid #fbbf24",
+            background: "#fffbeb",
+            borderRadius: 8,
+            padding: "0.75rem",
+            margin: "0 0 1rem",
+          }}
+        >
+          <p style={{ margin: 0, fontWeight: 600 }}>{rateLimitNotice}</p>
+          <p style={{ margin: "0.35rem 0 0", fontSize: "0.85rem", color: "#92400e" }}>
+            code: <code>RATE_LIMITED</code> — the results below are the previous answer, still
+            valid.
+          </p>
+        </div>
+      )}
+
       {recommendation === null ? null : (
         <RecommendationPanel recommendation={recommendation} results={results} />
       )}
 
       {results.length === 0 ? (
-        <EmptyState
-          hint={
-            data.degraded
-              ? "the answer is degraded — see the banner above for the reason"
-              : undefined
-          }
-        />
+        <div>
+          <EmptyState
+            hint={
+              data.degraded
+                ? "the answer is degraded — see the banner above for the reason"
+                : undefined
+            }
+          />
+          <EmptyActions />
+        </div>
       ) : (
-        <ol role="list" style={{ listStyle: "none", padding: 0, margin: "1rem 0 0" }}>
+        // `aria-live` na região de resultados (§6.6): a troca de lista por reload/retry é
+        // anunciada. `role="list"` preserva o `<ol>` como lista apesar do `list-style: none`.
+        <ol
+          role="list"
+          aria-live="polite"
+          aria-labelledby="results-heading"
+          style={{ listStyle: "none", padding: 0, margin: "1rem 0 0" }}
+        >
           {results.map((item) => (
             <ResultCard
               key={`${item.rank}-${item.skill.skill_id}`}

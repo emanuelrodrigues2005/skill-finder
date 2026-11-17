@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError, describeApiError, getCategories, searchSkills } from "../api";
-import { ErrorState } from "../components/States";
+import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import { QUERY_MAX_LENGTH, QUERY_MIN_LENGTH, type Category } from "../types";
 
 /**
@@ -48,6 +48,28 @@ interface Failure {
   requestId: string | null;
 }
 
+/**
+ * Dica que a tela de resultados manda junto com a navegação de volta (issue #28): as ações do
+ * estado vazio mexem no rascunho, e o rascunho mora aqui.
+ *
+ * `clearCategory` é a ação "Remove the category filter"; `exampleQuery` é "tentar um dos
+ * exemplos". É o único caminho pelo qual `/results` altera o formulário — sem a dica, as três
+ * ações do vazio seriam só links para `/`.
+ */
+interface SearchLocationState {
+  clearCategory?: boolean;
+  exampleQuery?: string;
+}
+
+/** Rascunho + dica de navegação: a consulta do exemplo manda; a categoria só é limpa se pedida. */
+function applyHint(draft: Draft, hint: SearchLocationState | null): Draft {
+  const example = typeof hint?.exampleQuery === "string" ? hint.exampleQuery : "";
+  return {
+    query: example === "" ? draft.query : example,
+    category: hint?.clearCategory === true ? "" : draft.category,
+  };
+}
+
 function describeFailure(error: unknown): Failure {
   return {
     ...describeApiError(error),
@@ -57,7 +79,10 @@ function describeFailure(error: unknown): Failure {
 
 export default function SearchPage() {
   const navigate = useNavigate();
-  const [initialDraft] = useState(readDraft);
+  const location = useLocation();
+  const [initialDraft] = useState(() =>
+    applyHint(readDraft(), (location.state as SearchLocationState | null) ?? null),
+  );
   const [query, setQuery] = useState(initialDraft.query);
   const [category, setCategory] = useState(initialDraft.category);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -184,6 +209,18 @@ export default function SearchPage() {
           {/* Rascunho restaurado de uma categoria que a lista de agora não trouxe. */}
           {category !== "" && !categoryInList ? <option value={category}>{category}</option> : null}
         </select>
+
+        {/* Os dois estados que faltavam na tela de busca (issue #28): carregando e vazio. */}
+        {loadingCategories ? (
+          <div style={{ marginTop: "0.5rem" }}>
+            <LoadingState label="Loading categories…" />
+          </div>
+        ) : null}
+        {!loadingCategories && categoriesFailure === null && categories.length === 0 ? (
+          <div style={{ marginTop: "0.5rem" }}>
+            <EmptyState message="no categories available — you can still search without one" />
+          </div>
+        ) : null}
 
         {submitFailure ? (
           <div style={{ marginTop: "1rem" }}>

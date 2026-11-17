@@ -127,7 +127,7 @@ describe("ResultsPage", () => {
 
     renderResults();
 
-    expect(await screen.findByText("Too many requests. Try again in 30 seconds.")).toBeVisible();
+    expect(await screen.findByText("Too many searches. Try again in 30 seconds.")).toBeVisible();
     expect(screen.getByText("RATE_LIMITED")).toBeVisible();
     expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
     expect(screen.queryByText(/server said:/)).toBeNull();

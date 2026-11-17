@@ -4,6 +4,36 @@ import DetailPage from "./pages/DetailPage";
 import ResultsPage from "./pages/ResultsPage";
 import SearchPage from "./pages/SearchPage";
 
+/**
+ * Foco visível e skip link (issue #28, `docs/app/01-spec-produto.md` §6.6).
+ *
+ * O projeto não tem folha de estilo: cada componente carrega o próprio `style` inline, e
+ * `:focus-visible` não existe em estilo inline. Este bloco é o único CSS global — o contorno de
+ * **3 px** vale para todo controle focável e o skip link só aparece quando recebe foco. Ficar no
+ * documento (em vez de um `.css` importado) também é o que torna o critério verificável sem
+ * navegador: a suíte lê este texto em `document.querySelector("style")`.
+ */
+const GLOBAL_STYLES = `
+:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 2px;
+}
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: -9999px;
+  padding: 0.5rem 0.75rem;
+  background: #1d4ed8;
+  color: #ffffff;
+  border-radius: 0 0 8px 0;
+  z-index: 10;
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  left: 0;
+}
+`;
+
 export default function App() {
   return (
     <div
@@ -15,6 +45,15 @@ export default function App() {
         color: "#0f172a",
       }}
     >
+      <style>{GLOBAL_STYLES}</style>
+      {/*
+        Primeiro elemento focável do documento: um `Tab` chega nele antes da navegação e do
+        formulário. O alvo é `#results` — o `<main>` é a região onde os resultados aparecem em
+        todas as telas, então o link nunca aponta para um id inexistente (Search e Detail incluídos).
+      */}
+      <a className="skip-link" href="#results">
+        Skip to results
+      </a>
       <header style={{ marginBottom: "1.5rem" }}>
         <Link to="/" style={{ textDecoration: "none", color: "inherit" }}>
           <h1 style={{ fontSize: "1.4rem", margin: 0 }}>Skills Search</h1>
@@ -23,7 +62,8 @@ export default function App() {
           Describe the agent skill you need, in plain English.
         </p>
       </header>
-      <main>
+      {/* `tabIndex={-1}`: o `#results` recebe foco pelo skip link sem entrar na ordem de tabulação. */}
+      <main id="results" tabIndex={-1}>
         <Routes>
           <Route path="/" element={<SearchPage />} />
           <Route path="/results" element={<ResultsPage />} />

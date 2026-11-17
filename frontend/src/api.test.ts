@@ -45,10 +45,10 @@ describe("messageForCode", () => {
   });
 
   it("appends the retry delay only for RATE_LIMITED with a positive value", () => {
-    expect(messageForCode("RATE_LIMITED", 30)).toBe("Too many requests. Try again in 30 seconds.");
-    expect(messageForCode("RATE_LIMITED", 1)).toBe("Too many requests. Try again in 1 second.");
-    expect(messageForCode("RATE_LIMITED", 0)).toBe("Too many requests.");
-    expect(messageForCode("RATE_LIMITED", null)).toBe("Too many requests.");
+    expect(messageForCode("RATE_LIMITED", 30)).toBe("Too many searches. Try again in 30 seconds.");
+    expect(messageForCode("RATE_LIMITED", 1)).toBe("Too many searches. Try again in 1 second.");
+    expect(messageForCode("RATE_LIMITED", 0)).toBe("Too many searches.");
+    expect(messageForCode("RATE_LIMITED", null)).toBe("Too many searches.");
   });
 });
 
