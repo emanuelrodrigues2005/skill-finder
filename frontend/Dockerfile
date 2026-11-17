@@ -23,9 +23,15 @@ RUN pnpm build
 
 FROM nginx:1.27-alpine AS runtime
 
+# `nginx:1.27-alpine` é BusyBox: `groupadd`/`useradd` (style Debian) não existem —
+# usar `addgroup`/`adduser` com as flags equivalentes:
+#   -S  usuário/grupo de sistema (sem entrada de senha)
+#   -D  sem senha
+#   -H  sem home
+#   -G  grupo primário
 RUN rm -f /etc/nginx/conf.d/default.conf \
-    && groupadd --gid 10001 app \
-    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app \
+    && addgroup -g 10001 -S app \
+    && adduser -u 10001 -S -D -H -G app -s /sbin/nologin app \
     && chown -R 10001:10001 /var/cache/nginx /var/log/nginx
 
 COPY nginx.conf /etc/nginx/nginx.conf
