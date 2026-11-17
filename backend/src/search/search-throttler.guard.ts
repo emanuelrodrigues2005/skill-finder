@@ -124,17 +124,5 @@ export class SearchThrottlerGuard extends ThrottlerGuard {
     });
   }
 
-  /** Primeiro valor não vazio do header, sem nunca cair para o `X-Forwarded-For`. */
-  private headerValue(headers: unknown, name: string): string | null {
-    if (typeof headers !== 'object' || headers === null) {
-      return null;
-    }
-    const value: unknown = (headers as Record<string, unknown>)[name];
-    const first = Array.isArray(value) ? (value as unknown[])[0] : value;
-    if (typeof first !== 'string') {
-      return null;
-    }
-    const trimmed = first.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
+
 }
