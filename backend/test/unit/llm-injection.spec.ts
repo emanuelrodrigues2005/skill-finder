@@ -52,7 +52,7 @@ const CATEGORIES: readonly CategoryItem[] = [
 ];
 
 const HOSTILE_SKILL_MD = readFileSync(
-  join(__dirname, 'fixtures', 'injection', 'skill.md'),
+  join(__dirname, '..', 'fixtures', 'injection', 'skill.md'),
   'utf8',
 ).trim();
 
@@ -297,7 +297,10 @@ describe('prompt injection resilience (AGENTS.md rule 2, arquitetura 8.3)', () =
   });
 
   it('I. drops the fake ranking JSON the model could answer with', () => {
-    const raw = readFileSync(join(__dirname, 'fixtures', 'injection', 'model-response.json'), 'utf8');
+    const raw = readFileSync(
+      join(__dirname, '..', 'fixtures', 'injection', 'model-response.json'),
+      'utf8',
+    );
     const payload = JSON.parse(raw) as Record<string, unknown>;
 
     // A fixture é hostil de verdade: sem estas chaves o caso seria vazio.
@@ -326,7 +329,7 @@ describe('prompt injection resilience (AGENTS.md rule 2, arquitetura 8.3)', () =
   });
 
   it('J. SKILL.md stays out of the system prompt', () => {
-    const llmDir = join(__dirname, '..', 'src', 'llm');
+    const llmDir = join(__dirname, '..', '..', 'src', 'llm');
     const sources = readdirSync(llmDir).filter((file) => file.endsWith('.ts'));
     expect(sources.length).toBeGreaterThan(0);
 

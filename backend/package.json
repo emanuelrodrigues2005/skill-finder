@@ -76,7 +76,9 @@
       "ts"
     ],
     "rootDir": ".",
-    "testRegex": ".*\\.spec\\.ts$",
+    "testMatch": [
+      "<rootDir>/test/unit/**/*.spec.ts"
+    ],
     "testEnvironment": "node",
     "transform": {
       "^.+\\.ts$": [
@@ -97,11 +99,6 @@
     ],
     "moduleNameMapper": {
       "^@/(.*)$": "<rootDir>/src/$1"
-    },
-    "collectCoverageFrom": [
-      "src/**/*.ts",
-      "!src/main.ts"
-    ],
-    "coverageDirectory": "coverage"
+    }
   }
 }

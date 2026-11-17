@@ -30,13 +30,32 @@ for (const [key, value] of Object.entries(TEST_ENV)) {
 // contém "localhost" e abriria socket real, mentindo sobre a regra 5.
 const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
-function isLoopbackHost(host: string): boolean {
-  const candidate = host.includes('://') ? host : `http://${host}`;
+function hostOf(value: string): string | null {
+  const candidate = value.includes('://') ? value : `http://${value}`;
   try {
-    return LOOPBACK_HOSTNAMES.has(new URL(candidate).hostname.toLowerCase());
+    return new URL(candidate).hostname.toLowerCase();
   } catch {
-    return false;
+    return null;
   }
+}
+
+function isLoopbackHost(host: string): boolean {
+  const hostname = hostOf(host);
+  return hostname !== null && LOOPBACK_HOSTNAMES.has(hostname);
+}
+
+// Um `DATABASE_URL` exportado no shell apontando para um banco remoto faria a
+// suíte falar com produção. `nock.disableNetConnect()` não impede isso: o nock
+// intercepta `http(s)`, não `net.Socket`, e o `pg` abre socket cru. A regra 5
+// proíbe dependência externa, não loopback — loopback segue permitido porque o
+// Supertest sobe a aplicação em uma porta local efêmera.
+const DATABASE_URL = process.env.DATABASE_URL;
+if (DATABASE_URL && !isLoopbackHost(DATABASE_URL)) {
+  const host = hostOf(DATABASE_URL) ?? '<invalido>';
+  throw new Error(
+    `DATABASE_URL aponta para "${host}", que nao e loopback. ` +
+      'Os testes nao abrem socket externo (AGENTS.md regra 5): use 127.0.0.1, localhost ou ::1.',
+  );
 }
 
 nock.disableNetConnect();

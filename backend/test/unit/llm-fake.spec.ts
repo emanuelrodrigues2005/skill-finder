@@ -30,7 +30,7 @@ interface FixtureCase {
 }
 
 function loadCases(): FixtureCase[] {
-  const raw = readFileSync(join(__dirname, 'fixtures', 'intents.json'), 'utf8');
+  const raw = readFileSync(join(__dirname, '..', 'fixtures', 'intents.json'), 'utf8');
   return JSON.parse(raw) as FixtureCase[];
 }
 

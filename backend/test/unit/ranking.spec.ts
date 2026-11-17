@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { rank } from '../src/ranking';
-import type { RankingCandidate, RankingWeights, RankedItem } from '../src/ranking';
+import { rank } from '../../src/ranking';
+import type { RankingCandidate, RankingWeights, RankedItem } from '../../src/ranking';
 
 /**
  * Ranking determinístico — `01-spec-produto.md` §5.3–§5.9, `AGENTS.md` regra 1.
@@ -520,7 +520,7 @@ describe('ranking (§5.3–§5.7)', () => {
   });
 
   describe('purity (§5.9, AGENTS.md regra 1)', () => {
-    const rankingDir = path.join(__dirname, '..', 'src', 'ranking');
+    const rankingDir = path.join(__dirname, '..', '..', 'src', 'ranking');
     const forbidden = /axios|fetch\s*\(|Date\.now|Math\.random|process\.env|require\(/;
 
     it('is pure', () => {

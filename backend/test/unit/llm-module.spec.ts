@@ -77,11 +77,14 @@ describe('llm module (docs/app/02-arquitetura.md 3 e 7.4)', () => {
 
   it('the fake is injected by DI, never by env', async () => {
     // (a) `LLM_PROVIDER` nao existe mais no schema de ambiente.
-    const envSource = readFileSync(join(__dirname, '..', 'src', 'config', 'env.schema.ts'), 'utf8');
+    const envSource = readFileSync(
+      join(__dirname, '..', '..', 'src', 'config', 'env.schema.ts'),
+      'utf8',
+    );
     expect(envSource).not.toMatch(/LLM_PROVIDER/);
 
     // (b) nada em `src/llm` le `process.env`: configuracao entra por DI.
-    const llmDir = join(__dirname, '..', 'src', 'llm');
+    const llmDir = join(__dirname, '..', '..', 'src', 'llm');
     const sources = readdirSync(llmDir, { recursive: true }).filter(
       (entry): entry is string => typeof entry === 'string' && entry.endsWith('.ts'),
     );
