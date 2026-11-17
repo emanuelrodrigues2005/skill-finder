@@ -13,10 +13,20 @@ export interface LlmTokens {
   completion: number;
 }
 
-/** `status`: ok | timeout | http_error | invalid_json | invalid_ids | disabled. */
+/** `openapi.yaml` › components.schemas.LlmInfo.properties.status.enum — exactly these seven. */
+export type LlmStatus =
+  | "ok"
+  | "cached"
+  | "repaired"
+  | "invalid_ids"
+  | "low_confidence"
+  | "unavailable"
+  | "disabled";
+
 export interface Llm {
-  status: string;
-  model: string;
+  status: LlmStatus;
+  /** null without a provider call. */
+  model: string | null;
   cached: boolean;
   tokens: LlmTokens | null;
 }
@@ -25,16 +35,16 @@ export type DegradedReason = "source_stale" | "llm_unavailable";
 
 export interface SearchData {
   source: string;
-  catalog_snapshot: string | null;
-  age_seconds: number | null;
+  catalog_snapshot: string;
+  age_seconds: number;
   degraded: boolean;
   degraded_reason: DegradedReason | null;
 }
 
 export interface ScoreBreakdown {
-  stars: number | null;
-  vulnerabilities: number | null;
-  installs: number | null;
+  stars: number;
+  vulnerabilities: number;
+  installs: number;
   missing_fields: number;
   penalty_factor: number;
 }
@@ -45,15 +55,18 @@ export interface EvidenceCompleteness {
   penalty_factor: number;
 }
 
+/** `openapi.yaml` › components.schemas.SkillSummary.properties.security_status.enum — exactly four. */
+export type SecurityStatus = "ok" | "warn" | "fail" | "unknown";
+
 export interface SkillSummary {
   skill_id: string;
   name: string;
-  source_url: string;
-  category: string;
+  source_url: string | null;
+  category: string | null;
   stars: number | null;
   installs: number | null;
   vulnerability_count: number | null;
-  security_status: string;
+  security_status: SecurityStatus;
   skill_md_present: boolean;
 }
 
@@ -65,6 +78,7 @@ export interface ResultItem {
   skill: SkillSummary;
   explanation: string;
   flags: string[];
+  caveats: string | null;
 }
 
 export interface Recommendation {
@@ -92,7 +106,7 @@ export interface Category {
 export interface CategoriesResponse {
   request_id: string;
   data: Category[];
-  data_snapshot: string | null;
+  data_snapshot: string;
 }
 
 export interface Pagination {
@@ -112,15 +126,23 @@ export interface SkillDetail extends SkillSummary {
   summary: string | null;
   repo_url: string | null;
   skill_md_excerpt: string | null;
+  /** RFC 3339 (`date-time`) of the catalog snapshot; `null` when never ingested. */
+  data_snapshot: string | null;
+}
+
+/** `openapi.yaml` › components.schemas.SkillDetailResponse — the envelope `getSkill` returns. */
+export interface SkillDetailResponse {
+  request_id: string;
+  data: SkillDetail;
 }
 
 export interface ErrorEnvelope {
-  request_id: string;
+  request_id: string | null;
   error: {
     code: string;
     message: string;
     details: Record<string, unknown>;
-    retry_after_seconds?: number;
+    retry_after_seconds?: number | null;
   };
 }
 

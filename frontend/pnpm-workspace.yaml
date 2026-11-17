@@ -5,3 +5,7 @@
 # `vite build` falha com "esbuild: command not found".
 allowBuilds:
   esbuild: true
+  # O `postinstall` do msw só imprime um lembrete de `msw init`; o `msw/node` da
+  # suíte (issue #29) não depende dele. Negado de propósito, para o `pnpm install`
+  # não parar com ERR_PNPM_IGNORED_BUILDS nem rodar script de terceiro à toa.
+  msw: false

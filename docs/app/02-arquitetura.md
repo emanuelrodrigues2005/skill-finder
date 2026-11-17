@@ -300,7 +300,7 @@ Regras do contrato:
 }
 ```
 
-`GET /api/v1/skills/{skill_id}` → `200` inclui `summary`, `repo_url`, `security_status`, `skill_md_present` e `skill_md_excerpt` (≤ 600 caracteres, sem markdown cru).
+`GET /api/v1/skills/{skill_id}` → `200` inclui `summary`, `repo_url`, `security_status`, `skill_md_present`, `skill_md_excerpt` (≤ 600 caracteres, sem markdown cru) e `data_snapshot` (RFC 3339 UTC do snapshot do catálogo; `null` quando nunca houve ingestão).
 
 `GET /api/v1/searches/{request_id}` → mesma forma do `POST /search`, com `llm.cached=true`; `410 Gone` quando o histórico expirou (30 dias).
 
@@ -523,7 +523,7 @@ Barreiras, em ordem de execução:
 
 | Escopo | Limite default | Implementação | Resposta |
 | --- | --- | --- | --- |
-| Por cliente (`sha256(ip + salt)`) | 10 buscas/min e 60/dia | Token bucket em memória, janela deslizante | `429 RATE_LIMITED` + `Retry-After` |
+| Por cliente (`sha256(salt:ip)`) | 10 buscas/min e 60/dia | Contador de hits por janela (`@nestjs/throttler`), em memória | `429 RATE_LIMITED` + `Retry-After` |
 | Global de chamadas à LLM | 500/dia (`LLM_DAILY_CALL_BUDGET`) | Contador no processo + `llm_cache` | Degrada para template, `llm.status="unavailable"` |
 | Chamadas ao skills.sh | 1 req/s, 4 ciclos/dia, só no ingestor | `SKILL_SOURCE_RPS` + agendador | `ingest_run` `partial`, sem impacto no usuário |
 | `POST /admin/ingest` | 1 por 5 min | Lock em `ingest_run` | `409` |

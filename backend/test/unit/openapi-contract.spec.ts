@@ -31,7 +31,7 @@ import { PrismaService } from '@/prisma/prisma.service';
  * um dublê: o teste não abre socket para o Postgres e o
  * `nock.disableNetConnect()` do `test/setup.ts` continua valendo.
  */
-const OPENAPI_ARTIFACT = resolve(__dirname, '..', '..', 'openapi.yaml');
+const OPENAPI_ARTIFACT = resolve(__dirname, '..', '..', '..', 'openapi.yaml');
 
 const ERROR_ENVELOPE_REF = '#/components/schemas/ErrorEnvelope';
 

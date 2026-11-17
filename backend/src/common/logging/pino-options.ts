@@ -37,6 +37,12 @@ export const REDACT_PATHS: string[] = [
   '*.api_key',
   '*.token',
   '*.authorization',
+  // O erro do axios carrega a requisição inteira, header `authorization`
+  // incluído: `*.authorization` não alcança `config.headers.authorization`
+  // (três níveis), então os caminhos explícitos abaixo são obrigatórios.
+  'err.config.headers.authorization',
+  '*.config.headers.authorization',
+  '*.headers.authorization',
   '*.llmApiKey',
   '*.databaseUrl',
   '*.ipHashSalt',
@@ -59,6 +65,21 @@ export function pinoHttpOptions(env: Env): PinoHttpOptions {
     customAttributeKeys: { responseTime: 'latency_ms' },
     redact: { censor: REDACTED, paths: REDACT_PATHS },
     genReqId: (request) => requestIdOf(request) ?? newRequestId(),
+    // O permalink é **capability URL**: o `request_id` no path é a credencial.
+    // O serializer padrão do pino-http loga `url` (e o Express expõe `params`),
+    // o que colocaria essa credencial no log de acesso. A rota normalizada já
+    // está em `customProps.route`, então `url`/`params` saem; `headers` fica,
+    // porque a redação de §8.5 é justamente sobre eles.
+    serializers: {
+      req: (request: LoggedRequest) => ({
+        id:
+          typeof request.id === 'string'
+            ? request.id
+            : (requestIdOf(request) ?? 'unknown'),
+        method: request.method,
+        headers: request.headers,
+      }),
+    },
     customProps: (request, response) => ({
       service: SERVICE_NAME,
       request_id: requestIdOf(request) ?? 'unknown',
@@ -77,6 +98,14 @@ export function pinoHttpOptions(env: Env): PinoHttpOptions {
 function requestRoute(request: object): string {
   const route = (request as { route?: { path?: string } }).route;
   return route?.path ?? 'unmatched';
+}
+
+/** Forma que o {@link pinoHttpOptions} enxerga de um `req` no serializer. */
+interface LoggedRequest {
+  readonly id?: unknown;
+  readonly requestId?: unknown;
+  readonly method?: unknown;
+  readonly headers?: unknown;
 }
 
 function requestIdOf(request: object): string | undefined {

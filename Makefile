@@ -10,13 +10,31 @@ PROFILE ?= dev
 API_SERVICE := $(if $(filter prod,$(PROFILE)),api,api-dev)
 API_RUN := $(COMPOSE) --profile $(PROFILE) run --rm $(API_SERVICE)
 
-.PHONY: bootstrap up down logs migrate seed test lint config help \
-        preflight lockfile openapi openapi-check
+# Postgres descartável do nível de integração. Porta 55432 para não colidir com a
+# 5432 do compose de dev — e credenciais próprias, que não são segredo: o
+# container escuta só em 127.0.0.1 e o volume morre com `make db-test-down`.
+DB_TEST_NAME := skills-db-test
+DB_TEST_PORT ?= 55432
+DB_TEST_IMAGE := postgres:16-alpine
+DB_TEST_URL ?= postgresql://skills:skills@127.0.0.1:$(DB_TEST_PORT)/skills_test
+
+.PHONY: bootstrap up down logs migrate seed test test-web test-integration test-all \
+        test-coverage offline-check db-test-up db-test-down migrate-test \
+        lint config help preflight lockfile openapi openapi-check
 
 help:
-	@echo "alvos: bootstrap | up | down | logs | migrate | seed | test | lint | config | openapi | openapi-check"
+	@echo "alvos: bootstrap | up | down | logs | migrate | seed | test | test-web | lint | config | openapi | openapi-check"
+	@echo "       test-integration | test-all | test-coverage | offline-check | db-test-up | db-test-down | migrate-test"
 	@echo "  bootstrap  gera pnpm-lock.yaml (exige Node 22 nativo no WSL e rede)"
 	@echo "  up         sobe postgres + API + web no profile $(PROFILE)"
+	@echo "  test       unit + api (sem Docker; é o gate rápido)"
+	@echo "  test-web   roda a suíte do frontend (Vitest + Testing Library + MSW)"
+	@echo "  test-integration  nível de integração contra Postgres real em 127.0.0.1:$(DB_TEST_PORT)"
+	@echo "  test-all   test + test-integration (os três níveis)"
+	@echo "  test-coverage  três níveis com cobertura do domínio e JUnit em backend/coverage/"
+	@echo "  offline-check  prova que unit + api passam sem rede (unshare -rn + canário + anti-skip)"
+	@echo "  db-test-up | db-test-down  sobe/derruba o Postgres descartável de teste"
+	@echo "  migrate-test  aplica as migrations no banco de teste"
 	@echo "  openapi    regenera openapi.yaml a partir dos decorators do backend"
 	@echo "  openapi-check  falha quando openapi.yaml diverge do documento gerado"
 
@@ -75,6 +93,57 @@ seed:
 test: preflight
 	$(PNPM) test
 	$(PNPM) test:e2e
+
+# Postgres descartável do nível de integração. Idempotente: se o container já
+# existe, só o inicia; a espera é `pg_isready` em laço (nunca `sleep` fixo).
+# O Jest NUNCA sobe Docker: quem orquestra é o make, e o harness em
+# `backend/test/integration/db.ts` só consome a URL já de pé.
+db-test-up:
+	@docker inspect $(DB_TEST_NAME) >/dev/null 2>&1 || docker run -d --name $(DB_TEST_NAME) -e POSTGRES_USER=skills -e POSTGRES_PASSWORD=skills -e POSTGRES_DB=skills_test -p 127.0.0.1:$(DB_TEST_PORT):5432 $(DB_TEST_IMAGE)
+	@docker start $(DB_TEST_NAME) >/dev/null 2>&1 || true
+	@i=0; until docker exec $(DB_TEST_NAME) pg_isready -U skills -d skills_test >/dev/null 2>&1; do \
+	  i=$$((i + 1)); \
+	  if [ "$$i" -ge 30 ]; then \
+	    echo "ERRO: o Postgres de teste nao ficou pronto em 30s ($(DB_TEST_NAME))."; \
+	    echo "      Veja 'docker logs $(DB_TEST_NAME)' e 'make db-test-down' para recriar."; \
+	    exit 1; \
+	  fi; \
+	  sleep 1; \
+	done; \
+	echo "db-test: pronto em 127.0.0.1:$(DB_TEST_PORT) (banco skills_test)"
+
+db-test-down:
+	@docker rm -f -v $(DB_TEST_NAME) >/dev/null 2>&1 || true
+	@echo "db-test: container $(DB_TEST_NAME) e volume anonimo removidos (se existiam)"
+
+# `migrate deploy` é idempotente e não usa o `--schema` do dev: a URL vem do
+# ambiente, então o mesmo alvo serve para o banco descartável.
+migrate-test: db-test-up
+	DATABASE_URL=$(DB_TEST_URL) $(PNPM) prisma:deploy
+
+# O banco é pré-requisito do make, não do teste: se estiver ausente, db.ts lança
+# com "rode make db-test-up" — banco ausente é vermelho, nunca verde.
+test-integration: preflight migrate-test
+	TEST_DATABASE_URL=$(DB_TEST_URL) $(PNPM) test:integration
+
+# Os três níveis. `test` continua sem Docker de propósito: é o gate rápido.
+test-all: test test-integration
+
+# Cobertura dos três níveis: unit + integração + api, com JUnit XML em
+# `backend/coverage/`. O nível api carrega `@scalar` (ESM-only), daí o
+# `NODE_OPTIONS=--experimental-vm-modules` dentro do script `test:cov`.
+test-coverage: preflight migrate-test
+	$(PNPM) test:cov
+
+# Prova de offline, não declaração: netns sem rede (`unshare -rn`), canário que
+# reprova se a rede estiver alcançável e anti-skip sobre o `--json` do Jest.
+offline-check: preflight
+	bash backend/test/offline/offline-check.sh
+
+# Suíte de UI do frontend (Vitest + jsdom + Testing Library + MSW). Fica **fora** de `test`
+# de propósito: o gate do backend continua rápido e a F4 orquestra `test` + `test-web`.
+test-web: preflight
+	pnpm --dir frontend test
 
 lint: preflight
 	$(PNPM) lint

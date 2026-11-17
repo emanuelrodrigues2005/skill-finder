@@ -74,21 +74,20 @@ describe('health, readiness and metrics (e2e)', () => {
     expect(readyz.headers['cache-control']).toBe('no-cache, no-store, must-revalidate');
   });
 
-  it('mounts none of the contract routes before F2.4 (D0)', async () => {
-    // O contrato v0 documenta rotas que o runtime ainda nao serve: se um
-    // controller de src/contract vazar para o AppModule, estes caminhos
-    // respondem 500 (o handler contractOnly lanca) em vez de 404.
-    const contractRoutes = [
-      ['post', '/api/v1/search'],
-      ['get', '/api/v1/searches/req_01JCV8Y6Q4'],
-      ['get', '/api/v1/categories'],
-      ['get', '/api/v1/skills'],
-      ['get', '/api/v1/skills/sk_01JCV8Y6Q4'],
+  it('still mounts none of the two admin routes (D0, reduced by D-E)', async () => {
+    // D0 nasceu exigindo 404 nos sete caminhos do contrato v0. A F2.6 (D-E)
+    // monta os cinco públicos — quem prova que eles respondem é o D0
+    // *invertido* de `search.e2e-spec.ts`. O que sobra aqui, reduzido e não
+    // apagado, é o que continua fora do runtime até a F2.9: os dois de admin
+    // dependem de `X-Admin-Token`, orquestração de ingestão e lock. Se um
+    // controller de src/contract vazar para o AppModule, eles passam a
+    // responder 500 (o handler `contractOnly` lança) em vez de 404.
+    const adminRoutes = [
       ['post', '/api/v1/admin/ingest'],
       ['get', '/api/v1/admin/ingest/runs'],
     ] as const;
 
-    for (const [method, path] of contractRoutes) {
+    for (const [method, path] of adminRoutes) {
       const response =
         method === 'post'
           ? await request(app.getHttpServer()).post(path).expect(404)

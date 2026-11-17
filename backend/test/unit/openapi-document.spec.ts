@@ -55,7 +55,7 @@ jest.mock('@scalar/nestjs-api-reference', () => {
   };
 });
 
-const OPENAPI_ARTIFACT = resolve(__dirname, '..', '..', 'openapi.yaml');
+const OPENAPI_ARTIFACT = resolve(__dirname, '..', '..', '..', 'openapi.yaml');
 
 /** As dez rotas do contrato v0: sete sob o prefixo, três na raiz (`PUBLIC_ROUTES`). */
 const EXPECTED_PATHS = [

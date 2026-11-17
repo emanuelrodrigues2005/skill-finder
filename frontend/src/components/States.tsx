@@ -1,4 +1,6 @@
-/** Estados reutilizáveis: loading, empty e error (com `request_id`). */
+/** Estados reutilizáveis: loading, empty e error (com `code` e `request_id`). */
+
+import { CopyText } from "./CopyText";
 
 interface LoadingStateProps {
   label?: string;
@@ -32,18 +34,28 @@ export function EmptyState({
 interface ErrorStateProps {
   message: string;
   requestId?: string | null;
+  /**
+   * Código que a tela usou para escolher `message` (`describeApiError`). É diagnóstico: a
+   * mensagem já é a do mapa de código, nunca o texto do servidor.
+   */
+  code?: string | null;
   onRetry?: () => void;
 }
 
-export function ErrorState({ message, requestId, onRetry }: ErrorStateProps) {
+export function ErrorState({ message, requestId, code = null, onRetry }: ErrorStateProps) {
   return (
     <div role="alert" style={{ border: "1px solid #f87171", padding: "1rem", borderRadius: 8 }}>
       <p style={{ margin: 0, fontWeight: 600 }}>Something went wrong</p>
       <p style={{ margin: "0.5rem 0 0" }}>{message}</p>
-      {requestId ? (
-        <p style={{ margin: "0.5rem 0 0", fontFamily: "monospace", fontSize: "0.85rem" }}>
-          request_id: {requestId}
+      {code === null ? null : (
+        <p style={{ margin: "0.5rem 0 0", fontSize: "0.85rem", color: "#475569" }}>
+          code: <code>{code}</code>
         </p>
+      )}
+      {requestId ? (
+        <div style={{ marginTop: "0.5rem" }}>
+          <CopyText label="request_id" value={requestId} />
+        </div>
       ) : null}
       {onRetry ? (
         <button type="button" onClick={onRetry} style={{ marginTop: "0.75rem" }}>

@@ -61,6 +61,8 @@ junit*.xml
 
 # ---------- Node / frontend ----------
 node_modules/
+# artefatos do Jest: relatório JUnit e relatório de cobertura (`make test-coverage`)
+backend/coverage/
 dist/
 build/
 .vite/
@@ -95,3 +97,8 @@ desktop.ini
 # saídas brutas da extração/validação do PDF (ficam em _tools/)
 _tools/*.txt
 _tools/*.zip
+
+# log do gerador do openapi (scripts/dev/gen-openapi.sh)
+.gen.log
+.fe-check.log
+.fe-test.log
