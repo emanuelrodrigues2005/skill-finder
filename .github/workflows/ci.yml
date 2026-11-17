@@ -49,6 +49,10 @@ on:
 # resultado de teste como check run).
 permissions:
   contents: read
+  # `pull-requests: read` é o mínimo para o gitleaks listar os commits do PR
+  # (`GET /repos/{owner}/{repo}/pulls/{n}/commits`). Sem isso a action morre com
+  # 403 "Resource not accessible by integration" — foi o que o primeiro run mostrou.
+  pull-requests: read
 
 # Um run por ref; push novo cancela o anterior. Economiza runner e evita que um
 # commit antigo termine verde depois de um mais novo.
@@ -63,7 +67,7 @@ defaults:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -102,7 +106,7 @@ jobs:
         run: pnpm --dir frontend lint
 
   typecheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -153,7 +157,7 @@ jobs:
   # aponta `DATABASE_URL`/`TEST_DATABASE_URL` para a 55432 e `db.ts` reprova
   # (nunca pula) quando o banco falta.
   test-unit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
@@ -234,7 +238,7 @@ jobs:
   # porta externa. Não precisa de banco — `test/setup.ts` deixa tudo em memória
   # e o `nock` só libera loopback.
   test-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -264,7 +268,7 @@ jobs:
   # 55432: o default do harness (`backend/test/integration/db.ts`) é
   # `postgresql://skills:skills@127.0.0.1:55432/skills_test`.
   test-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
@@ -325,7 +329,7 @@ jobs:
   # Suíte de UI: Vitest + jsdom + MSW, sem rede. Fora do job do backend de
   # propósito — são projetos independentes, com lockfile e cache próprios.
   test-web:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -361,7 +365,7 @@ jobs:
   # importam foram mantidos e um foi endurecido — o diff é contra `HEAD`, então
   # um `git add openapi.yaml` não deixa o gate verde antes do commit.
   contract:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -409,7 +413,7 @@ jobs:
   # só para orgs no GitHub). Se a action pedir licença no run real, o plano B é o
   # binário oficial em container (`zricethezav/gitleaks`), sem action no meio.
   secrets:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout

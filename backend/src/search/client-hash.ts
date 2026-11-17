@@ -42,7 +42,7 @@ export function resolveClientIp(request: {
   ip?: string | undefined;
 }): string {
   const raw = request.headers?.['x-real-ip'];
-  const header = Array.isArray(raw) ? raw[0] : raw;
+  const header = Array.isArray(raw) ? (raw as unknown[])[0] : raw;
   if (typeof header === 'string' && header.trim() !== '') {
     return header.trim();
   }

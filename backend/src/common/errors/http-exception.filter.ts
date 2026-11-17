@@ -75,6 +75,13 @@ const ALLOWED_DETAIL_KEYS: readonly string[] = [
  * `{request_id, error: {code, message, details}}`. Stack trace vai para o log,
  * nunca para a resposta.
  */
+/**
+ * `HttpStatus` é um enum; comparar `number` com membro de enum é o que a regra
+ * `no-unsafe-enum-comparison` reprova. A constante nomeada diz o que o número
+ * significa e mantém a comparação entre dois `number`.
+ */
+const SERVER_ERROR_FLOOR: number = HttpStatus.INTERNAL_SERVER_ERROR;
+
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
@@ -86,7 +93,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const normalized = normalize(exception);
     const requestId = request.requestId ?? headerAsString(response.getHeader(REQUEST_ID_HEADER));
 
-    if (normalized.status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+    if (normalized.status >= SERVER_ERROR_FLOOR) {
       this.logger.error(
         `${normalized.code} on ${request.method} ${request.originalUrl ?? request.url}`,
         exception instanceof Error ? exception.stack : undefined,
@@ -185,7 +192,7 @@ function messageText(message: unknown, status: number): string {
   if (Array.isArray(message) && message.length > 0) {
     return 'Request body failed validation.';
   }
-  return status >= HttpStatus.INTERNAL_SERVER_ERROR ? 'Internal server error.' : 'Request failed.';
+  return status >= SERVER_ERROR_FLOOR ? 'Internal server error.' : 'Request failed.';
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

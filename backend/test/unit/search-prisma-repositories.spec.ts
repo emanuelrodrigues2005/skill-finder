@@ -22,7 +22,7 @@
  */
 import type { PrismaClient } from '@prisma/client';
 
-import type { SkillDetail, SkillSummary } from '@/contract/dto/catalog.dto';
+import type { SkillDetail } from '@/contract/dto/catalog.dto';
 import type { Intent } from '@/contract/dto/search-response.dto';
 import { PrismaSearchCatalogRepository } from '@/search/prisma-search-catalog.repository';
 import { PrismaSearchStoreRepository } from '@/search/prisma-search-store.repository';
@@ -146,7 +146,7 @@ describe('PrismaSearchCatalogRepository — recuperação', () => {
     prisma.queryRows = [row({ id: 7n })];
 
     const found = await repo.search({ query: 'find skills', category: null, limit: 5 });
-    const [item] = found as readonly SkillSummary[];
+    const [item] = found;
 
     expect(found).toHaveLength(1);
     expect(item?.skill_id).toBe(encodeSkillId(7n));

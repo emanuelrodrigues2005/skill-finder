@@ -220,7 +220,7 @@ describe('ranking (§5.3–§5.7)', () => {
 
       // `as RankingCandidate[]`: a interface promete consumir, não alterar; o
       // `freeze` transforma uma escrita indevida em exceção.
-      const ranked = rank(frozen as RankingCandidate[]);
+      const ranked = rank(frozen);
 
       expect(JSON.stringify(ranked)).toBe(reference);
       expect(order(ranked)).toEqual(order(rank(GOLDEN)));

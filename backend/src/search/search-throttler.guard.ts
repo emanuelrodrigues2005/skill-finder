@@ -43,7 +43,6 @@ import { clientHash, resolveClientIp } from './client-hash';
 const RATE_LIMITED_MESSAGE = 'Too many searches from this client. Try again later.';
 
 /** Cabeçalho que o nginx grava com `$remote_addr` (nunca o `X-Forwarded-For`). */
-const REAL_IP_HEADER = 'x-real-ip';
 
 @Injectable()
 export class SearchThrottlerGuard extends ThrottlerGuard {
