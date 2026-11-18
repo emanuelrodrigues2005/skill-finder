@@ -61,7 +61,10 @@ const baseEnvSchema = z.object({
   LLM_TOTAL_DEADLINE_MS: z.coerce.number().int().positive().default(DEFAULT_LLM_TOTAL_DEADLINE_MS),
 
   // --- catalog source (skills.sh) ---
-  SKILL_SOURCE_KIND: z.enum(['json', 'html', 'fixture']).default('fixture'),
+  // #47: `json` saiu — não existe endpoint JSON público (`/api/` é proibido pelo
+  // robots do site; D3 em `docs/app/amostras/README.md`). As fontes reais são o
+  // adaptador `html` e a fixture congelada.
+  SKILL_SOURCE_KIND: z.enum(['html', 'fixture']).default('fixture'),
   SKILL_SOURCE_BASE_URL: z.string().min(1).optional(),
   SKILL_SOURCE_RPS: z.coerce.number().positive().default(1),
 
