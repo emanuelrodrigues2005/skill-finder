@@ -14,9 +14,21 @@
  * determinístico e sem rede, no lugar do que a LLM faria.
  *
  * `model` e `tokens` são `null`: nenhum provedor foi chamado.
+ *
+ * Issue #41: o mesmo arquivo traz o `FakeExplainParser`, determinístico e também
+ * sem rede — a explicação sai dos campos do próprio candidato, com o nome sempre
+ * por `{{skill:<id>}}` (a regra do §6.5), para a demo e o CI exercitarem o passo 7
+ * sem um provedor de verdade.
  */
 import type { Intent } from '@/contract/dto/search-response.dto';
 
+import {
+  skippedExplain,
+  type ExplainCandidate,
+  type ExplainParser,
+  type ExplainRequest,
+  type ExplainResult,
+} from './explain-parser';
 import { sha256Hex } from './intent-cache';
 import { lexicalIntent, MAX_KEYWORDS } from './intent-schema';
 import type { IntentParser, IntentParserResult } from './intent-parser';
@@ -232,4 +244,76 @@ function cloneIntent(intent: Intent): Intent {
     language: intent.language,
     confidence: intent.confidence,
   };
+}
+
+/** Dado ausente é `n/a`, nunca zero (regra 3 do `AGENTS.md`). */
+function formatNumber(value: number | null): string {
+  return value === null ? 'n/a' : String(value);
+}
+
+/**
+ * O porquê determinístico de um candidato (issue #41).
+ *
+ * Só campos do próprio candidato, e o nome sempre por `{{skill:<id>}}` — o texto
+ * não escreve nome de skill, exatamente como o §6.5 exige da LLM de produção.
+ */
+function fakeWhy(candidate: ExplainCandidate): string {
+  const category = candidate.category ?? 'n/a';
+  return (
+    `{{skill:${candidate.skill_id}}} atende ao pedido na categoria ${category}: ` +
+    `${formatNumber(candidate.stars)} stars, ${formatNumber(candidate.installs)} installs e ` +
+    `${formatNumber(candidate.vulnerability_count)} vulnerabilidade(s) reportada(s).`
+  );
+}
+
+/** O aviso de evidência incompleta (≤ 160), ou `null` quando nada falta. */
+function fakeCaveats(candidate: ExplainCandidate): string | null {
+  const missing = [
+    candidate.stars === null ? 'stars' : null,
+    candidate.installs === null ? 'installs' : null,
+    candidate.vulnerability_count === null ? 'vulnerabilities' : null,
+  ].filter((field): field is string => field !== null);
+  if (missing.length === 0) {
+    return null;
+  }
+  const text =
+    `Campos ausentes: ${missing.join(', ')}. A pontuação usa valor neutro e a interface ` +
+    'mostra n/a em vez de zero.';
+  return text.slice(0, 160);
+}
+
+/**
+ * Provedor falso da explicação (issue #41).
+ *
+ * Sem relógio, sem aleatoriedade e sem rede: a mesma lista ranqueada devolve
+ * sempre a mesma prosa. É o que permite a demo e o CI exercitarem o passo 7 sem
+ * provedor de verdade — o teste injeta por `overrideProvider(EXPLAIN_PORT)`.
+ */
+export class FakeExplainParser implements ExplainParser {
+  explain(request: ExplainRequest): Promise<ExplainResult> {
+    const [rank1] = request.candidates;
+    if (rank1 === undefined) {
+      return Promise.resolve(skippedExplain('no_candidates'));
+    }
+
+    return Promise.resolve({
+      items: request.candidates.map((candidate) => ({
+        skill_id: candidate.skill_id,
+        why: fakeWhy(candidate),
+        caveats: fakeCaveats(candidate),
+        repaired: false,
+      })),
+      recommendation: {
+        skill_id: rank1.skill_id,
+        why:
+          `{{skill:${rank1.skill_id}}} é o começo recomendado: lidera o ranking determinístico ` +
+          'desta busca.',
+        repaired: false,
+      },
+      status: 'ok',
+      reason: null,
+      model: null,
+      tokens: null,
+    });
+  }
 }

@@ -92,5 +92,10 @@ function llmOptions(env: Env): LlmModuleOptions {
     model: env.llmModel,
     apiKey: env.llmApiKey,
     timeoutS: env.llmTimeoutS,
+    // Sem esta linha `LLM_TOTAL_DEADLINE_MS` é configuração morta: o schema a lê,
+    // o cliente a aceita, e o default de 7000 mascarava a ausência. Quem subisse
+    // o valor no compose veria o teto de 7 s continuar valendo — no knob que
+    // existe justamente para limitar custo e latência (achado do parecer da #41).
+    totalDeadlineMs: env.llmTotalDeadlineMs,
   };
 }

@@ -12,6 +12,14 @@ import { z } from 'zod';
 
 export const DEFAULT_LLM_BASE_URL = 'https://opencode.ai/inference/go/openai/v1';
 export const DEFAULT_LLM_MODEL = 'deepseek-v4.1-flash';
+/**
+ * Teto de tempo **somado** das chamadas de LLM numa busca (F2.10): intenção
+ * (`min(3000, restante)`) + explicação (`min(4000, restante)`). Estourado, o
+ * passo pendente cai no fallback e a resposta degrada; com menos de 800 ms
+ * restantes a explicação nem é tentada.
+ */
+export const DEFAULT_LLM_TOTAL_DEADLINE_MS = 7_000;
+
 /** Default do `compose.yaml` para a árvore limpa validar sem `.env`; proibido em prod. */
 export const DEV_DEFAULT_DB_PASSWORD = 'skillsdev';
 
@@ -48,6 +56,9 @@ const baseEnvSchema = z.object({
   LLM_API_KEY: z.string().min(1).optional(),
   LLM_ENABLED: booleanFromEnv.default(true),
   LLM_TIMEOUT_S: z.coerce.number().positive().default(8),
+  // F2.10: orçamento total de latência da LLM numa busca. `positive()` porque um
+  // teto de 0 ms faria toda busca degradar sem tentar, em silêncio.
+  LLM_TOTAL_DEADLINE_MS: z.coerce.number().int().positive().default(DEFAULT_LLM_TOTAL_DEADLINE_MS),
 
   // --- catalog source (skills.sh) ---
   SKILL_SOURCE_KIND: z.enum(['json', 'html', 'fixture']).default('fixture'),
@@ -135,6 +146,7 @@ export const envSchema = baseEnvSchema
     llmApiKey: value.LLM_API_KEY,
     llmEnabled: value.LLM_ENABLED,
     llmTimeoutS: value.LLM_TIMEOUT_S,
+    llmTotalDeadlineMs: value.LLM_TOTAL_DEADLINE_MS,
     skillSourceKind: value.SKILL_SOURCE_KIND,
     skillSourceBaseUrl: value.SKILL_SOURCE_BASE_URL,
     skillSourceRps: value.SKILL_SOURCE_RPS,
