@@ -87,8 +87,15 @@ migrate: lockfile
 	$(API_RUN) pnpm prisma:deploy
 
 # TODO(F2.3): virar `pnpm ingest:fixture` quando a ingestão existir.
-seed:
-	@echo "seed: pendente da F2.3 (ingestão pela fixture)"
+# `docker compose run` (não `exec`): o stack não precisa estar de pé, e o volume
+# extra traz a fixture, que não entra na imagem de dev. Dentro do container o workdir
+# já É o pacote backend, então `pnpm seed` (sem `--dir backend`, que o $(PNPM) traz).
+# O Postgres do compose não
+# publica porta no host, então o seed tem de rodar na rede dele.
+seed: migrate
+	$(COMPOSE) --profile $(PROFILE) run --rm \
+	  -v "$(PWD)/backend/test/fixtures:/app/test/fixtures:ro" \
+	  $(API_SERVICE) pnpm seed
 
 test: preflight
 	$(PNPM) test
