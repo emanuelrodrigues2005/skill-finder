@@ -26,6 +26,11 @@ Depois abra **http://localhost:8081** — é a SPA servida pelo nginx, que faz p
 `/api` para a API. A API sozinha fica em **http://localhost:8080** (healthz, readyz,
 metrics e o Scalar em `/docs`).
 
+> **Porta da API.** O compose publica em `127.0.0.1:${API_PORT:-8080}`. Se a 8080 do seu
+> host estiver presa (o Docker Desktop às vezes deixa um proxy órfão — ver a tabela de
+> problemas no fim), crie um `.env` com `API_PORT=8090`. A SPA **não** sente: o nginx fala
+> com a API pela rede interna (`api:8000`), não pela porta publicada.
+
 Conferir que está de pé:
 
 ```bash
@@ -112,6 +117,8 @@ make offline-check     # roda unit+api sem rede, com canário que reprova o pró
 | `503 cache_empty` em toda busca | catálogo vazio | `make seed` |
 | `request to registry.npmjs.org` falha no build | hiccup de rede do BuildKit | repetir `make up`; as camadas ficam em cache |
 | porta 8080/8081 ocupada | stack anterior de pé | `make down` |
+| `address already in use` na 8080 **mesmo após** `make down` | proxy órfão do Docker Desktop: o container da API morreu de forma anormal e o proxy ficou apontando para ele (responde 404 e o `down` não o libera) | `bash scripts/dev/who-holds.sh 8080` confirma; depois `API_PORT=8090` no `.env` (mais simples) ou reiniciar o Docker Desktop |
+| API em `Exited (255)` e não volta | caiu, e o compose não consegue religar por conflito de porta | `bash scripts/dev/restart-clean.sh` |
 
 ## Modo produção (sem hot reload)
 
