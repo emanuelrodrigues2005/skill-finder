@@ -397,12 +397,14 @@ describe('rate limit — rps', () => {
     detailPage(SECOND);
 
     type GetFn = (url: string, config?: Record<string, unknown>) => Promise<unknown>;
-    const original = axios.get as unknown as GetFn;
+    // `.bind`: a regra `unbound-method` esta certa - `axios.get` separado do
+    // objeto perde o `this`.
+    const original = axios.get.bind(axios) as unknown as GetFn;
     const instants: number[] = [];
-    const spy = jest.spyOn(axios, 'get').mockImplementation(((url: string, config?: unknown) => {
+    const spy = jest.spyOn(axios, 'get').mockImplementation((url: string, config?: unknown) => {
       instants.push(fake.now());
       return original(url, config as Record<string, unknown> | undefined);
-    }) as unknown as typeof axios.get);
+    });
 
     try {
       const adapter = createHtmlSource({ baseUrl: BASE, rps: 1, clock: fake.clock });

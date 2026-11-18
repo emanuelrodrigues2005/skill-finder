@@ -325,7 +325,19 @@ function rejectingWithTextSource(text: string): SkillSource {
     capabilities: { supports_categories: false, supports_documents: false },
     listCategories: () => Promise.resolve([]),
     fetchSkills: () => Promise.resolve([]),
-    fetchCatalog: () => Promise.reject(text),
+    // Rejeitar com string (não `Error`) é o CASO TESTADO: a ingestão não pode
+    // depender de a fonte ser bem-comportada. A regra existe para código de
+    // produção, onde rejeitar sem `Error` perde stack; aqui é o vetor.
+    // A fonte LANCA uma string (nao `Error`): a ingestao nao pode depender de a
+    // fonte ser bem-comportada. `prefer-promise-reject-errors` cobre so
+    // `Promise.reject`; o vetor aqui e `throw`, e o efeito no catch e o mesmo.
+    fetchCatalog: () => {
+      // A regra existe para codigo de producao, onde um alvo sem `Error` perde
+      // stack. Aqui a string E o vetor: o teste prova que a ingestao nao depende
+      // de a fonte lancar um `Error` bem formado.
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      throw text;
+    },
     fetchDocument: () => Promise.resolve(null),
   };
 }
