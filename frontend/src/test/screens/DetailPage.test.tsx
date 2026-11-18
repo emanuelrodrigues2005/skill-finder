@@ -43,13 +43,13 @@ describe("DetailPage", () => {
 
     expect(await screen.findByRole("heading", { name: "pdf-extract" })).toBeVisible();
     // Contrato: `stars`, `installs`, `vulnerability_count` e `repo_url` vieram `null`.
-    expect(detailValue("Stars")).toHaveTextContent("n/a");
-    expect(detailValue("Installs")).toHaveTextContent("n/a");
-    expect(detailValue("Vulnerabilities")).toHaveTextContent("n/a");
-    expect(detailValue("Repository")).toHaveTextContent("n/a");
-    expect(detailValue("SKILL.md")).toHaveTextContent("present");
+    expect(detailValue("Estrelas")).toHaveTextContent("n/a");
+    expect(detailValue("Instalações")).toHaveTextContent("n/a");
+    expect(detailValue("Vulnerabilidades")).toHaveTextContent("n/a");
+    expect(detailValue("Repositório")).toHaveTextContent("n/a");
+    expect(detailValue("SKILL.md")).toHaveTextContent("presente");
     // data_snapshot vem em RFC 3339 do contrato; a tela fatia a data (issue #33).
-    expect(detailValue("Snapshot date")).toHaveTextContent("2026-11-15");
+    expect(detailValue("Data do snapshot")).toHaveTextContent("2026-11-15");
 
     const source = screen.getByRole("link", { name: skillDetailFixture.data.source_url });
     expect(source).toHaveAttribute("href", skillDetailFixture.data.source_url);
@@ -69,7 +69,9 @@ describe("DetailPage", () => {
 
     renderDetail();
 
-    expect(await screen.findByText("No full description available for this skill")).toBeVisible();
+    expect(
+      await screen.findByText("Nenhuma descrição completa disponível para esta skill"),
+    ).toBeVisible();
     expect(screen.getByText("SKILL.md: n/a")).toBeVisible();
     expect(detailValue("SKILL.md")).toHaveTextContent("n/a");
   });
@@ -88,7 +90,7 @@ describe("DetailPage", () => {
 
     expect(await screen.findByRole("heading", { name: "pdf-extract" })).toBeVisible();
     // Regra 3: `null` do contrato é `n/a` — a tela nunca inventa uma data.
-    expect(detailValue("Snapshot date")).toHaveTextContent("n/a");
+    expect(detailValue("Data do snapshot")).toHaveTextContent("n/a");
   });
 
   it("keeps the request id on a missing skill", async () => {
@@ -101,7 +103,7 @@ describe("DetailPage", () => {
 
     renderDetail();
 
-    expect(await screen.findByText("Skill not found")).toBeVisible();
+    expect(await screen.findByText("Skill não encontrada")).toBeVisible();
     expect(screen.queryByText(/server said:/)).toBeNull();
     expect(screen.getByLabelText("request_id")).toHaveValue(REQUEST_ID);
   });

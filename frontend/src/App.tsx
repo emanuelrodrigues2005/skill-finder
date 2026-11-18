@@ -3,6 +3,7 @@ import { Link, Navigate, Route, Routes } from "react-router-dom";
 import DetailPage from "./pages/DetailPage";
 import ResultsPage from "./pages/ResultsPage";
 import SearchPage from "./pages/SearchPage";
+import { STR } from "./ui/strings";
 
 /**
  * Foco visível e skip link (issue #28, `docs/app/01-spec-produto.md` §6.6).
@@ -52,15 +53,13 @@ export default function App() {
         todas as telas, então o link nunca aponta para um id inexistente (Search e Detail incluídos).
       */}
       <a className="skip-link" href="#results">
-        Skip to results
+        {STR.app.skipToResults}
       </a>
       <header style={{ marginBottom: "1.5rem" }}>
         <Link to="/" style={{ textDecoration: "none", color: "inherit" }}>
-          <h1 style={{ fontSize: "1.4rem", margin: 0 }}>Skills Search</h1>
+          <h1 style={{ fontSize: "1.4rem", margin: 0 }}>{STR.app.title}</h1>
         </Link>
-        <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>
-          Describe the agent skill you need, in plain English.
-        </p>
+        <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>{STR.app.tagline}</p>
       </header>
       {/* `tabIndex={-1}`: o `#results` recebe foco pelo skip link sem entrar na ordem de tabulação. */}
       <main id="results" tabIndex={-1}>

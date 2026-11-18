@@ -1,12 +1,13 @@
 /** Estados reutilizáveis: loading, empty e error (com `code` e `request_id`). */
 
+import { STR } from "../ui/strings";
 import { CopyText } from "./CopyText";
 
 interface LoadingStateProps {
   label?: string;
 }
 
-export function LoadingState({ label = "Loading…" }: LoadingStateProps) {
+export function LoadingState({ label = STR.states.loading.default }: LoadingStateProps) {
   return (
     <p role="status" aria-live="polite" style={{ color: "#475569" }}>
       {label}
@@ -19,10 +20,7 @@ interface EmptyStateProps {
   hint?: string;
 }
 
-export function EmptyState({
-  message = "no skills matched — try broader wording",
-  hint,
-}: EmptyStateProps) {
+export function EmptyState({ message = STR.states.empty.default, hint }: EmptyStateProps) {
   return (
     <div role="status" style={{ border: "1px dashed #cbd5e1", padding: "1rem", borderRadius: 8 }}>
       <p style={{ margin: 0 }}>{message}</p>
@@ -45,21 +43,21 @@ interface ErrorStateProps {
 export function ErrorState({ message, requestId, code = null, onRetry }: ErrorStateProps) {
   return (
     <div role="alert" style={{ border: "1px solid #f87171", padding: "1rem", borderRadius: 8 }}>
-      <p style={{ margin: 0, fontWeight: 600 }}>Something went wrong</p>
+      <p style={{ margin: 0, fontWeight: 600 }}>{STR.states.error.title}</p>
       <p style={{ margin: "0.5rem 0 0" }}>{message}</p>
       {code === null ? null : (
         <p style={{ margin: "0.5rem 0 0", fontSize: "0.85rem", color: "#475569" }}>
-          code: <code>{code}</code>
+          {STR.common.codeLabel} <code>{code}</code>
         </p>
       )}
       {requestId ? (
         <div style={{ marginTop: "0.5rem" }}>
-          <CopyText label="request_id" value={requestId} />
+          <CopyText label={STR.common.requestIdLabel} value={requestId} />
         </div>
       ) : null}
       {onRetry ? (
         <button type="button" onClick={onRetry} style={{ marginTop: "0.75rem" }}>
-          Try again
+          {STR.states.error.retry}
         </button>
       ) : null}
     </div>

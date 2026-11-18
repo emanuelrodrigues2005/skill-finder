@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { ApiError, describeApiError, getCategories, searchSkills } from "../api";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import { QUERY_MAX_LENGTH, QUERY_MIN_LENGTH, type Category } from "../types";
+import { STR } from "../ui/strings";
 
 /**
  * Rascunho da busca: sobrevive a voltar da tela de resultados e a um reload (US-09 AC2).
@@ -52,7 +53,7 @@ interface Failure {
  * Dica que a tela de resultados manda junto com a navegação de volta (issue #28): as ações do
  * estado vazio mexem no rascunho, e o rascunho mora aqui.
  *
- * `clearCategory` é a ação "Remove the category filter"; `exampleQuery` é "tentar um dos
+ * `clearCategory` é a ação "Remover o filtro de categoria"; `exampleQuery` é "tentar um dos
  * exemplos". É o único caminho pelo qual `/results` altera o formulário — sem a dica, as três
  * ações do vazio seriam só links para `/`.
  */
@@ -153,7 +154,7 @@ export default function SearchPage() {
 
   return (
     <section>
-      <h2 style={{ fontSize: "1.1rem" }}>Search</h2>
+      <h2 style={{ fontSize: "1.1rem" }}>{STR.search.heading}</h2>
 
       {/* Aviso de categorias: irmão do formulário, porque o formulário sempre renderiza. */}
       {categoriesFailure ? (
@@ -164,14 +165,14 @@ export default function SearchPage() {
             requestId={categoriesFailure.requestId}
           />
           <p style={{ margin: "0.5rem 0 0", fontSize: "0.85rem", color: "#475569" }}>
-            You can still search without a category.
+            {STR.search.categoriesUnavailableHint}
           </p>
         </div>
       ) : null}
 
       <form onSubmit={handleSubmit}>
         <label htmlFor="query" style={{ display: "block", fontWeight: 600 }}>
-          What do you need the skill to do?
+          {STR.search.queryLabel}
         </label>
         <textarea
           id="query"
@@ -186,11 +187,11 @@ export default function SearchPage() {
         />
         {/* O contador conta o texto aparado, que é o que o servidor julga. */}
         <p id="query-help" style={{ margin: "0.25rem 0 1rem", color: "#475569" }}>
-          {trimmed.length}/{QUERY_MAX_LENGTH} characters — at least {QUERY_MIN_LENGTH} required.
+          {STR.search.queryCounter(trimmed.length, QUERY_MAX_LENGTH, QUERY_MIN_LENGTH)}
         </p>
 
         <label htmlFor="category" style={{ display: "block", fontWeight: 600 }}>
-          Category (optional)
+          {STR.search.categoryLabel}
         </label>
         <select
           id="category"
@@ -200,7 +201,13 @@ export default function SearchPage() {
           disabled={loadingCategories}
           style={{ marginTop: "0.5rem", padding: "0.4rem" }}
         >
-          <option value="">Any category</option>
+          <option value="">{STR.search.anyCategory}</option>
+          {/*
+            Ilha aceita e comentada: `label_en` NÃO é traduzido. O rótulo de categoria vem do
+            catálogo do skills.sh — é dado de terceiro, mostrado como publicado (AGENTS.md,
+            regra 6). Traduzi-lo aqui inventaria um rótulo que a fonte não tem, e o `value` é o
+            `slug` do contrato, que a busca envia de volta.
+          */}
           {categories.map((item) => (
             <option key={item.slug} value={item.slug}>
               {item.label_en}
@@ -213,12 +220,12 @@ export default function SearchPage() {
         {/* Os dois estados que faltavam na tela de busca (issue #28): carregando e vazio. */}
         {loadingCategories ? (
           <div style={{ marginTop: "0.5rem" }}>
-            <LoadingState label="Loading categories…" />
+            <LoadingState label={STR.states.loading.categories} />
           </div>
         ) : null}
         {!loadingCategories && categoriesFailure === null && categories.length === 0 ? (
           <div style={{ marginTop: "0.5rem" }}>
-            <EmptyState message="no categories available — you can still search without one" />
+            <EmptyState message={STR.states.empty.noCategories} />
           </div>
         ) : null}
 
@@ -234,7 +241,7 @@ export default function SearchPage() {
 
         <div style={{ marginTop: "1.25rem" }}>
           <button type="submit" disabled={!isValid || submitting}>
-            {submitting ? "Searching…" : "Search"}
+            {submitting ? STR.search.submitting : STR.search.submit}
           </button>
         </div>
       </form>

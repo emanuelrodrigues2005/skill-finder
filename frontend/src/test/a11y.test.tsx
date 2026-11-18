@@ -110,7 +110,7 @@ describe("skip link and focus", () => {
     await screen.findByRole("option", { name: "Documents" });
 
     const focusable = tabbables();
-    expect(focusable[0]).toHaveAccessibleName("Skip to results");
+    expect(focusable[0]).toHaveAccessibleName("Ir para os resultados");
     expect(focusable[0]).toHaveAttribute("href", "#results");
     // O alvo existe em qualquer tela: o `main` é onde os resultados aparecem.
     expect(document.getElementById("results")).toBe(document.querySelector("main"));
@@ -131,8 +131,8 @@ describe("skip link and focus", () => {
       "select",
       "button",
     ]);
-    expect(tabbables()[1]).toHaveAccessibleName("Skills Search");
-    expect(tabbables()[4]).toHaveAccessibleName("Search");
+    expect(tabbables()[1]).toHaveAccessibleName("Busca de Skills");
+    expect(tabbables()[4]).toHaveAccessibleName("Buscar");
   });
 
   it("declares a focus-visible outline of at least 2 px and hides the skip link until focused", async () => {
@@ -159,7 +159,7 @@ describe("skip link and focus", () => {
     server.use(http.get(apiUrl(`/searches/${REQUEST_ID}`), () => HttpResponse.json(searchResponse)));
 
     renderAt(`/results?search=${REQUEST_ID}`);
-    await screen.findByRole("heading", { name: "Results" });
+    await screen.findByRole("heading", { name: "Resultados" });
 
     const colors = textColors(document.body);
     expect(colors.length).toBeGreaterThan(0);
@@ -191,9 +191,9 @@ describe("live regions and state roles", () => {
 
     renderAt(`/results?search=${REQUEST_ID}`);
 
-    const region = await screen.findByRole("region", { name: "Results" });
-    // O `<ol>` é o único `list` chamado "Results"; os `<ul>` de razões de cada cartão não têm nome.
-    expect(within(region).getByRole("list", { name: "Results" })).toHaveAttribute(
+    const region = await screen.findByRole("region", { name: "Resultados" });
+    // O `<ol>` é o único `list` chamado "Resultados"; os `<ul>` de razões de cada cartão não têm nome.
+    expect(within(region).getByRole("list", { name: "Resultados" })).toHaveAttribute(
       "aria-live",
       "polite",
     );
@@ -205,7 +205,7 @@ describe("live regions and state roles", () => {
 
     // `CopyText` já mantém uma região `role="status"` (o anúncio da cópia), então o estado vazio é
     // localizado pelo texto e amarrado à região viva que o contém — não por ser a única da tela.
-    const message = await screen.findByText(/no skills matched/);
+    const message = await screen.findByText(/nenhuma skill correspondeu/);
     expect(message.closest('[role="status"]')).not.toBeNull();
   });
 
@@ -218,7 +218,9 @@ describe("live regions and state roles", () => {
 
     renderAt(`/results?search=${REQUEST_ID}`);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong on our side.");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Algo deu errado do nosso lado. Tente de novo.",
+    );
   });
 });
 

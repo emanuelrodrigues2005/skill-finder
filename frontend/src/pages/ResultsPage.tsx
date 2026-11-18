@@ -13,6 +13,7 @@ import type {
   SearchData,
   SearchResponse,
 } from "../types";
+import { STR } from "../ui/strings";
 
 type LoadState =
   | { status: "idle" }
@@ -34,7 +35,7 @@ interface LocationState {
 
 /** Um `null` do contrato vira `n/a` na tela — nunca `0` nem string vazia (AGENTS.md, regra 3). */
 function show(value: string | number | null): string {
-  return value === null ? "n/a" : String(value);
+  return value === null ? STR.common.na : String(value);
 }
 
 /** Casas decimais só na apresentação: o número exibido é o que a API mandou. */
@@ -65,29 +66,33 @@ function evidenceBadge(evidence: EvidenceCompleteness): EvidenceBadge {
   const missing = evidence.missing_fields;
   const confidence = decimals(evidence.penalty_factor, 2);
   if (missing === 0 && evidence.penalty_factor === 1) {
-    return { label: "evidence complete", detail: "no missing catalog fields", tone: "complete" };
+    return {
+      label: STR.results.evidence.completeLabel,
+      detail: STR.results.evidence.completeDetail,
+      tone: "complete",
+    };
   }
   if (missing === 0) {
     return {
-      label: "partial evidence",
-      detail: `no missing fields · confidence ×${confidence}`,
+      label: STR.results.evidence.partialLabel,
+      detail: STR.results.evidence.partialNoMissing(confidence),
       tone: "partial",
     };
   }
   return {
-    label: "partial evidence",
-    detail: `${missing} missing field${missing === 1 ? "" : "s"} · confidence ×${confidence}`,
+    label: STR.results.evidence.partialLabel,
+    detail: STR.results.evidence.partialMissing(missing, confidence),
     tone: "partial",
   };
 }
 
 /** Os três fatores normalizados do `score_breakdown`, exibidos como vieram — nunca refeitos. */
 function factorLine(breakdown: ScoreBreakdown): string {
-  return [
-    `stars ${decimals(breakdown.stars, 2)}`,
-    `installs ${decimals(breakdown.installs, 2)}`,
-    `vulnerabilities ${decimals(breakdown.vulnerabilities, 2)}`,
-  ].join(" · ");
+  return STR.results.card.factors(
+    decimals(breakdown.stars, 2),
+    decimals(breakdown.installs, 2),
+    decimals(breakdown.vulnerabilities, 2),
+  );
 }
 
 /**
@@ -98,43 +103,42 @@ function factorLine(breakdown: ScoreBreakdown): string {
 function reasonsFor(item: ResultItem): string[] {
   const explanation = item.explanation.trim();
   const bullets: string[] = [
-    explanation === "" ? "no explanation was returned for this item" : explanation,
+    explanation === "" ? STR.results.card.noExplanation : explanation,
   ];
-  bullets.push(`score factors — ${factorLine(item.score_breakdown)}`);
+  bullets.push(`${STR.results.card.factorsPrefix} — ${factorLine(item.score_breakdown)}`);
   const caveat = item.caveats?.trim() ?? "";
   if (caveat !== "") {
-    bullets.push(`caveat: ${caveat}`);
+    bullets.push(STR.results.card.caveat(caveat));
   } else if (item.evidence_completeness.missing_fields > 0) {
-    bullets.push(
-      `evidence gap — ${item.evidence_completeness.missing_fields} catalog field(s) missing`,
-    );
+    bullets.push(STR.results.card.evidenceGap(item.evidence_completeness.missing_fields));
   }
   return bullets.slice(0, 3);
 }
 
 /**
- * Motivo da degradação → frase de interface (inglês: AGENTS.md, regra 6). O `Record` completo
+ * Motivo da degradação → frase de interface (pt-BR: AGENTS.md, regra 6). O `Record` completo
  * força uma frase por motivo do enum; `degradedHeadline` cobre o motivo que chegue fora dele.
  */
-const DEGRADED_HEADLINE: Readonly<Record<DegradedReason, string>> = {
-  source_stale: "The catalog snapshot is stale",
-  llm_unavailable: "The language model is unavailable — the intent came from the keyword fallback",
-};
+const DEGRADED_HEADLINE: Readonly<Record<DegradedReason, string>> = STR.results.degraded.headline;
 
 /** Título da faixa: motivo desconhecido (contrato à frente do bundle) nunca deixa o texto vazio. */
 function degradedHeadline(reason: string | null): string {
   const headlines: Readonly<Record<string, string | undefined>> = DEGRADED_HEADLINE;
-  return (reason === null ? undefined : headlines[reason]) ?? "Degraded results";
+  return (reason === null ? undefined : headlines[reason]) ?? STR.results.degraded.fallback;
 }
 
 function Meta({ item }: { item: ResultItem }) {
   const { skill } = item;
   return (
     <p style={{ margin: "0.35rem 0 0", fontSize: "0.8rem", color: "#475569" }}>
-      category {show(skill.category)} · stars {show(skill.stars)} · installs{" "}
-      {show(skill.installs)} · vulns {show(skill.vulnerability_count)} · security{" "}
-      {skill.security_status}
-      {skill.skill_md_present ? "" : " · SKILL.md n/a"}
+      {STR.results.card.meta(
+        show(skill.category),
+        show(skill.stars),
+        show(skill.installs),
+        show(skill.vulnerability_count),
+        skill.security_status,
+        skill.skill_md_present,
+      )}
     </p>
   );
 }
@@ -161,9 +165,10 @@ function DegradedBanner({ data }: { data: SearchData }) {
     >
       <p style={{ margin: 0, fontWeight: 600 }}>{degradedHeadline(reason)}</p>
       <p style={{ margin: "0.35rem 0 0", fontSize: "0.85rem", color: "#92400e" }}>
-        degraded_reason: <code>{show(reason)}</code> · catalog snapshot {data.catalog_snapshot}
+        {STR.results.degraded.reasonLabel} <code>{show(reason)}</code> ·{" "}
+        {STR.results.degraded.snapshotLabel} {data.catalog_snapshot}
         {reason === "source_stale"
-          ? ` — ${ageInHours(data.age_seconds)} h old (${data.age_seconds} s)`
+          ? STR.results.degraded.ageSuffix(ageInHours(data.age_seconds), data.age_seconds)
           : null}
       </p>
     </div>
@@ -197,26 +202,28 @@ function RecommendationPanel({
       }}
     >
       <h3 id="recommendation-heading" style={{ margin: 0, fontSize: "0.95rem" }}>
-        Recommendation
+        {STR.results.recommendation.heading}
       </h3>
       <p style={{ margin: "0.35rem 0 0", fontWeight: 600 }}>
         <Link to={`/skills/${recommendation.skill_id}`} style={{ color: "#1d4ed8" }}>
           {cited === null ? recommendation.skill_id : cited.skill.name}
         </Link>
-        {cited === null ? null : ` · #${cited.rank} of ${results.length}`}
+        {cited === null ? null : STR.results.recommendation.rankSuffix(cited.rank, results.length)}
       </p>
       <p style={{ margin: "0.35rem 0 0" }}>{recommendation.text}</p>
       <p style={{ margin: "0.5rem 0 0", fontSize: "0.8rem", color: "#475569" }}>
-        skill_id <code>{recommendation.skill_id}</code>{" "}
+        {STR.results.recommendation.skillIdLabel} <code>{recommendation.skill_id}</code>{" "}
         {matchesTopPick
-          ? "— the top-ranked result"
-          : `— top-ranked result is ${topPick === null ? "n/a" : topPick.skill.skill_id}`}
+          ? STR.results.recommendation.isTopPick
+          : STR.results.recommendation.isNotTopPick(
+              topPick === null ? STR.common.na : topPick.skill.skill_id,
+            )}
       </p>
     </section>
   );
 }
 
-const EXAMPLE_QUERIES = ["extract tables from a pdf", "summarise a changelog"] as const;
+const EXAMPLE_QUERIES = STR.results.emptyActions.examples;
 
 const actionStyle = { color: "#1d4ed8" } as const;
 const actionLineStyle = { margin: "0.35rem 0 0", fontSize: "0.9rem" } as const;
@@ -233,21 +240,21 @@ const actionLineStyle = { margin: "0.35rem 0 0", fontSize: "0.9rem" } as const;
 function EmptyActions() {
   return (
     <div style={{ borderTop: "1px solid #e2e8f0", marginTop: "0.75rem", paddingTop: "0.75rem" }}>
-      <p style={{ margin: 0, fontWeight: 600 }}>What you can try</p>
+      <p style={{ margin: 0, fontWeight: 600 }}>{STR.results.emptyActions.heading}</p>
       <p style={actionLineStyle}>
         <Link to="/" state={{ clearCategory: true }} style={actionStyle}>
-          Remove the category filter
+          {STR.results.emptyActions.removeCategory}
         </Link>{" "}
-        — search every category instead of one
+        {STR.results.emptyActions.removeCategoryNote}
       </p>
       <p style={actionLineStyle}>
         <Link to="/" style={actionStyle}>
-          Simplify the description
+          {STR.results.emptyActions.simplify}
         </Link>{" "}
-        — fewer words usually match more skills
+        {STR.results.emptyActions.simplifyNote}
       </p>
       <p style={actionLineStyle}>
-        Or try an example:{" "}
+        {STR.results.emptyActions.examplePrefix}{" "}
         {EXAMPLE_QUERIES.map((query, index) => (
           <span key={query}>
             {index === 0 ? null : " · "}
@@ -296,12 +303,12 @@ function ResultCard({ item, isRecommended }: { item: ResultItem; isRecommended: 
                 verticalAlign: "middle",
               }}
             >
-              recommended
+              {STR.results.card.recommendedBadge}
             </span>
           ) : null}
         </h3>
         <span style={{ fontVariantNumeric: "tabular-nums", color: "#334155", fontSize: "0.85rem" }}>
-          score {decimals(item.score, 4)}
+          {STR.results.card.score(decimals(item.score, 4))}
         </span>
       </div>
 
@@ -317,7 +324,7 @@ function ResultCard({ item, isRecommended }: { item: ResultItem; isRecommended: 
 
       {item.flags.length > 0 ? (
         <p style={{ margin: "0.35rem 0 0", fontSize: "0.8rem", color: "#b45309" }}>
-          flags: {item.flags.join(", ")}
+          {STR.results.card.flags(item.flags.join(", "))}
         </p>
       ) : null}
 
@@ -378,7 +385,7 @@ export default function ResultsPage() {
     let cancelled = false;
     // O aviso pertence à tentativa que falhou: um reload novo começa sem ele.
     setRateLimitNotice(null);
-    // Primeiro frame com o que veio na navegação (sem "Searching…" numa resposta já pronta)…
+    // Primeiro frame com o que veio na navegação (sem "Buscando…" numa resposta já pronta)…
     if (paintData !== null) {
       setState({ status: "ready", data: paintData });
     } else {
@@ -418,10 +425,10 @@ export default function ResultsPage() {
   if (state.status === "idle") {
     return (
       <section>
-        <EmptyState message="no search yet — describe the skill you need on the search page" />
+        <EmptyState message={STR.states.empty.noSearch} />
         <p style={{ margin: "0.75rem 0 0" }}>
           <Link to="/" style={{ color: "#1d4ed8", fontWeight: 600 }}>
-            Start a new search
+            {STR.common.newSearch}
           </Link>
         </p>
       </section>
@@ -429,17 +436,17 @@ export default function ResultsPage() {
   }
 
   if (state.status === "loading") {
-    return <LoadingState label="Searching…" />;
+    return <LoadingState label={STR.states.loading.search} />;
   }
 
   if (state.status === "error") {
     // 410 `HISTORY_EXPIRED` (AC7): o histórico do permalink venceu. Repetir a chamada não
-    // resolve — a saída é refazer a busca, então aqui não aparece o botão "Try again". O `status`
-    // entra na decisão porque um 410 **sem envelope** chega com `code: "INTERNAL"`.
+    // resolve — a saída é refazer a busca, então aqui não aparece o botão de tentar de novo. O
+    // `status` entra na decisão porque um 410 **sem envelope** chega com `code: "INTERNAL"`.
     if (state.code === "HISTORY_EXPIRED" || state.httpStatus === 410) {
       return (
         <section>
-          <h2 style={{ fontSize: "1.1rem" }}>This search has expired</h2>
+          <h2 style={{ fontSize: "1.1rem" }}>{STR.results.expired.heading}</h2>
           <div
             role="alert"
             style={{
@@ -451,18 +458,16 @@ export default function ResultsPage() {
           >
             <p style={{ margin: 0 }}>{state.message}</p>
             <p style={{ margin: "0.5rem 0 0", color: "#92400e" }}>
-              This permalink is past the history window (code <code>HISTORY_EXPIRED</code>), so
-              the stored response can no longer be replayed. A new search rebuilds the ranking
-              from the current catalog.
+              {STR.results.expired.detail}
             </p>
             {state.requestId ? (
               <div style={{ marginTop: "0.5rem" }}>
-                <CopyText label="request_id" value={state.requestId} />
+                <CopyText label={STR.common.requestIdLabel} value={state.requestId} />
               </div>
             ) : null}
             <p style={{ margin: "0.75rem 0 0" }}>
               <Link to="/" style={{ color: "#1d4ed8", fontWeight: 600 }}>
-                Start a new search
+                {STR.common.newSearch}
               </Link>
             </p>
           </div>
@@ -487,23 +492,31 @@ export default function ResultsPage() {
   return (
     <section aria-labelledby="results-heading">
       <h2 id="results-heading" style={{ fontSize: "1.1rem" }}>
-        Results
+        {STR.results.heading}
       </h2>
 
       {/* Permalink estável: endereçado pelo `request_id`, a mesma resposta em aba nova ou ao
           compartilhar. O reload da mesma aba revalida com `GET /searches/{id}` e, se o histórico
           venceu, mostra a tela de expirado em vez do state restaurado. */}
       <div style={{ marginBottom: "0.5rem" }}>
-        <CopyText label="permalink" value={permalink} />
+        <CopyText label={STR.results.permalinkLabel} value={permalink} />
       </div>
 
       <p style={{ color: "#475569", margin: "0 0 0.25rem", fontSize: "0.85rem" }}>
-        category {show(intent.category)} · keywords {intent.keywords.join(", ") || "n/a"} ·
-        confidence {decimals(intent.confidence, 2)}
+        {STR.results.intentLine(
+          show(intent.category),
+          intent.keywords.join(", ") || STR.common.na,
+          decimals(intent.confidence, 2),
+        )}
       </p>
       <p style={{ color: "#475569", margin: "0 0 0.75rem", fontSize: "0.85rem" }}>
-        catalog snapshot {data.catalog_snapshot} · source {show(data.source)} · llm {llm.status}
-        {llm.cached ? " (cached)" : ""} · model {show(llm.model)}
+        {STR.results.snapshotLine(
+          data.catalog_snapshot,
+          show(data.source),
+          llm.status,
+          llm.cached,
+          show(llm.model),
+        )}
       </p>
 
       <DegradedBanner data={data} />
@@ -522,8 +535,8 @@ export default function ResultsPage() {
         >
           <p style={{ margin: 0, fontWeight: 600 }}>{rateLimitNotice}</p>
           <p style={{ margin: "0.35rem 0 0", fontSize: "0.85rem", color: "#92400e" }}>
-            code: <code>RATE_LIMITED</code> — the results below are the previous answer, still
-            valid.
+            {STR.results.rateLimit.codeLabel} <code>RATE_LIMITED</code>{" "}
+            {STR.results.rateLimit.detail}
           </p>
         </div>
       )}
@@ -534,13 +547,7 @@ export default function ResultsPage() {
 
       {results.length === 0 ? (
         <div>
-          <EmptyState
-            hint={
-              data.degraded
-                ? "the answer is degraded — see the banner above for the reason"
-                : undefined
-            }
-          />
+          <EmptyState hint={data.degraded ? STR.results.empty.degradedHint : undefined} />
           <EmptyActions />
         </div>
       ) : (
@@ -565,7 +572,7 @@ export default function ResultsPage() {
       {warnings.length > 0 ? (
         <section aria-labelledby="warnings-heading" style={{ marginTop: "1rem" }}>
           <h3 id="warnings-heading" style={{ margin: 0, fontSize: "0.95rem" }}>
-            Warnings
+            {STR.results.warnings.heading}
           </h3>
           <ul style={{ color: "#475569", fontSize: "0.8rem", margin: "0.35rem 0 0" }}>
             {warnings.map((warning, index) => (

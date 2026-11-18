@@ -25,11 +25,11 @@ function renderSearch(): void {
 }
 
 function queryBox(): HTMLElement {
-  return screen.getByLabelText(/what do you need the skill to do/i);
+  return screen.getByLabelText(/o que você precisa que a skill faça/i);
 }
 
 function submitButton(): HTMLElement {
-  return screen.getByRole("button", { name: /^search$/i });
+  return screen.getByRole("button", { name: /^buscar$/i });
 }
 
 /** Submete pelo `form`: a navegação do `MemoryRouter` não depende de implementação de browser. */
@@ -82,7 +82,7 @@ describe("SearchPage", () => {
     submit();
 
     // A mensagem é a do mapa de código, não a do servidor: `server said:` não pode aparecer.
-    expect(await screen.findByText("That category does not exist. Pick one from the list.")).toBeVisible();
+    expect(await screen.findByText("Essa categoria não existe. Escolha uma da lista.")).toBeVisible();
     expect(screen.queryByText(/server said:/)).toBeNull();
     expect(screen.getByLabelText("request_id")).toHaveValue(REQUEST_ID);
     expect(currentLocation()).toBe("/");
@@ -95,7 +95,9 @@ describe("SearchPage", () => {
     typeQuery("extract tables from a pdf");
     submit();
 
-    expect(await screen.findByText("Data source unavailable — try again later.")).toBeVisible();
+    expect(
+      await screen.findByText("Fonte de dados indisponível — tente de novo mais tarde."),
+    ).toBeVisible();
     expect(screen.queryByText(/server said:/)).toBeNull();
     expect(currentLocation()).toBe("/");
   });
@@ -122,16 +124,17 @@ describe("SearchPage", () => {
 
     expect(queryBox()).toHaveValue("summarise a changelog");
     // A categoria só aparece no `<select>` depois do `GET /categories`: o valor restaurado
-    // ganha a opção correspondente quando a lista chega.
+    // ganha a opção correspondente quando a lista chega. O rótulo da opção é o `label_en` do
+    // catálogo — dado de terceiro, mostrado como publicado, nunca traduzido.
     await expect(screen.findByRole("option", { name: "Documents" })).resolves.toBeInTheDocument();
-    expect(screen.getByLabelText(/category \(optional\)/i)).toHaveValue("documents");
+    expect(screen.getByLabelText(/categoria \(opcional\)/i)).toHaveValue("documents");
   });
 
   it("counts the trimmed query in the character counter", () => {
     renderSearch();
     typeQuery("  ab  ");
 
-    expect(screen.getByText(/2\/500 characters/)).toBeVisible();
+    expect(screen.getByText(/2\/500 caracteres/)).toBeVisible();
     expect(submitButton()).toBeDisabled();
   });
 });

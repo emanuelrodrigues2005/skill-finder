@@ -5,6 +5,7 @@ import { ApiError, describeApiError, getSkill } from "../api";
 import { CopyText } from "../components/CopyText";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import type { SkillDetail } from "../types";
+import { STR } from "../ui/strings";
 
 type LoadState =
   | { status: "loading" }
@@ -12,10 +13,7 @@ type LoadState =
   | { status: "error"; message: string; code: string | null; requestId: string | null };
 
 /** Regra 3 do `AGENTS.md`: dado ausente é `null`, jamais zero. */
-const NA = "n/a";
-
-/** Texto fixado pelo AC do detalhe quando não existe `SKILL.md` para mostrar. */
-const NO_DESCRIPTION = "No full description available for this skill";
+const NA = STR.common.na;
 
 /**
  * `null` (do contrato) vira `n/a`. `0` que o servidor mandar é dado real e aparece como `0`; esta
@@ -80,18 +78,16 @@ function ExternalValue({ value }: { value: string | null }) {
 function NotFoundState({ requestId }: { requestId: string | null }) {
   return (
     <div role="alert" style={{ border: "1px solid #f87171", padding: "1rem", borderRadius: 8 }}>
-      <p style={{ margin: 0, fontWeight: 600 }}>Skill not found</p>
-      <p style={{ margin: "0.5rem 0 0" }}>
-        This skill does not exist in the catalog, or its id is malformed.
-      </p>
+      <p style={{ margin: 0, fontWeight: 600 }}>{STR.detail.notFound.title}</p>
+      <p style={{ margin: "0.5rem 0 0" }}>{STR.detail.notFound.detail}</p>
       {requestId ? (
         <div style={{ marginTop: "0.5rem" }}>
-          <CopyText label="request_id" value={requestId} />
+          <CopyText label={STR.common.requestIdLabel} value={requestId} />
         </div>
       ) : null}
       <p style={{ margin: "0.75rem 0 0" }}>
         <Link to="/" style={{ color: "#1d4ed8" }}>
-          Start a new search
+          {STR.common.newSearch}
         </Link>
       </p>
     </div>
@@ -107,7 +103,12 @@ export default function DetailPage() {
     let cancelled = false;
     // Sem `:id` não existe detalhe: `GET /api/v1/skills/` seria a listagem, com outra forma.
     if (skillId === "") {
-      setState({ status: "error", message: "Skill not found", code: "NOT_FOUND", requestId: null });
+      setState({
+        status: "error",
+        message: STR.detail.notFound.title,
+        code: "NOT_FOUND",
+        requestId: null,
+      });
       return () => {
         cancelled = true;
       };
@@ -137,7 +138,7 @@ export default function DetailPage() {
   }, [skillId]);
 
   if (state.status === "loading") {
-    return <LoadingState label="Loading skill…" />;
+    return <LoadingState label={STR.detail.loading} />;
   }
 
   if (state.status === "error") {
@@ -162,7 +163,7 @@ export default function DetailPage() {
     <section>
       <p style={{ marginTop: 0 }}>
         <Link to="/results" style={{ color: "#1d4ed8" }}>
-          ← back to results
+          {STR.detail.backToResults}
         </Link>
       </p>
       <h2 style={{ fontSize: "1.1rem", margin: "0 0 0.5rem" }}>{skill.name}</h2>
@@ -184,31 +185,31 @@ export default function DetailPage() {
           fontSize: "0.95rem",
         }}
       >
-        <dt style={{ fontWeight: 600 }}>Category</dt>
+        <dt style={{ fontWeight: 600 }}>{STR.detail.fields.category}</dt>
         <dd style={{ margin: 0 }}>{show(skill.category)}</dd>
-        <dt style={{ fontWeight: 600 }}>Stars</dt>
+        <dt style={{ fontWeight: 600 }}>{STR.detail.fields.stars}</dt>
         <dd style={{ margin: 0 }}>{show(skill.stars)}</dd>
-        <dt style={{ fontWeight: 600 }}>Installs</dt>
+        <dt style={{ fontWeight: 600 }}>{STR.detail.fields.installs}</dt>
         <dd style={{ margin: 0 }}>{show(skill.installs)}</dd>
-        <dt style={{ fontWeight: 600 }}>Vulnerabilities</dt>
+        <dt style={{ fontWeight: 600 }}>{STR.detail.fields.vulnerabilities}</dt>
         <dd style={{ margin: 0 }}>{show(skill.vulnerability_count)}</dd>
-        <dt style={{ fontWeight: 600 }}>Security</dt>
+        <dt style={{ fontWeight: 600 }}>{STR.detail.fields.security}</dt>
         <dd style={{ margin: 0 }}>{show(skill.security_status)}</dd>
-        <dt style={{ fontWeight: 600 }}>Source</dt>
+        <dt style={{ fontWeight: 600 }}>{STR.detail.fields.source}</dt>
         <dd style={{ margin: 0 }}>
           <ExternalValue value={skill.source_url} />
         </dd>
-        <dt style={{ fontWeight: 600 }}>Repository</dt>
+        <dt style={{ fontWeight: 600 }}>{STR.detail.fields.repository}</dt>
         <dd style={{ margin: 0 }}>
           <ExternalValue value={skill.repo_url} />
         </dd>
-        <dt style={{ fontWeight: 600 }}>SKILL.md</dt>
-        <dd style={{ margin: 0 }}>{skill.skill_md_present ? "present" : NA}</dd>
-        <dt style={{ fontWeight: 600 }}>Snapshot date</dt>
+        <dt style={{ fontWeight: 600 }}>{STR.detail.fields.skillMd}</dt>
+        <dd style={{ margin: 0 }}>{skill.skill_md_present ? STR.detail.present : NA}</dd>
+        <dt style={{ fontWeight: 600 }}>{STR.detail.fields.snapshotDate}</dt>
         <dd style={{ margin: 0 }} title={skill.data_snapshot ?? undefined}>{showDate(skill.data_snapshot)}</dd>
       </dl>
 
-      <h3 style={{ fontSize: "1rem" }}>SKILL.md</h3>
+      <h3 style={{ fontSize: "1rem" }}>{STR.detail.skillMdSection}</h3>
       {hasExcerpt ? (
         <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: "0.75rem" }}>
           {/*
@@ -220,7 +221,10 @@ export default function DetailPage() {
           <p style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{excerpt}</p>
         </div>
       ) : (
-        <EmptyState message={NO_DESCRIPTION} hint={`SKILL.md: ${NA}`} />
+        <EmptyState
+          message={STR.detail.noDescription}
+          hint={STR.detail.skillMdHint(NA)}
+        />
       )}
     </section>
   );

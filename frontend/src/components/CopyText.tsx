@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { STR } from "../ui/strings";
+
 /**
  * Valor copiável (permalink, `request_id`) com feedback anunciado (`aria-live`).
  *
@@ -8,7 +10,8 @@ import { useState } from "react";
  * Ctrl+C. `document.execCommand` é obsoleto e não é usado aqui.
  */
 interface CopyTextProps {
-  /** Rótulo curto em inglês, exibido antes do valor (`permalink`, `request_id`). */
+  /** Rótulo curto exibido antes do valor. É identificador do contrato (`permalink`,
+   * `request_id`) — não é traduzido, é diagnosticável. A prosa do rodapé vem de `STR.copy`. */
   label: string;
   value: string;
 }
@@ -16,16 +19,14 @@ interface CopyTextProps {
 type Outcome = "copied" | "copy-failed";
 
 /**
- * Duas redações por desfecho. A região viva só é anunciada quando o **texto muda**, e a ação que
- * a pessoa repete é sempre a mesma cópia: sem alternar a frase, a segunda cópia gravaria a mesma
- * string e o leitor de tela ficaria mudo. O par alternado garante mutação a cada tentativa.
+ * Duas redações por desfecho (pt-BR, em `STR.copy`). A região viva só é anunciada quando o
+ * **texto muda**, e a ação que a pessoa repete é sempre a mesma cópia: sem alternar a frase, a
+ * segunda cópia gravaria a mesma string e o leitor de tela ficaria mudo. O par alternado garante
+ * mutação a cada tentativa.
  */
 const MESSAGES: Readonly<Record<Outcome, readonly [string, string]>> = {
-  copied: ["Copied.", "Copied again."],
-  "copy-failed": [
-    "Could not copy — select the text and press Ctrl+C.",
-    "Still could not copy — select the text and press Ctrl+C.",
-  ],
+  copied: STR.copy.copied,
+  "copy-failed": STR.copy.copyFailed,
 };
 
 interface Announcement {
@@ -65,7 +66,7 @@ export function CopyText({ label, value }: CopyTextProps) {
             {label}: {value}
           </code>
           <button type="button" onClick={handleCopy}>
-            Copy
+            {STR.copy.button}
           </button>
         </>
       ) : (

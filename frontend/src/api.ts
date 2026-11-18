@@ -6,6 +6,7 @@ import type {
   SkillListResponse,
 } from "./types";
 import { SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX } from "./types";
+import { STR } from "./ui/strings";
 
 /**
  * Cliente da API v0 (`/api/v1`). `baseURL` é relativo: o navegador só conhece o
@@ -23,34 +24,13 @@ export const REQUEST_TIMEOUT_MS = 15_000;
  */
 export const TIMEOUT_CODE = "TIMEOUT";
 
-const UNKNOWN_CODE_MESSAGE = "Something went wrong. Please try again.";
-
 /**
- * `error.code` → mensagem exibida (inglês: AGENTS.md, regra 6). A tela decide por **código**,
- * nunca pelo texto do servidor (`docs/app/02-arquitetura.md` §5.5).
- *
- * Cobre os 12 códigos do enum `openapi.yaml` › `components.schemas.ErrorBody.properties.code`,
- * o código de cliente `TIMEOUT` e o alias `UNKNOWN_CATEGORY` (nomeado em
- * `docs/app/01-spec-produto.md` AC2 e no AC da issue #24; o contrato congelado o entrega como
- * `VALIDATION_ERROR`, então aqui ele só evita cair na mensagem genérica).
+ * `error.code` → mensagem exibida, em pt-BR: o mapa é texto de tela e mora em `ui/strings.ts`
+ * (`STR.errors.byCode`), junto com o resto da prosa — AGENTS.md, regra 6.
  */
-const MESSAGE_BY_CODE: Readonly<Record<string, string>> = {
-  BAD_REQUEST: "The request was invalid. Check the input and try again.",
-  VALIDATION_ERROR: "Some fields are invalid. Check the search and try again.",
-  UNKNOWN_CATEGORY: "That category does not exist. Pick one from the list.",
-  UNAUTHORIZED: "You are not allowed to do that.",
-  FORBIDDEN: "You are not allowed to do that.",
-  NOT_FOUND: "We could not find what you asked for.",
-  CONFLICT: "That operation is already running. Try again in a moment.",
-  HISTORY_EXPIRED: "This search has expired. Start a new search.",
-  RATE_LIMITED: "Too many searches.",
-  LLM_BAD_RESPONSE: "The language model answer could not be used. Try again.",
-  // Texto fixado pelo AC3 de US-08 (`docs/app/01-spec-produto.md` §4).
-  SOURCE_UNAVAILABLE: "Data source unavailable — try again later.",
-  NOT_READY: "The service is not ready yet. Try again in a moment.",
-  INTERNAL: "Something went wrong on our side. Try again.",
-  [TIMEOUT_CODE]: "The request took too long. Check your connection and try again.",
-};
+const MESSAGE_BY_CODE: Readonly<Record<string, string>> = STR.errors.byCode;
+
+const UNKNOWN_CODE_MESSAGE = STR.errors.unknown;
 
 /**
  * Mensagem da interface para um `error.code`. Código desconhecido cai na genérica — nunca no
@@ -60,7 +40,7 @@ export function messageForCode(code: string, retryAfterSeconds: number | null = 
   const base = MESSAGE_BY_CODE[code] ?? UNKNOWN_CODE_MESSAGE;
   if (code === "RATE_LIMITED" && typeof retryAfterSeconds === "number" && retryAfterSeconds > 0) {
     const seconds = Math.trunc(retryAfterSeconds);
-    return `${base} Try again in ${seconds} second${seconds === 1 ? "" : "s"}.`;
+    return `${base} ${STR.errors.rateLimitedRetry(seconds)}`;
   }
   return base;
 }
