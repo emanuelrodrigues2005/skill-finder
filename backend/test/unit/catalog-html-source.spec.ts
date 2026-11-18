@@ -19,7 +19,14 @@
  *   métrica) é `miss`, nunca um registro com métrica `null`;
  * - página que falha (HTTP, rede ou conteúdo) não derruba o run e nunca devolve
  *   registro vazio que apagaria métrica já ingerida — a chave simplesmente falta;
- * - chave fora do sitemap não é buscada (a base é fixa + `source_key` do sitemap).
+ * - chave fora do sitemap não é buscada (a base é fixa + `source_key` do sitemap);
+ * - índice vazio é enumeração vazia (nada de shard) e **3xx no índice** não é
+ *   seguido: sitemap inacessível é falha do run, nunca "catálogo vazio";
+ * - o limitador é **uma fila por instância**: duas `fetchSkills` simultâneas
+ *   recebem slots de 1 s, nunca dois GETs no mesmo instante;
+ * - entidades HTML do `<title>`/`<meta>` são decodificadas (nome e resumo são
+ *   dado da fonte, mostrados como publicados), e código fora do Unicode fica
+ *   literal em vez de virar caractere inventado.
  *
  * Fixtures reais em `backend/test/fixtures/`: `skill-detail.html` é a página
  * SSR de `vercel-labs/skills/find-skills` copiada de
@@ -32,6 +39,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { Test } from '@nestjs/testing';
+import axios from 'axios';
 import nock from 'nock';
 
 import { CATALOG_ADAPTER, CATALOG_SOURCE, CatalogModule } from '@/catalog/catalog.module';
@@ -106,6 +114,23 @@ function detailPage(key: string, status = 200, body = DETAIL_HTML): nock.Scope {
   return nock(BASE).get(`/${key}`).reply(status, body, HTML_HEADERS);
 }
 
+/**
+ * Página mínima com identidade (`<title>`) e **uma** métrica — o formato que
+ * `recordFromHtml` exige. Existe para os casos de entidade HTML e de resumo
+ * ausente, onde o resto do markup é ruído.
+ */
+function minimalPage(head: { title: string; description?: string | null }): string {
+  const meta =
+    head.description === undefined || head.description === null
+      ? ''
+      : `<meta name="description" content="${head.description}">`;
+  return (
+    '<!doctype html><html lang="en"><head>' +
+    `<title>${head.title}</title>${meta}` +
+    '</head><body><div><span>Installs</span></div><div>4.4M</div></body></html>'
+  );
+}
+
 function source(overrides: Partial<HtmlSourceOptions> = {}): SkillSource {
   return createHtmlSource({
     baseUrl: BASE,
@@ -132,6 +157,9 @@ function stubRepository(): CatalogRepository {
 
 afterEach(() => {
   nock.cleanAll();
+  // Cinto e suspensório dos timers falsos: um caso que estoure o `timeout` do
+  // Jest não roda o `finally`, e o relógio falso vazaria para as outras suítes.
+  jest.useRealTimers();
 });
 
 describe('fetchSkills — detail', () => {
@@ -170,6 +198,79 @@ describe('fetchSkills — detail', () => {
     const records = await source().fetchSkills([SECOND, FIRST]);
 
     expect(records.map((record) => record.source_key)).toEqual([SECOND, FIRST]);
+  });
+
+  /**
+   * O `<title>` é texto HTML, não texto puro: `&#233;` e `&#x2b;` são a forma que
+   * o SSR usa para acento e sinal. Sem decodificar, o `name` publicado sairia com
+   * a entidade crua — e é esse valor que a interface mostra (`name` não é
+   * traduzido nem reescrito, regra 6).
+   */
+  it('decodifica entidades numéricas do título antes de virar nome', async () => {
+    sitemapIndex();
+    sitemapShard();
+    nock(BASE)
+      .get(`/${FIRST}`)
+      .reply(
+        200,
+        minimalPage({ title: 'caf&#233; &#x2b; find-skills &amp; cia — vercel-labs/skills' }),
+        HTML_HEADERS,
+      );
+
+    const records = await source().fetchSkills([FIRST]);
+
+    expect(records[0]?.name).toBe('café + find-skills & cia');
+    // Sem `<meta name="description">` o resumo é ausência, nunca `''`.
+    expect(records[0]?.summary).toBeNull();
+  });
+
+  /**
+   * Código fora do Unicode (`&#x110000;`) não é code point: a entidade fica
+   * literal em vez de virar caractere inventado ou derrubar a página. A chave
+   * continua sendo um registro válido, porque identidade e métrica existem.
+   */
+  it('entidade fora do Unicode fica literal no título, sem derrubar a página', async () => {
+    sitemapIndex();
+    sitemapShard();
+    nock(BASE)
+      .get(`/${FIRST}`)
+      .reply(200, minimalPage({ title: 'find&#x110000;skills — vercel-labs/skills' }), HTML_HEADERS);
+
+    const records = await source().fetchSkills([FIRST]);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.name).toBe('find&#x110000;skills');
+  });
+
+  /**
+   * `<meta name="description">` em branco (ou sem `content`) não é resumo: vira
+   * `null`. `summary: ''` violaria a regra 3 ("dado ausente é `null`, nunca
+   * zero") e pintaria um resumo vazio na interface.
+   */
+  it('meta description em branco ou sem content é ausência, não resumo vazio', async () => {
+    sitemapIndex();
+    sitemapShard();
+    nock(BASE)
+      .get(`/${FIRST}`)
+      .reply(
+        200,
+        minimalPage({ title: 'find-skills — vercel-labs/skills', description: '   ' }),
+        HTML_HEADERS,
+      );
+    nock(BASE)
+      .get(`/${SECOND}`)
+      .reply(
+        200,
+        '<!doctype html><html><head><title>ai-video-generation — inference-sh/skills</title>' +
+          '<meta name="description"></head><body><div><span>Installs</span></div><div>4.4M</div></body></html>',
+        HTML_HEADERS,
+      );
+
+    const records = await source().fetchSkills([FIRST, SECOND]);
+
+    expect(records.map((record) => record.source_key)).toEqual([FIRST, SECOND]);
+    expect(records[0]?.summary).toBeNull();
+    expect(records[1]?.summary).toBeNull();
   });
 
   it('chave desconhecida é ausência: não é buscada e não lança', async () => {
@@ -276,6 +377,107 @@ describe('rate limit — rps', () => {
   it('recusa SKILL_SOURCE_RPS não positivo em vez de virar espera infinita', () => {
     expect(() => createHtmlSource({ baseUrl: BASE, rps: 0 })).toThrow(/rps/i);
     expect(() => createHtmlSource({ baseUrl: BASE, rps: Number.NaN })).toThrow(/rps/i);
+  });
+
+  /**
+   * Concorrência na **mesma instância** (`html-source.ts:119-129`): duas
+   * `fetchSkills` simultâneas dividem a mesma fila, então o intervalo de 1 req/s
+   * vale por requisição, não por chamada. Sem a fila, as duas buscariam o sitemap
+   * (e as páginas) no mesmo instante e o site receberia o dobro de tráfego.
+   *
+   * O instante é medido na **entrada** de cada GET (espião no `axios.get`, que
+   * roda logo depois do `reserve`): o intervalo entre duas requisições quaisquer
+   * nunca pode ser menor que 1 s, na ordem em que saíram.
+   */
+  it('duas fetchSkills simultâneas dividem a fila: nenhuma dupla de requisições no mesmo instante', async () => {
+    const fake = fakeClock(0);
+    sitemapIndex();
+    sitemapShard();
+    detailPage(FIRST);
+    detailPage(SECOND);
+
+    type GetFn = (url: string, config?: Record<string, unknown>) => Promise<unknown>;
+    const original = axios.get as unknown as GetFn;
+    const instants: number[] = [];
+    const spy = jest.spyOn(axios, 'get').mockImplementation(((url: string, config?: unknown) => {
+      instants.push(fake.now());
+      return original(url, config as Record<string, unknown> | undefined);
+    }) as unknown as typeof axios.get);
+
+    try {
+      const adapter = createHtmlSource({ baseUrl: BASE, rps: 1, clock: fake.clock });
+      const [firstRun, secondRun] = await Promise.all([
+        adapter.fetchSkills([FIRST]),
+        adapter.fetchSkills([SECOND]),
+      ]);
+
+      expect(firstRun.map((record) => record.source_key)).toEqual([FIRST]);
+      expect(secondRun.map((record) => record.source_key)).toEqual([SECOND]);
+      // Índice (memoizado: uma vez para as duas chamadas), shard e as duas páginas.
+      expect(instants).toHaveLength(4);
+      for (let index = 1; index < instants.length; index += 1) {
+        expect(instants[index] - instants[index - 1]).toBeGreaterThanOrEqual(1_000);
+      }
+      // Duas chamadas concorrentes = três esperas: a fila é única, não uma por
+      // invocação (o que permitiria duas requisições no mesmo slot).
+      expect(fake.sleeps).toEqual([1_000, 1_000, 1_000]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  /**
+   * **Não coberto aqui — de propósito:** o `REAL_CLOCK` default do adaptador
+   * (`Date.now` + `setTimeout(resolve, ms)`, `html-source.ts:79-85`). Exercitá-lo
+   * exige uma espera real de 1 s por requisição, proibida pelo brief ("nada de
+   * sleep real"), ou timers falsos globais — e o `nock`/`axios` desta suíte não
+   * completa a resposta HTTP com `setTimeout`/`Date` falseados (medido: estouro do
+   * timeout de 5 s do Jest). O caminho de produção é o mesmo `reserve()` provado
+   * acima com o relógio injetado; o que fica sem prova é só o par
+   * `Date.now`/`setTimeout` do relógio real, não a disciplina de intervalo.
+   */
+});
+
+describe('enumeração — índice de sitemap', () => {
+  /**
+   * Índice **vazio** é enumeração vazia, não erro: nada de shard é pedido e
+   * nenhuma chave pedida é buscada. O run do chamador decide o destino (a
+   * ingestão marca `partial/EMPTY_CATALOG`), o adaptador só não inventa página.
+   */
+  it('índice sem nenhum shard de skills: nenhuma requisição de shard ou de página', async () => {
+    const index = nock(BASE)
+      .get('/sitemap.xml')
+      .reply(
+        200,
+        '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' +
+          '<sitemap><loc>https://www.skills.sh/sitemap-misc.xml</loc></sitemap>' +
+          '</sitemapindex>',
+        { 'content-type': 'application/xml' },
+      );
+    const shardTrap = nock(BASE).get('/sitemap-skills-1.xml').reply(200, SITEMAP_SHARD);
+    const pageTrap = detailPage(FIRST);
+
+    const records = await source().fetchSkills([FIRST]);
+
+    expect(records).toEqual([]);
+    expect(index.isDone()).toBe(true);
+    expect(shardTrap.isDone()).toBe(false);
+    expect(pageTrap.isDone()).toBe(false);
+  });
+
+  /**
+   * O índice também não segue redirect (`maxRedirects: 0`): seguir o `Location`
+   * seria visitar uma URL escolhida pelo servidor, fora da enumeração. O erro sobe
+   * — "sitemap inacessível" é falha do run, nunca "catálogo vazio".
+   */
+  it('3xx no índice não é seguido: o run falha em vez de virar catálogo vazio', async () => {
+    nock(BASE)
+      .get('/sitemap.xml')
+      .reply(302, '', { location: `${BASE}/sitemap-skills-1.xml` });
+    const followed = nock(BASE).get('/sitemap-skills-1.xml').reply(200, SITEMAP_SHARD);
+
+    await expect(source().fetchSkills([FIRST])).rejects.toThrow();
+    expect(followed.isDone()).toBe(false);
   });
 });
 

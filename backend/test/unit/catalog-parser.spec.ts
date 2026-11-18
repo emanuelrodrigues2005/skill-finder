@@ -87,6 +87,29 @@ describe('catalog parser — página de detalhe (D3)', () => {
     expect(parseDetailHtml(detailPage({ stars: '39400' })).stars).toBe(39400);
   });
 
+  /**
+   * O rótulo é o **último** texto da página: existe a palavra, não existe valor
+   * depois dela. O parser não pode devolver a linha vazia seguinte como se fosse
+   * o valor — ausência é `null` (§7.2: seletor quebrado vira métrica `null`).
+   */
+  it('rótulo sem nenhuma linha depois dele é ausência, não string vazia', () => {
+    const parsed = parseDetailHtml('<html><body><div><span>Installs</span></div></body></html>');
+
+    expect(parsed.installs).toBeNull();
+  });
+
+  /**
+   * `9` repetido 400 vezes passa na forma `[0-9]+` mas não é representável: o
+   * `Number` vira `Infinity`. Métrica infinita não é dado do site — é valor
+   * ilegível, e a coluna recebe `null` (nunca `Infinity`, que o Postgres nem tem).
+   */
+  it.each([['infinito por tamanho', '9'.repeat(400)]])(
+    'conta não finita (%s) é ausência, não Infinity',
+    (_label, raw) => {
+      expect(parseDetailHtml(detailPage({ installs: raw })).installs).toBeNull();
+    },
+  );
+
   it('HTML sem nenhum dos rótulos devolve null em tudo, sem lançar', () => {
     const parsed = parseDetailHtml('<html><body><p>Skills</p><p>Nada de métricas aqui.</p></body></html>');
 
@@ -104,5 +127,18 @@ describe('catalog parser — página de detalhe (D3)', () => {
     expect(parsed.stars).toBeNull();
     expect(parsed.repository).toBeNull();
     expect(parsed.first_seen).toBeNull();
+  });
+
+  /**
+   * Entidade nomeada que o parser não conhece fica **literal**: o valor é dado da
+   * fonte e o parser não inventa caractere. O que ele garante é que uma entidade
+   * estranha não derruba a página nem apaga o resto do valor.
+   */
+  it('entidade nomeada desconhecida fica literal no valor', () => {
+    const parsed = parseDetailHtml(
+      '<div><span>Repository</span></div><div>owner/repo&naoexiste;</div>',
+    );
+
+    expect(parsed.repository).toBe('owner/repo&naoexiste;');
   });
 });

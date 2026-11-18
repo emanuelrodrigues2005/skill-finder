@@ -53,6 +53,20 @@ describe('sitemap — montador da URL de detalhe', () => {
     expect(() => detailUrlFor(`${BASE}/prefixo`, KEY)).toThrow(/base/i);
   });
 
+  /**
+   * Base que nem URL é, ou que fala outro protocolo: recusada no **boot** do
+   * adaptador (`createHtmlSource` valida antes da primeira página), não na
+   * primeira requisição. Configuração errada tem de falhar cedo.
+   */
+  it('rejeita base que não é URL e esquema que não é http(s)', () => {
+    expect(() => detailUrlFor('nao-e-url', KEY)).toThrow(/base/i);
+    expect(() => sitemapIndexUrl('ftp://www.skills.sh')).toThrow(/http/i);
+  });
+
+  it('recusa source_key que não é string, sem montar URL', () => {
+    expect(() => detailUrlFor(BASE, 42 as unknown as string)).toThrow(/source_key/i);
+  });
+
   it('normaliza caixa e espaços do source_key antes de montar', () => {
     expect(detailUrlFor(BASE, '  Vercel-Labs/Skills/Find-Skills ')).toBe(`${BASE}/${KEY}`);
   });
@@ -71,6 +85,17 @@ describe('robots — caminho proibido nunca vira URL', () => {
 
   it.each([['/'], [`/${KEY}`], ['/sitemap.xml']])('permite o caminho %s', (path) => {
     expect(isRobotsAllowed(path)).toBe(true);
+  });
+
+  /**
+   * Caminho relativo não é rota do site: sem barra inicial não há como comparar
+   * com o `Disallow`, e valor que nem string é não vira requisição. Ambos são
+   * recusados — "na dúvida, não busca" é a política do robots aqui.
+   */
+  it('recusa caminho relativo e valor que não é string', () => {
+    expect(isRobotsAllowed('search?q=skills')).toBe(false);
+    expect(isRobotsAllowed('')).toBe(false);
+    expect(isRobotsAllowed(undefined as unknown as string)).toBe(false);
   });
 
   /**
@@ -150,6 +175,41 @@ describe('sitemap — enumeração', () => {
     expect(parseSitemapLocs(xml)).toEqual(['https://www.skills.sh/a/b/c?x=1&y=2']);
     expect(parseSitemapLocs('não é xml')).toEqual([]);
     expect(parseSitemapLocs('')).toEqual([]);
+  });
+
+  /**
+   * Entidades **numéricas** (`&#38;`, `&#x26;`) são a forma que um gerador de
+   * sitemap usa quando não quer depender de entidade nomeada. Código fora do
+   * Unicode (`&#x110000;`), zero (`&#0;`) e nome desconhecido ficam **literais**:
+   * o parser não inventa caractere para lixo.
+   */
+  it('decodifica entidades numéricas e deixa o código inválido literal', () => {
+    expect(parseSitemapLocs('<loc>https://www.skills.sh/a/b/c&#38;d</loc>')).toEqual([
+      'https://www.skills.sh/a/b/c&d',
+    ]);
+    expect(parseSitemapLocs('<loc>https://www.skills.sh/a/b/x&#x26;y</loc>')).toEqual([
+      'https://www.skills.sh/a/b/x&y',
+    ]);
+    expect(parseSitemapLocs('<loc>https://www.skills.sh/a/b/&#x110000;</loc>')).toEqual([
+      'https://www.skills.sh/a/b/&#x110000;',
+    ]);
+    expect(parseSitemapLocs('<loc>https://www.skills.sh/a/b/&#0;</loc>')).toEqual([
+      'https://www.skills.sh/a/b/&#0;',
+    ]);
+    expect(parseSitemapLocs('<loc>https://www.skills.sh/a/b/&naoexiste;</loc>')).toEqual([
+      'https://www.skills.sh/a/b/&naoexiste;',
+    ]);
+  });
+
+  it('ignora loc que não é URL absoluta e segue com os shards válidos', () => {
+    const xml = [
+      '<sitemap><loc>nao-e-uma-url</loc></sitemap>',
+      '<sitemap><loc>https://www.skills.sh/sitemap-skills-2.xml</loc></sitemap>',
+    ].join('\n');
+
+    // O índice de uma coleta real pode trazer um `loc` relativo: ele é ignorado,
+    // nunca motivo para derrubar a enumeração inteira.
+    expect(parseSitemapIndex(xml, BASE)).toEqual(['https://www.skills.sh/sitemap-skills-2.xml']);
   });
 });
 

@@ -162,6 +162,64 @@ describe('explanation (D-C: template determinístico, placeholders resolvidos)',
   });
 
   /**
+   * Achado HIGH do parecer da #42: `caveats` do agente chega **com** placeholders.
+   * O degrau 5 do `explain-parser` preserva `{{skill:<id>}}` de propósito (quem
+   * substitui pelo nome é o backend), então o `caveats` precisa passar pelo mesmo
+   * resolvedor da `explanation` — senão a interface recebe `{{...}}` verbatim.
+   */
+  describe('caveats do agente passa pelo resolvedor (issue #42)', () => {
+    it('resolves a known placeholder of the caveats with the catalog name', () => {
+      const { caveats } = explainItem(
+        {
+          skill: SKILL,
+          score_breakdown: GAPPY_BREAKDOWN,
+          evidence_completeness: GAPPY_EVIDENCE,
+          caveatsTemplate: `compare com {{skill:${OTHER_SKILL.skill_id}}} antes de instalar`,
+        },
+        KNOWN,
+      );
+
+      expect(caveats).toBe(`compare com ${OTHER_SKILL.name} antes de instalar`);
+      expect(caveats).not.toContain('{{');
+    });
+
+    it('drops an out-of-set placeholder from the caveats and keeps the text', () => {
+      const unknownId = encodeSkillId(999n);
+
+      const { caveats } = explainItem(
+        {
+          skill: SKILL,
+          score_breakdown: GAPPY_BREAKDOWN,
+          evidence_completeness: GAPPY_EVIDENCE,
+          caveatsTemplate: `risco alto; veja {{skill:${unknownId}}}`,
+        },
+        KNOWN,
+      );
+
+      expect(caveats).toBe('risco alto; veja');
+      expect(caveats).not.toContain('{{');
+      expect(caveats).not.toContain(unknownId);
+    });
+
+    it('falls back to the missing-evidence notice when the caveats empties out', () => {
+      // Placeholder único e desconhecido: o texto do agente some, e aí vale a
+      // regra 3 — a lacuna de evidência continua visível, nunca um `caveats: null`.
+      const { caveats } = explainItem(
+        {
+          skill: SKILL,
+          score_breakdown: GAPPY_BREAKDOWN,
+          evidence_completeness: GAPPY_EVIDENCE,
+          caveatsTemplate: `{{skill:${encodeSkillId(999n)}}}`,
+        },
+        KNOWN,
+      );
+
+      expect(caveats).toContain('campo(s) do catálogo ausente(s)');
+      expect(caveats).not.toContain('{{');
+    });
+  });
+
+  /**
    * Issue #10 (revisão): o `name` de uma skill é **dado de scraping**, não
    * template. Um nome como `evil {{skill:<id de outra skill>}}` não pode citar a
    * outra skill, não pode vazar `{{` e não pode ganhar `explanation_repaired`

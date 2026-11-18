@@ -49,8 +49,9 @@ import type {
   IngestRunRow,
   RotationParams,
 } from '@/catalog/catalog-repository';
+import { INGEST_ERROR_CODES } from '@/catalog/catalog-repository';
 import { createFixtureSource } from '@/catalog/fixture-source';
-import { ingest } from '@/catalog/ingest';
+import { ingest, MAX_PAGES } from '@/catalog/ingest';
 import type { SkillRecord, SkillSource } from '@/catalog/skill-source';
 
 /** Relógio fixo: o orquestrador nunca lê o relógio sozinho. */
@@ -208,6 +209,88 @@ function page(items: SkillRecord[], pageNumber: number, hasMore: boolean) {
   return { items, page: pageNumber, has_more: hasMore };
 }
 
+/**
+ * Repositório cujo `upsertSkills` lança — banco fora do ar no meio do run.
+ *
+ * A tabela do §7.3 é explícita: repositório que lança fecha o run como `failed`
+ * com `REPOSITORY_FAILED`; o run **não** pode ficar `running` esperando o
+ * `failStaleRuns` de duas horas depois. O resto da porta delega ao repositório
+ * em memória, para que o histórico do run continue auditável.
+ */
+class FailingUpsertRepository implements CatalogRepository {
+  constructor(private readonly inner: InMemoryCatalogRepository) {}
+
+  failStaleRuns(startedBefore: Date): Promise<number> {
+    return this.inner.failStaleRuns(startedBefore);
+  }
+
+  startRun(run: { adapter: string; started_at: Date }): Promise<number> {
+    return this.inner.startRun(run);
+  }
+
+  finishRun(id: number, patch: IngestRunFinish): Promise<void> {
+    return this.inner.finishRun(id, patch);
+  }
+
+  countActiveSkills(): Promise<number> {
+    return this.inner.countActiveSkills();
+  }
+
+  selectRotationKeys(params: RotationParams): Promise<string[]> {
+    return this.inner.selectRotationKeys(params);
+  }
+
+  upsertSkills(): Promise<number> {
+    return Promise.reject(new Error('upsert indisponível: conexão encerrada'));
+  }
+
+  deactivateSkillsNotSeenSince(seenAt: Date): Promise<number> {
+    return this.inner.deactivateSkillsNotSeenSince(seenAt);
+  }
+
+  deactivateSkillsStaleBefore(cutoff: Date): Promise<number> {
+    return this.inner.deactivateSkillsStaleBefore(cutoff);
+  }
+}
+
+/** Repositório que só persiste 5 dos 25 itens: razão upserted/seen = 0,2. */
+class LowRatioRepository extends InMemoryCatalogRepository {
+  override upsertSkills(skills: SkillRecord[], seenAt: Date): Promise<number> {
+    return super.upsertSkills(skills.slice(0, 5), seenAt);
+  }
+}
+
+/** Registro mínimo aceito pela ingestão; só `source_key` conta para os números. */
+function record(key: string): SkillRecord {
+  return {
+    source_key: key,
+    source_url: `https://skills.sh/${key}`,
+    name: key.split('/').at(-1) ?? key,
+    summary: null,
+    category_slug: null,
+    stars: null,
+    installs: null,
+    vulnerability_count: null,
+    security_status: 'unknown',
+    repo_url: null,
+    skill_md_present: false,
+    first_seen_at: null,
+    raw: { source_key: key },
+  };
+}
+
+/** Fonte que nunca desliga `has_more`: cada página traz uma chave inédita. */
+function endlessSource(): SkillSource {
+  return {
+    capabilities: { supports_categories: false, supports_documents: false },
+    listCategories: () => Promise.resolve([]),
+    fetchSkills: () => Promise.resolve([]),
+    fetchCatalog: (pageNumber: number) =>
+      Promise.resolve(page([record(`owner/repo/skill-${String(pageNumber)}`)], pageNumber, true)),
+    fetchDocument: () => Promise.resolve(null),
+  };
+}
+
 /** Fonte que entrega exatamente estes itens na página 1 e nada depois. */
 function staticSource(items: SkillRecord[]): SkillSource {
   return {
@@ -228,6 +311,21 @@ function throwingSource(error: Error): SkillSource {
     listCategories: () => Promise.resolve([]),
     fetchSkills: () => Promise.resolve([]),
     fetchCatalog: () => Promise.reject(error),
+    fetchDocument: () => Promise.resolve(null),
+  };
+}
+
+/**
+ * Fonte que rejeita com **texto**, não com `Error` — acontece com cliente HTTP e
+ * lib de terceiro. O orquestrador tem de registrar a mensagem, não `[object
+ * Object]` nem uma exceção no meio do run.
+ */
+function rejectingWithTextSource(text: string): SkillSource {
+  return {
+    capabilities: { supports_categories: false, supports_documents: false },
+    listCategories: () => Promise.resolve([]),
+    fetchSkills: () => Promise.resolve([]),
+    fetchCatalog: () => Promise.reject(text),
     fetchDocument: () => Promise.resolve(null),
   };
 }
@@ -357,6 +455,81 @@ describe('catalog ingest — IngestRun (docs/app/02-arquitetura.md §7.3)', () =
       expect(run.status).toBe('failed');
       expect(run.error_code).toBeTruthy();
       expect(run.finished_at).toBeInstanceOf(Date);
+    });
+
+    /**
+     * A fonte respondeu (25 itens lidos), mas o **repositório** lançou no upsert.
+     * Sem o `catch` do orquestrador o run ficaria `running` para sempre; com ele,
+     * fecha `failed` / `REPOSITORY_FAILED` e o catálogo anterior fica intacto.
+     */
+    it('repositório lançando no upsert fecha o run como failed/REPOSITORY_FAILED', async () => {
+      const repository = new InMemoryCatalogRepository();
+      await ingest({ source: createFixtureSource(), repository, adapter: 'fixture', startedAt: T1 });
+      const activeBefore = repository.activeCount();
+      expect(activeBefore).toBe(FIXTURE_ITEMS);
+
+      // O mesmo repositório guarda o run e recusa o upsert: `lastRun` prova o
+      // fechamento, não só o objeto devolvido pelo orquestrador.
+      const result = await ingest({
+        source: createFixtureSource(),
+        repository: new FailingUpsertRepository(repository),
+        adapter: 'fixture',
+        startedAt: T2,
+      });
+
+      expect(result.status).toBe('failed');
+      expect(result.error_code).toBe(INGEST_ERROR_CODES.repositoryFailed);
+      expect(result.error_detail).toContain('upsert indisponível');
+      expect(result.items_seen).toBe(FIXTURE_ITEMS);
+      expect(result.items_upserted).toBe(0);
+      expect(result.items_deactivated).toBe(0);
+
+      const run = lastRun(repository);
+      expect(run.status).toBe('failed');
+      expect(run.error_code).toBe(INGEST_ERROR_CODES.repositoryFailed);
+      expect(run.finished_at).toBeInstanceOf(Date);
+      expect(run.started_at).toEqual(T2);
+      // Nada foi desativado: run `failed` não toca em `is_active` (§7.3).
+      expect(repository.activeCount()).toBe(activeBefore);
+    });
+
+    /**
+     * `error_detail` tem teto de 500 caracteres (coluna e log). Uma mensagem de
+     * driver com stack colada não pode virar quilobytes na linha do run — e o
+     * começo do texto, que é o que identifica a falha, tem de sobreviver ao corte.
+     */
+    it('mensagem de erro acima de 500 caracteres é truncada no error_detail', async () => {
+      const repository = new InMemoryCatalogRepository();
+
+      const result = await ingest({
+        source: throwingSource(new Error(`falha do driver: ${'x'.repeat(600)}`)),
+        repository,
+        adapter: 'fixture',
+        startedAt: T1,
+      });
+
+      expect(result.status).toBe('failed');
+      expect(result.error_detail).toHaveLength(500);
+      expect(result.error_detail?.startsWith('falha do driver:')).toBe(true);
+
+      const run = lastRun(repository);
+      expect(run.error_code).toBe(INGEST_ERROR_CODES.sourceFetchFailed);
+      expect(run.error_detail).toHaveLength(500);
+    });
+
+    it('rejeição com texto (não Error) é registrada como failed, sem virar [object Object]', async () => {
+      const repository = new InMemoryCatalogRepository();
+
+      const result = await ingest({
+        source: rejectingWithTextSource('timeout de leitura do socket'),
+        repository,
+        adapter: 'fixture',
+        startedAt: T1,
+      });
+
+      expect(result.status).toBe('failed');
+      expect(result.error_code).toBe(INGEST_ERROR_CODES.sourceFetchFailed);
+      expect(result.error_detail).toBe('timeout de leitura do socket');
     });
   });
 
@@ -488,6 +661,60 @@ describe('catalog ingest — IngestRun (docs/app/02-arquitetura.md §7.3)', () =
       expect(run.status).toBe('partial');
       expect(run.error_code).toBeTruthy();
       expect(run.finished_at).toBeInstanceOf(Date);
+    });
+
+    /**
+     * Teto de páginas (§7.3, `MAX_PAGES`): a fonte sempre tem "mais uma". O run
+     * para no teto e sai `partial` / `PAGE_LIMIT_REACHED` — nunca `ok`, porque
+     * ninguém sabe o que ficou de fora, e nunca desativa (a guarda de 80% é do
+     * caminho `ok`).
+     */
+    it('fonte que nunca esgota bate o teto de páginas: partial/PAGE_LIMIT_REACHED', async () => {
+      const repository = new InMemoryCatalogRepository();
+
+      const result = await ingest({
+        source: endlessSource(),
+        repository,
+        adapter: 'fixture',
+        startedAt: T1,
+      });
+
+      expect(result.status).toBe('partial');
+      expect(result.error_code).toBe(INGEST_ERROR_CODES.pageLimitReached);
+      // Uma chave inédita por página: o teto é de páginas, e `items_seen` reflete
+      // exatamente o que foi lido até ele.
+      expect(result.items_seen).toBe(MAX_PAGES);
+      expect(result.items_upserted).toBe(MAX_PAGES);
+      expect(result.items_deactivated).toBe(0);
+      expect(repository.activeCount()).toBe(MAX_PAGES);
+
+      const run = lastRun(repository);
+      expect(run.status).toBe('partial');
+      expect(run.error_code).toBe(INGEST_ERROR_CODES.pageLimitReached);
+      expect(run.items_seen).toBe(MAX_PAGES);
+    });
+
+    /**
+     * `upserted/seen < 0,5`: a fonte viu 25 itens e o banco só registrou 5. Metade
+     * do catálogo lido não chegou ao banco — `partial`, com o motivo explícito, e
+     * sem desativar ninguém (o caminho `ok` nem foi alcançado).
+     */
+    it('repositório que grava menos da metade dos itens: partial/LOW_UPSERT_RATIO', async () => {
+      const repository = new LowRatioRepository();
+
+      const result = await ingest({
+        source: createFixtureSource(),
+        repository,
+        adapter: 'fixture',
+        startedAt: T1,
+      });
+
+      expect(result.status).toBe('partial');
+      expect(result.error_code).toBe(INGEST_ERROR_CODES.lowUpsertRatio);
+      expect(result.items_seen).toBe(FIXTURE_ITEMS);
+      expect(result.items_upserted).toBe(5);
+      expect(result.items_deactivated).toBe(0);
+      expect(repository.activeCount()).toBe(5);
     });
   });
 

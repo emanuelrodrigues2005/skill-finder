@@ -306,6 +306,55 @@ class RepairedExplain implements ExplainParser {
 }
 
 /**
+ * Prosa do agente com `{{skill:<skill_id>}}` **também no `caveats`**.
+ *
+ * O degrau 5 do `explain-parser` preserva de propósito o placeholder de id do
+ * conjunto: quem substitui pelo nome vindo do banco é o `resolvePlaceholders` de
+ * `src/search/explanation.ts`. Este duplê reproduz a saída do parser real — é o
+ * caso do achado HIGH do parecer da #42.
+ */
+class CaveatsWithPlaceholder implements ExplainParser {
+  readonly caveatsTemplate = 'compare com {{skill:SKILL_ID}} antes de instalar';
+
+  explain(request: ExplainRequest): Promise<ExplainResult> {
+    const [rank1, rank2] = request.candidates;
+    const rank2Id = rank2?.skill_id ?? '';
+    return Promise.resolve({
+      items: request.candidates.map((candidate) => ({
+        skill_id: candidate.skill_id,
+        why: `{{skill:${candidate.skill_id}}} atende ao pedido segundo o agente.`,
+        caveats:
+          candidate.skill_id === rank1?.skill_id
+            ? this.caveatsTemplate.replace('SKILL_ID', rank2Id)
+            : null,
+        repaired: false,
+      })),
+      recommendation: {
+        skill_id: rank1?.skill_id ?? '',
+        why: `{{skill:${rank1?.skill_id ?? ''}}} é a recomendação do agente para esta busca.`,
+        repaired: false,
+      },
+      status: 'ok',
+      reason: null,
+      model: 'fake-model',
+      tokens: null,
+    });
+  }
+}
+
+/**
+ * Catálogo cujo `detail()` lança — banco fora do ar no enriquecimento do rank 1.
+ *
+ * O detalhe alimenta `summary`/`skill_md_excerpt` do rank 1 no passo 7 (§7.5), que
+ * é **opcional** por contrato: um erro aqui não pode derrubar a busca com 500.
+ */
+class ThrowingDetailCatalog extends CatalogStub {
+  override detail(): Promise<SkillDetail | null> {
+    return Promise.reject(new Error('catalog.detail fora do ar'));
+  }
+}
+
+/**
  * Cache devolvendo prosa de **outra** ordem: a recomendação aponta para o segundo
  * colocado. O serviço tem de revalidar contra o rank 1 antes de responder (§4).
  */
@@ -943,6 +992,62 @@ describe('SearchService.search (F2.6)', () => {
       const top = first(response.results);
       expect(top.caveats).toBe('risco apontado pelo agente');
       expect(top.flags).toContain('explanation_repaired');
+    });
+
+    /**
+     * Achado HIGH do parecer da #42: o `caveats` do agente era publicado **cru**.
+     * O degrau 5 do `explain-parser` preserva `{{skill:<id>}}` de propósito (o
+     * resolvedor é do backend), então publicar o texto do item sem passar pelo
+     * mesmo caminho da explicação põe `{{...}}` na tela — justamente o formato que
+     * o prompt incentiva o modelo a usar.
+     */
+    it('resolves the agent caveats placeholder instead of publishing {{...}} (HIGH #42)', async () => {
+      const explain = new CaveatsWithPlaceholder();
+      const harness = await build({ parser: new OkIntentParser(), explain });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      const top = first(response.results);
+      const target = second(response.results);
+      expect(top.caveats).not.toBeNull();
+      expect(top.caveats).toContain('compare com');
+      // O placeholder vira o nome do conjunto ranqueado, como na explicação.
+      expect(top.caveats).toContain(target.skill.name);
+      expect(top.caveats).not.toContain('{{');
+      // A garantia é da resposta inteira, não de um campo: nada de `{{` em nenhum
+      // `caveats`, `explanation` ou `recommendation.text` publicados.
+      expect(JSON.stringify(response)).not.toContain('{{');
+    });
+
+    /**
+     * Achado MEDIUM do parecer da #42: `catalog.detail()` do rank 1 rodava **fora**
+     * do `try`. Um erro ali derrubava a busca inteira com 500, contra o contrato de
+     * que o passo 7 é opcional (§7.4): a resposta sai no template determinístico.
+     */
+    it('a throwing catalog.detail() does not turn the search into a 500 (MEDIUM #42)', async () => {
+      const explain = new ProseExplain();
+      const harness = await build({
+        parser: new OkIntentParser(),
+        catalog: new ThrowingDetailCatalog(),
+        explain,
+      });
+
+      // Se o erro escapasse, `search` rejeitaria; `resolves` é a asserção de 200.
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(response.llm.explain_status).toBe('unavailable');
+      // Falha do passo 7 não é degradação de intenção/catálogo (§7.4).
+      expect(response.data.degraded).toBe(false);
+      expect(response.data.degraded_reason).toBeNull();
+      expect(response.results).toHaveLength(CANDIDATES.length);
+      for (const item of response.results) {
+        expect(item.explanation).toContain('estrelas');
+        expect(item.explanation).not.toContain('{{');
+      }
+      expect(response.warnings).toContain('explanation_from_template');
+      expect(response.recommendation?.skill_id).toBe(response.results[0]?.skill.skill_id);
+      // Sem evidência do rank 1 o passo 7 nem é tentado: nenhum provedor chamado.
+      expect(explain.requests).toHaveLength(0);
     });
 
     it('revalidates recommendation.skill_id against the rank 1 before answering', async () => {
