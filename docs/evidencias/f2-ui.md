@@ -1,10 +1,16 @@
-# F2 — Checklist de UI (inglês, foco, erro, vazio, `n/a`)
+# F2 — Checklist de UI (pt-BR, foco, erro, vazio, `n/a`)
 
-**Data:** 2026-11-17
-**Issue:** `fix(api): bloquear prompt injection e aplicar limites de uso` (#13), critério
-“checklist de UI em inglês/foco/erro/vazio/`n/a` em `docs/evidencias/f2-ui.md`”
+**Data:** 2026-11-17 (item 2 relido em 2026-11-18)
+**Issue:** `fix(api): bloquear prompt injection e aplicar limites de uso` (#13), critério de UI
+relido em 2026-11-18 como “checklist de UI (pt-BR, foco, erro, vazio, `n/a`) em
+`docs/evidencias/f2-ui.md`”
 **Donos:** #25 (resultados), #26 (detalhe), #27 (estados/foco) e #28 (Vitest) — issues de
 `frontend/` da mesma milestone, em `scripts/github/issues/f2-web.md`
+
+> **Atualizado em 2026-11-18 (F2.10, issue #51).** A regra 6 do `AGENTS.md` passou a exigir a
+> interface em **pt-BR**; o título e o item 2 seguem a regra nova. O enunciado original da #13
+> pedia inglês e fica no histórico do Git — a tradução das telas é da issue de `frontend/` em
+> pt-BR da F2.10.
 
 ## Como ler isto
 
@@ -37,12 +43,13 @@ pnpm --dir frontend test         # Vitest (chega com a #28)
   ```
   Reconferir antes do merge: `ResultsPage.tsx` está em edição pela #25/#27 nesta mesma rodada.
 
-- [ ] **2. Toda a interface em inglês** — rótulos, mensagens de erro, estados vazios e `title`s.
-  Donos: **#25–#28** (`AGENTS.md`, regra 6: interface em inglês, documentação em português).
+- [ ] **2. Toda a interface em pt-BR** — rótulos, mensagens de erro, estados vazios e `title`s.
+  Donos: **#25–#28** e a issue de pt-BR da F2.10 (`AGENTS.md`, regra 6: interface em pt-BR,
+  documentação em português). Texto vindo do catálogo (`name`, `summary`, `SKILL.md`, rótulo de
+  categoria) continua em inglês: é dado da fonte, mostrado como publicado.
   *Como provar:* `make up` e abrir as três telas (`/`, `/results?search=<id>`, `/skills/<id>`);
-  nenhuma string renderizada em português. Apoio estático:
-  `grep -rnE 'ç|ã|õ|á|é|í|ó|ú' frontend/src` revisado linha a linha (só comentário em português é
-  aceitável; o texto que chega ao `DOM` não).
+  nenhuma string **nossa** renderizada em inglês. Apoio estático:
+  `grep -rnE 'ç|ã|õ|á|é|í|ó|ú' frontend/src` deve encontrar a copy em pt-BR das três telas.
 
 - [x] **3. Foco visível, ordem de tabulação e skip link** (§6.6). Dono: **#27**.
   *Como provar:* `make up`; `Tab` a partir do topo até a busca (ordem previsível), `Enter` no

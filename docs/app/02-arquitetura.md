@@ -220,6 +220,7 @@ Validação: `query` obrigatório, 3–500 caracteres após `strip` e normaliza�
   },
   "llm": {
     "status": "ok",
+    "explain_status": "ok",
     "model": "deepseek-v4.1-flash",
     "cached": false,
     "tokens": {"prompt": 1840, "completion": 321}
@@ -274,6 +275,9 @@ Regras do contrato:
 - `explanation` e `recommendation.text` usam **placeholders** `{{skill:<skill_id>}}`; o backend substitui pelo `name` do banco antes de responder. Placeholder com id fora do conjunto → removido e o item ganha `flags: ["explanation_repaired"]`.
 - `score` e `score_breakdown` são calculados pelo servidor (ver §6.4 e `01-spec-produto.md` §4); a LLM não escreve nesses campos.
 - `data.degraded=true` com `degraded_reason` em `{"source_stale","llm_unavailable"}`.
+- `llm` reporta **dois** passos da LLM em campos separados: `status` é o desfecho da intenção
+  (passo 4) e `explain_status` o da explicação (passo 7). Os dois usam **o mesmo enum** (`LlmStatus`)
+  e `explain_status` é `null` quando o passo 7 não foi tentado — ver §6.3.
 
 ### 5.4 Demais payloads (resumo)
 
@@ -377,13 +381,33 @@ flowchart TB
 
 `LLMProvider.extract_intent(query, categories)` chama `POST {LLM_BASE_URL}/chat/completions` com `response_format` de JSON Schema (ver §8.3 para os detalhes de segurança e o plano B se o provedor não aceitar `json_schema` `[a confirmar]`).
 
-Schema de saída (resumo): `{category: enum(categorias) | null, keywords: string[1..8], filters: {exclude_with_vulnerabilities: bool}, language: "en" | "pt" | "other", confidence: number[0..1]}`.
+Schema de saída (resumo): `{category: enum(categorias) | null, keywords: string[1..8], keywords_en: string[1..8], filters: {exclude_with_vulnerabilities: bool}, language: "en" | "pt" | "other", confidence: number[0..1]}`.
 Pós-condições no backend: `category` fora do enum → substituída por `null`; `keywords` vazias → usa o próprio `query` tokenizado; `confidence < 0.35` → busca só lexical (sem LLM na etapa 7, modo degradado explícito).
+
+**O passo 7 (`explain`) e o campo `llm.explain_status`.** O mesmo provedor redige o porquê de cada
+item e a recomendação — `LLMProvider.explain(intent, candidates)` —; o payload, os tetos de tamanho
+e as quatro barreiras contra id inventado estão na §6.5. O que o **contrato** precisa dizer é o que
+aconteceu em cada passo, e são dois passos independentes:
+
+- `llm.status` (`LlmStatus`) = desfecho da **intenção** (passo 4).
+- `llm.explain_status` (`LlmStatus | null`) = desfecho da **explicação** (passo 7). **Mesmo enum**,
+  sem valor novo: `ok`, `cached`, `repaired`, `invalid_ids`, `low_confidence`, `unavailable`,
+  `disabled`.
+- `explain_status` é **`null` quando o passo 7 não foi tentado** — `confidence < 0.35` (busca só
+  lexical) ou hit do cache de busca, que devolve a resposta original do passo 3. `null` aqui
+  **não** é falha: é ausência de tentativa. Falha da explicação é `unavailable`/`invalid_ids`, com o
+  fallback de template da §7.4 e `flags: ["explanation_fallback"]`.
+- Por que dois campos e não um: com um só, `status="ok"` esconderia que a prosa caiu no template, e
+  `status="unavailable"` apagaria o fato de a intenção ter vindo da LLM. A demo (e a banca) precisam
+  dizer a verdade sobre cada etapa sem abrir log.
+
+Os dois campos são independentes também na hora de cachear: `explain_status` pode ser `"cached"`
+com `status="ok"` — são caches distintos (`kind` diferente em `llm_cache`).
 
 ### 6.4 Passo 5–6 — recuperação e ranking determinístico
 
 1. **Filtro duro:** `skill.is_active = true`; `security_status <> 'fail'`; se `category` informada, `category_slug = category`.
-2. **Recuperação lexical:** `to_tsquery('english', …)` sobre `search_doc` (nome + resumo) com `websearch_to_tsquery` dos `keywords`; ranqueia por `ts_rank_cd`; se o resultado tiver menos de 5 itens, completa com similaridade `pg_trgm` sobre `name`; se ainda faltar, completa com os top-N da categoria por `installs`.
+2. **Recuperação lexical:** `to_tsvector('english', …)` sobre `search_doc` (nome + resumo), casado com `websearch_to_tsquery('english', …)` dos **termos em inglês da intenção** (`keywords_en`, caindo em `keywords` quando ausente); ranqueia por `ts_rank_cd`; se o resultado tiver menos de 5 itens, completa com similaridade `pg_trgm` sobre `name`; se ainda faltar, completa com os top-N da categoria por `installs`.
 3. **Score determinístico** (idêntico ao de `01-spec-produto.md` §4):
 
 ```
@@ -414,7 +438,7 @@ score = round( (0.5*S + 0.3*P + 0.2*I) * (1 - 0.10*m), 4 )      # m = nº de cam
 3. **Nomes só por placeholder:** o texto não pode escrever nomes de skills; deve usar `{{skill:<id>}}`, e o backend substitui pelo nome vindo do banco. Um nome inventado na prosa simplesmente não é renderizado como skill, e a lista/cards da UI vêm de `results[].skill` (banco), nunca do texto.
 4. **Sem ferramentas e sem escrita:** o `LLMProvider` não expõe *tools*, não executa busca, não grava no banco e não faz requisição a URL sugerida pelo modelo. O raio de ação de uma saída ruim é uma frase ruim, não um registro falso.
 
-O response marca `llm.status ∈ {ok, cached, repaired, invalid_ids, unavailable, disabled}` para que a UI (e a demo) digam a verdade sobre o que aconteceu.
+O response marca `llm.status ∈ {ok, cached, repaired, invalid_ids, low_confidence, unavailable, disabled}` — mais `llm.explain_status`, com o mesmo enum e `null` quando esta etapa não é tentada (§6.3) — para que a UI (e a demo) digam a verdade sobre o que aconteceu.
 
 ---
 

@@ -19,12 +19,35 @@ Nenhum acesso a `/api/` ou `/search` — ambos **proibidos pelo `robots.txt`** d
 **Consequência:** o adaptador `html` de `SkillSource` (`docs/app/02-arquitetura.md` §7 / ADR-003) é
 o caminho. Nenhum código de rede no caminho da busca: a ingestão roda em job e grava no Postgres.
 
+## Política do `robots.txt` (copiada em `robots.txt`, 2026-11-15)
+
+```text
+User-Agent: *
+Allow: /
+Disallow: /internal/
+Disallow: /debug-security/
+Disallow: /search
+Disallow: /api/
+
+Sitemap: https://www.skills.sh/sitemap.xml
+```
+
+- **`Allow: /`** é a regra que sustenta a D3: varrer as páginas listadas no `sitemap.xml` é permitido.
+- **Proibido:** `/search` (a busca do próprio site), `/api/`, `/internal/` e `/debug-security/`.
+  Nenhum deles é usado — a recuperação é nossa (ADR-002) e a ingestão só visita URL de detalhe.
+- **Sem `Crawl-delay`.** O arquivo não impõe intervalo entre requisições; o **1 req/s** é disciplina
+  nossa (`SKILL_SOURCE_RPS=1`), não exigência do site — e é o que mantém a varredura educada.
+- **Não existe índice JSON oficial.** `/.well-known/agent-skills/index.json` seria o atalho "JSON +
+  oficial + permitido"; em **2026-11-15** ele respondeu **`200` com HTML**, não um índice JSON.
+  Reprodução: `bash scripts/dev/probe-skills-index.sh` (um `GET`). Conclusão: o caminho é o adaptador
+  de **DOM** (D3), e não há atalho JSON a descobrir.
+
 ## Evidência bruta (arquivos nesta pasta)
 
 | Arquivo | O que é | Números |
 | --- | --- | --- |
 | `home.html` / `home.headers` | página inicial | HTTP 200, `text/html; charset=utf-8`, 906 678 bytes, URL final `https://www.skills.sh/` (redirect 308 do apex) |
-| `robots.txt` | política do site | `Allow: /` · `Disallow: /internal/`, `/debug-security/`, `/search`, `/api/` |
+| `robots.txt` | política do site | `Allow: /` · `Disallow: /internal/`, `/debug-security/`, `/search`, `/api/` · **sem** `Crawl-delay` |
 | `sitemap.xml` | índice de sitemaps | 4 sitemaps: `misc`, `owners`, `skills-1`, `skills-2` |
 | `sitemap-skills-1.xml` | catálogo enumerável | **10 000 URLs** só neste arquivo |
 | `skill-detalhe.html` / `.headers` | uma skill de exemplo | HTTP 200, `text/html`, 83 300 bytes — `https://www.skills.sh/vercel-labs/skills/find-skills` |

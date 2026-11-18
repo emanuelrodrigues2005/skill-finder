@@ -10,7 +10,7 @@ devolve uma lista curta, **ordenada e explicada** de skills do catálogo do **sk
 A LLM interpreta o pedido e redige o porquê; a ordem sai de uma função pura do backend — a LLM
 nunca escolhe posição. O produto **não instala** a skill: decide qual instalar e mostra a origem.
 Projeto 2 de Computação em Nuvem (UFRPE): monorepo NestJS + React, na AWS Academy por Terraform,
-com pipeline CI/CD e observabilidade. Interface em inglês, documentação em português.
+com pipeline CI/CD e observabilidade. Interface em português (pt-BR), documentação em português.
 
 ## 2. Glossário do domínio
 
@@ -47,7 +47,7 @@ com pipeline CI/CD e observabilidade. Interface em inglês, documentação em po
 6. **Nenhum teste abre socket.** `nock.disableNetConnect()` no setup do Jest; catálogo de `backend/test/fixtures/`. → `backend/test/setup.ts`.
 7. **Degradação é visível.** `degraded` + `degraded_reason` + `warnings`; a tela nunca mostra lista vazia sem explicação. → `frontend/src/types.ts`; §7.4.
 8. **Filtro é corte, não penalidade.** `security_status = 'fail'` e `is_active = false` não aparecem em nenhuma posição. → `docs/app/01-spec-produto.md` §5.2.
-9. **Interface em inglês, documentação em português.** Rótulos e estados vazios em `frontend/src/`; prosa em `docs/` e neste arquivo.
+9. **Interface em português (pt-BR), documentação em português.** Rótulos e estados vazios em `frontend/src/`; prosa em `docs/` e neste arquivo. Texto vindo do catálogo (`name`, `summary`, `SKILL.md`, rótulo de categoria) não é traduzido.
 
 ## 4. Mapa do repositório
 

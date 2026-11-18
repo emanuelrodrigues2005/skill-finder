@@ -50,7 +50,10 @@ Escopos: `typecheck`, `openapi`, `unit`, `e2e`, `docs`, ou vazio para tudo.
    `backend/test/fixtures/`. O modo degradado de dev/CI é `LLM_ENABLED=false` — o nome
    `LLM_PROVIDER=fake` de versões anteriores **não existe** em `backend/src/config/env.schema.ts`;
    o provedor falso de teste entra por injeção de dependência na F2.5.
-6. **Interface em inglês, documentação em português.**
+6. **Interface em português (pt-BR), documentação em português.** Rótulos, mensagens de erro e
+   estados vazios da SPA; prosa em `docs/` e neste arquivo. O texto que **vem do catálogo** (`name`,
+   `summary`, `SKILL.md`, rótulo de categoria) não é traduzido: é dado da fonte, mostrado como
+   publicado.
 7. **Degradação é visível.** Com a LLM fora do ar, a resposta traz `degraded: true` e a intenção
    vem do fallback por palavras-chave — a tela nunca mostra lista vazia sem explicação.
 
@@ -238,7 +241,7 @@ conhecido, nunca com segredo no diff. Merge é decisão do dono.
 | Vocabulário do domínio, invariantes e mapa das pastas | `CONTEXT.md` |
 | Produto, histórias de usuário, regra de ranking | `docs/app/01-spec-produto.md` |
 | Componentes, contrato da API, modelo de dados, segurança, ADRs | `docs/app/02-arquitetura.md` |
-| O que construir agora, sub-fases F2.0–F2.9, gates | `docs/app/03-plano-app.md` |
+| O que construir agora, sub-fases F2.0–F2.10, gates | `docs/app/03-plano-app.md` |
 | Índice das issues por milestone e riscos | `tasks/plan.md` |
 | Fases do projeto acadêmico (EC2, Terraform, CI/CD, demo) | `docs/04-plano-de-execucao.md` |
 | Requisitos e pesos do professor | `docs/00-edital-projeto-2.md` |
