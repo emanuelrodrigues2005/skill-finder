@@ -54,8 +54,10 @@ function stubRepository(): CatalogRepository & { marker: string } {
     startRun: fail,
     finishRun: fail,
     countActiveSkills: fail,
+    selectRotationKeys: fail,
     upsertSkills: fail,
     deactivateSkillsNotSeenSince: fail,
+    deactivateSkillsStaleBefore: fail,
   };
 }
 

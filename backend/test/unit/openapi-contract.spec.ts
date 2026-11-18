@@ -144,6 +144,33 @@ function referenceNames(value: unknown): string[] {
   return refs;
 }
 
+/** Todo `$ref` alcançável a partir das raízes, seguindo `$ref` de `$ref`. */
+function reachableRefs(doc: OpenAPIObject, roots: readonly unknown[]): string[] {
+  const refs = new Set<string>();
+  const pending: unknown[] = [...roots];
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (isReference(current)) {
+      if (refs.has(current.$ref)) {
+        continue;
+      }
+      refs.add(current.$ref);
+      pending.push(resolvePointer(doc, current.$ref));
+      continue;
+    }
+    if (Array.isArray(current)) {
+      pending.push(...current);
+      continue;
+    }
+    if (typeof current === 'object' && current !== null) {
+      pending.push(...Object.values(current as Record<string, unknown>));
+    }
+  }
+
+  return [...refs];
+}
+
 /** Achata o schema em nós com o caminho de propriedades até cada um. */
 function collectNodes(
   doc: OpenAPIObject,
@@ -613,6 +640,60 @@ describe('OpenAPI contract v0 (issue #5)', () => {
     expect(llmProperties.cached?.type).toBe('boolean');
     expect(llmProperties.model?.nullable).toBe(true);
     expect(llmProperties.tokens?.nullable).toBe(true);
+  });
+
+  it('explain is internal: nullable status, bounded payload, no path (issue #39)', () => {
+    // `explain_status` reusa o enum de §5.3 (`LlmStatus`) e é `null` quando o
+    // passo não foi tentado — replay do histórico, por exemplo. Enum novo aqui
+    // divergiria do `status` que a mesma resposta já carrega.
+    const llm = propertiesOf(doc, componentSchema(doc, 'SearchResponse')).llm;
+    const explainStatus = propertiesOf(doc, llm).explain_status;
+    expect(explainStatus).toBeDefined();
+    // `null` e ausente não são a mesma coisa: o campo é obrigatório e vale
+    // `null` quando o passo não rodou (contrato §5.3).
+    expect(requiredOf(doc, llm)).toContain('explain_status');
+    expect(explainStatus?.nullable).toBe(true);
+    expect([...(explainStatus?.enum ?? [])]).toEqual([
+      'ok',
+      'cached',
+      'repaired',
+      'invalid_ids',
+      'low_confidence',
+      'unavailable',
+      'disabled',
+    ]);
+
+    // O payload do `explain` é o formato que a LLM devolve e o serviço valida
+    // (§6.5): schema interno, sem path público. Os tetos de texto são contrato
+    // — quem corta é o backend, não o modelo.
+    const payload = componentSchema(doc, 'ExplainPayload');
+    expect(requiredOf(doc, payload)).toEqual(expect.arrayContaining(['items', 'recommendation']));
+    const payloadProperties = propertiesOf(doc, payload);
+
+    const items = payloadProperties.items;
+    expect(items?.type).toBe('array');
+    const item = deref<SchemaObject>(doc, items?.items);
+    expect(item).toBeDefined();
+    const itemProperties = propertiesOf(doc, item);
+    expect(requiredOf(doc, item)).toEqual(expect.arrayContaining(['skill_id', 'why', 'caveats']));
+    expect(itemProperties.skill_id?.type).toBe('string');
+    expect(itemProperties.why?.maxLength).toBe(320);
+    expect(itemProperties.caveats?.maxLength).toBe(160);
+    expect(itemProperties.caveats?.nullable).toBe(true);
+
+    const recommendation = payloadProperties.recommendation;
+    expect(recommendation).toBeDefined();
+    expect(requiredOf(doc, recommendation)).toEqual(expect.arrayContaining(['skill_id', 'why']));
+    expect(propertiesOf(doc, recommendation).why?.maxLength).toBe(400);
+
+    // O schema precisa estar no artefato versionado (critério da issue), mas
+    // longe dos paths: se uma operação passasse a devolvê-lo, ele deixaria de
+    // ser interno.
+    expect(readArtifact()).toContain('ExplainPayload:');
+    const roots = allOperations(doc).flatMap(({ operation }) =>
+      Object.entries(operation.responses).map(([, response]) => response),
+    );
+    expect(reachableRefs(doc, roots)).not.toContain('#/components/schemas/ExplainPayload');
   });
 
   it('search request validates the documented bounds', () => {

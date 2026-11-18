@@ -47,6 +47,7 @@ import type {
   CatalogRepository,
   IngestRunFinish,
   IngestRunRow,
+  RotationParams,
 } from '@/catalog/catalog-repository';
 import { createFixtureSource } from '@/catalog/fixture-source';
 import { ingest } from '@/catalog/ingest';
@@ -116,7 +117,11 @@ class InMemoryCatalogRepository implements CatalogRepository {
     return Promise.resolve(failed);
   }
 
-  startRun(run: { adapter: string; started_at: Date }): Promise<number> {
+  startRun(run: {
+    adapter: string;
+    started_at: Date;
+    items_requested?: number | null;
+  }): Promise<number> {
     const id = this.nextRunId;
     this.nextRunId += 1;
     this.runs.push({
@@ -128,6 +133,7 @@ class InMemoryCatalogRepository implements CatalogRepository {
       items_seen: null,
       items_upserted: null,
       items_deactivated: null,
+      items_requested: run.items_requested ?? null,
       error_code: null,
       error_detail: null,
     });
@@ -174,10 +180,22 @@ class InMemoryCatalogRepository implements CatalogRepository {
     return Promise.resolve(skills.length);
   }
 
+  /**
+   * O rodízio (issue #45) não é chamado pela ingestão desta suíte: a seleção de
+   * chaves tem spec próprio. O duplo responde vazio para a porta ficar completa.
+   */
+  selectRotationKeys(_params: RotationParams): Promise<string[]> {
+    return Promise.resolve([]);
+  }
+
   deactivateSkillsNotSeenSince(seenAt: Date): Promise<number> {
+    return this.deactivateSkillsStaleBefore(seenAt);
+  }
+
+  deactivateSkillsStaleBefore(cutoff: Date): Promise<number> {
     let deactivated = 0;
     for (const skill of this.skills.values()) {
-      if (skill.is_active && skill.last_seen_at.getTime() < seenAt.getTime()) {
+      if (skill.is_active && skill.last_seen_at.getTime() < cutoff.getTime()) {
         skill.is_active = false;
         deactivated += 1;
       }

@@ -62,7 +62,7 @@ import type { IntentParser, IntentParserResult } from '@/llm/intent-parser';
 import { INTENT_PARSER, LlmModule } from '@/llm/llm.module';
 import { OpenAICompatParser } from '@/llm/openai-compat';
 import { decodeSkillId, encodeSkillId } from '@/search/ids';
-import type { SearchCatalog } from '@/search/search-catalog.port';
+import type { SearchCatalog, SearchCatalogInput } from '@/search/search-catalog.port';
 import type { SearchStore, StoredSearchInput, StoredSearchRow } from '@/search/search-store.port';
 import { SearchService } from '@/search/search.service';
 import { SEARCH_CATALOG, SEARCH_STORE } from '@/search/search.tokens';
@@ -117,9 +117,12 @@ class CatalogStub implements SearchCatalog {
   snapshotAt: Date | null = new Date(Date.now() - HOUR_MS);
   categories: string[] = ['backend', 'testing'];
   searchCalls = 0;
+  /** Entradas recebidas em `search`, na ordem: é o contrato com o recuperador. */
+  readonly searchInputs: SearchCatalogInput[] = [];
 
-  search(): Promise<readonly SkillSummary[]> {
+  search(input: SearchCatalogInput): Promise<readonly SkillSummary[]> {
     this.searchCalls += 1;
+    this.searchInputs.push(input);
     return Promise.resolve(this.skills);
   }
 
@@ -349,6 +352,10 @@ describe('SearchService.search (F2.6)', () => {
         model: 'fake-model',
         cached: false,
         tokens: { prompt: 10, completion: 5 },
+        // `explain_status: null` porque o contrato o marca `required` (issue #39).
+        // Congelar o objeto sem ele foi o que deixou "obrigatório e ausente"
+        // passar verde na revisão: o `toEqual` exato é a guarda contra isso.
+        explain_status: null,
       });
       expect(response.intent).toEqual(OK_INTENT);
       expect(response.data.degraded).toBe(false);
@@ -461,6 +468,70 @@ describe('SearchService.search (F2.6)', () => {
       expect(response.results).toEqual([]);
       expect(response.recommendation).toBeNull();
       expect(response.warnings).toContain('no_results');
+    });
+  });
+
+  /**
+   * Issue #40: o `search_doc` é indexado em inglês. O serviço entrega ao
+   * recuperador a consulta crua (só para o `name ILIKE`) **e** os `keywords_en`
+   * da intenção; sem eles, cai nas `keywords` da própria intenção — a busca nunca
+   * morre por falta de termo em inglês.
+   */
+  describe('english keywords to the FTS (issue #40)', () => {
+    const PT_INPUT = {
+      ...SEARCH_INPUT,
+      query: 'quero uma skill para documentar uma api em portugues',
+    };
+
+    const PT_INTENT: Intent = {
+      category: null,
+      keywords: ['documentar', 'api'],
+      filters: { exclude_with_vulnerabilities: false },
+      language: 'pt',
+      confidence: 0.88,
+    };
+
+    class KeywordsParser implements IntentParser {
+      constructor(private readonly keywordsEn?: readonly string[]) {}
+
+      parse(): Promise<IntentParserResult> {
+        return Promise.resolve({
+          intent: PT_INTENT,
+          status: 'ok',
+          model: 'fake-model',
+          tokens: null,
+          ...(this.keywordsEn === undefined ? {} : { keywordsEn: this.keywordsEn }),
+        });
+      }
+    }
+
+    it('sends the english keywords of the intent and the raw query to the catalog', async () => {
+      const harness = await build({ parser: new KeywordsParser(['document', 'api']) });
+
+      await harness.service.search(PT_INPUT);
+
+      const input = first(harness.catalog.searchInputs);
+      // O `tsquery` recebe os termos em inglês; o `ILIKE` continua com o cru.
+      expect(input.keywords).toEqual(['document', 'api']);
+      expect(input.query).toBe(PT_INPUT.query);
+    });
+
+    it('falls back to the intent keywords when the step brings no english keyword', async () => {
+      const harness = await build({ parser: new KeywordsParser() });
+
+      await harness.service.search(PT_INPUT);
+
+      const input = first(harness.catalog.searchInputs);
+      expect(input.keywords).toEqual(PT_INTENT.keywords);
+      expect(input.query).toBe(PT_INPUT.query);
+    });
+
+    it('never sends an empty keyword list, even for the disabled parser', async () => {
+      const harness = await build();
+
+      await harness.service.search(PT_INPUT);
+
+      expect(first(harness.catalog.searchInputs).keywords.length).toBeGreaterThan(0);
     });
   });
 

@@ -133,6 +133,12 @@ export class SearchService {
 
     const candidates = await this.catalog.search({
       query: input.query,
+      // Issue #40: o `search_doc` é indexado em inglês, então o `tsquery` recebe os
+      // termos em inglês da intenção. Sem eles (provedor `disabled`, intenção
+      // reparada, campo ausente) caem as `keywords` da consulta: a busca responde
+      // menos, jamais deixa de responder. A consulta crua segue no `query`, que só
+      // serve ao `name ILIKE`.
+      keywords: searchKeywords(parsed),
       category: input.category,
       limit: Math.max(input.limit, CANDIDATE_POOL_SIZE),
     });
@@ -175,6 +181,11 @@ export class SearchService {
         model: parsed.model,
         cached: false,
         tokens: parsed.tokens,
+        // O contrato marca `explain_status` como `required` + `nullable`. A
+        // busca nova ainda NÃO tenta a explicação (issue #42), então o valor
+        // correto é `null` ("não tentado") — nunca o campo ausente. Ausente com
+        // `required` no YAML é contrato mentindo para todo cliente gerado.
+        explain_status: null,
       },
       data: {
         degraded: degradation.degraded,
@@ -252,6 +263,8 @@ export class SearchService {
         model: null,
         tokens: null,
         cached: true,
+        // Replay não chama provedor nenhum: a explicação nunca foi tentada.
+        explain_status: null,
       },
       data: {
         degraded: degradation.degraded,
@@ -421,6 +434,20 @@ export class SearchService {
 /** Milissegundos inteiros desde `startedAt` (`latency_ms`). */
 function elapsedMs(startedAt: bigint): number {
   return Number((process.hrtime.bigint() - startedAt) / 1_000_000n);
+}
+
+/**
+ * Termos que vão ao `tsquery` do catálogo (issue #40).
+ *
+ * `keywordsEn` é o que a intenção extraiu em inglês — o `search_doc` é indexado
+ * em inglês. Ausente ou vazio (provedor `disabled`, intenção reparada), usa as
+ * `keywords` da própria consulta: é a mesma regra de `parseIntentPayload`, e ela
+ * garante que o recuperador nunca receba lista vazia nem derrube a busca. O
+ * ranking não é afetado: `keywords` só escolhe **quem** entra na lista.
+ */
+function searchKeywords(parsed: IntentParserResult): readonly string[] {
+  const english = parsed.keywordsEn ?? [];
+  return english.length > 0 ? english : parsed.intent.keywords;
 }
 
 

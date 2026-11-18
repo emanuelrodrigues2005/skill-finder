@@ -15,6 +15,14 @@ import type { Intent, LlmStatus, TokenUsage } from '@/contract/dto/search-respon
 /** O que o passo de intenção devolve para a busca. */
 export interface IntentParserResult {
   readonly intent: Intent;
+  /**
+   * Termos em inglês para o `tsquery` do `search_doc` (issue #40).
+   *
+   * Fica **fora** da `Intent` de propósito: o contrato público (`openapi.yaml`)
+   * não muda, e este campo só serve ao recuperador. Ausente ou vazio, quem
+   * consome cai em `intent.keywords` — a busca nunca fica sem termo.
+   */
+  readonly keywordsEn?: readonly string[];
   readonly status: LlmStatus;
   /** Modelo que respondeu; `null` quando não houve chamada ao provedor. */
   readonly model: string | null;

@@ -21,7 +21,11 @@
  *   decisão que o bloco C fixa. Sem ela, uma página que repete a skill (destaque + listagem) empurra
  *   a razão para baixo e o run vira `partial` mesmo com tudo gravado.
  */
-import type { CatalogRepository, IngestRunFinish } from '@/catalog/catalog-repository';
+import type {
+  CatalogRepository,
+  IngestRunFinish,
+  RotationParams,
+} from '@/catalog/catalog-repository';
 import { ingest } from '@/catalog/ingest';
 import {
   buildMetricSnapshotStatement,
@@ -307,12 +311,20 @@ class RecordingRepository implements CatalogRepository {
     return Promise.resolve(0);
   }
 
+  selectRotationKeys(_params: RotationParams): Promise<string[]> {
+    return Promise.resolve([]);
+  }
+
   upsertSkills(skills: SkillRecord[]): Promise<number> {
     this.upsertCalls.push(skills);
     return Promise.resolve(new Set(skills.map((item) => item.source_key)).size);
   }
 
   deactivateSkillsNotSeenSince(_seenAt: Date): Promise<number> {
+    return Promise.resolve(0);
+  }
+
+  deactivateSkillsStaleBefore(_cutoff: Date): Promise<number> {
     return Promise.resolve(0);
   }
 }

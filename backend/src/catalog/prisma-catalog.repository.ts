@@ -34,14 +34,28 @@ import {
   INGEST_ERROR_CODES,
   type CatalogRepository,
   type IngestRunFinish,
+  type RotationCandidate,
+  type RotationParams,
 } from './catalog-repository';
 import type { SkillRecord } from './skill-source';
+
+export type { RotationCandidate, RotationParams } from './catalog-repository';
 
 /**
  * Linhas por statement: `search_doc` acrescenta parâmetros e o teto do Postgres
  * é de 65 535 por query. 500 linhas deixam folga larga.
  */
 const UPSERT_CHUNK_SIZE = 500;
+
+/**
+ * Janela do hot set, em dias (F2.10 / D3). Separada de `coldMinDays` de
+ * propósito: são ratificados com o mesmo valor hoje (7), mas significam coisas
+ * diferentes — aqui é "o que foi pedido recentemente", ali é "o que já pode
+ * girar".
+ */
+const HOT_WINDOW_DAYS = 7;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Repositório de produção: toda a escrita passa por statement explícita. */
 export class PrismaCatalogRepository implements CatalogRepository {
@@ -65,10 +79,19 @@ export class PrismaCatalogRepository implements CatalogRepository {
     `;
   }
 
-  async startRun(run: { adapter: string; started_at: Date }): Promise<number> {
+  async startRun(run: {
+    adapter: string;
+    started_at: Date;
+    items_requested?: number | null;
+  }): Promise<number> {
     const rows = await this.prisma.$queryRaw<Array<{ id: bigint }>>`
-      INSERT INTO "ingest_run" (adapter, started_at, status)
-      VALUES (${run.adapter}, ${run.started_at}, 'running'::"IngestStatus")
+      INSERT INTO "ingest_run" (adapter, started_at, status, items_requested)
+      VALUES (
+        ${run.adapter},
+        ${run.started_at},
+        'running'::"IngestStatus",
+        ${run.items_requested ?? null}
+      )
       RETURNING id
     `;
     const row = rows[0];
@@ -101,6 +124,74 @@ export class PrismaCatalogRepository implements CatalogRepository {
   }
 
   /**
+   * As chaves do ciclo de rodízio (F2.10 / D3): hot set primeiro, cold depois.
+   *
+   * Duas consultas, ambas ancoradas em `params.now` — nada de `now()` do banco,
+   * senão a mesma chamada devolveria outra lista a cada segundo:
+   *
+   * 1. **hot**: `source_key` das skills ativas que apareceram em
+   *    `search_request.result_ids` nos últimos 7 dias, ordenadas pela
+   *    requisição mais recente e limitadas a `hotSlots`. É a demanda real: o que
+   *    o usuário procurou tem de estar fresco.
+   * 2. **cold**: o resto das ativas (`is_active`), menos as do hot pool — por
+   *    isso o `NOT EXISTS` sobre o mesmo `unnest`, e não só sobre as 360
+   *    escolhidas: "cold = o resto" é sobre o conjunto quente inteiro.
+   *
+   * O cold usa o índice `(is_active, last_seen_at)` (migration da #45), que é o
+   * que impede um `seq scan` de 20.000 linhas a cada 6 h.
+   */
+  async selectRotationKeys(params: RotationParams): Promise<string[]> {
+    const hotSince = daysBefore(params.now, HOT_WINDOW_DAYS);
+    const cycleSlots = Math.max(0, params.cycleSlots);
+    const hotLimit = Math.max(0, Math.min(params.hotSlots, cycleSlots));
+
+    const hotRows =
+      hotLimit === 0
+        ? []
+        : await this.prisma.$queryRaw<HotRow[]>`
+            SELECT s.source_key AS source_key,
+                   max(sr.created_at) AS requested_at,
+                   s.last_seen_at AS last_seen_at
+              FROM "search_request" AS sr
+              CROSS JOIN LATERAL unnest(sr.result_ids) AS rid(skill_id)
+              JOIN "skill" AS s ON s.id = rid.skill_id
+             WHERE sr.created_at >= ${hotSince}
+               AND s.is_active = true
+             GROUP BY s.source_key, s.last_seen_at
+             ORDER BY max(sr.created_at) DESC, s.source_key COLLATE "C" ASC
+             LIMIT ${hotLimit}
+          `;
+
+    const coldCapacity = cycleSlots - hotRows.length;
+    const coldRows =
+      coldCapacity <= 0
+        ? []
+        : await this.prisma.$queryRaw<ColdRow[]>`
+            WITH hot AS (
+              SELECT DISTINCT rid.skill_id AS skill_id
+                FROM "search_request" AS sr
+                CROSS JOIN LATERAL unnest(sr.result_ids) AS rid(skill_id)
+               WHERE sr.created_at >= ${hotSince}
+            )
+            SELECT s.source_key AS source_key,
+                   s.last_seen_at AS last_seen_at
+              FROM "skill" AS s
+             WHERE s.is_active = true
+               AND NOT EXISTS (SELECT 1 FROM hot WHERE hot.skill_id = s.id)
+             ORDER BY (s.last_seen_at <= ${daysBefore(params.now, params.coldMinDays)}) DESC,
+                      (s.last_seen_at <= ${daysBefore(params.now, params.coldMaxDays)}) DESC,
+                      s.last_seen_at ASC,
+                      s.source_key COLLATE "C" ASC
+             LIMIT ${coldCapacity}
+          `;
+
+    return mergeRotationKeys(params, {
+      hot: hotRows.map(toHotCandidate),
+      cold: coldRows.map(toColdCandidate),
+    });
+  }
+
+  /**
    * Upsert por `source_key`, **uma linha por chave distinta** (a última
    * ocorrência do lote vence), mais o snapshot de métrica das chaves do lote.
    * Devolve quantas linhas de `skill` foram gravadas — o número de chaves
@@ -123,13 +214,151 @@ export class PrismaCatalogRepository implements CatalogRepository {
   }
 
   async deactivateSkillsNotSeenSince(seenAt: Date): Promise<number> {
+    return this.deactivateSkillsStaleBefore(seenAt);
+  }
+
+  /**
+   * Expurgo por TTL: desativa o que não é visto desde `cutoff` (28 dias, D3).
+   *
+   * Mesma statement da desativação por run — uma passada por `last_seen_at`,
+   * nunca por lista de ids —, mas com o corte vindo de fora: o expurgo roda
+   * fora da ingestão, então não empresta o relógio de nenhum run.
+   */
+  async deactivateSkillsStaleBefore(cutoff: Date): Promise<number> {
     return this.prisma.$executeRaw`
       UPDATE "skill"
          SET is_active = false
        WHERE is_active = true
-         AND last_seen_at < ${seenAt}
+         AND last_seen_at < ${cutoff}
     `;
   }
+}
+
+/** Uma linha do hot set, como o `$queryRaw` devolve. */
+interface HotRow {
+  readonly source_key: string;
+  readonly requested_at: Date;
+  readonly last_seen_at: Date;
+}
+
+/** Uma linha do cold set. */
+interface ColdRow {
+  readonly source_key: string;
+  readonly last_seen_at: Date;
+}
+
+/** Os dois conjuntos já lidos do banco: o único dado que a fusão precisa. */
+export interface RotationPool {
+  readonly hot: readonly RotationCandidate[];
+  readonly cold: readonly RotationCandidate[];
+}
+
+/**
+ * Funde hot e cold nos `cycleSlots` do ciclo. **Pura e determinística**: mesma
+ * entrada ⇒ mesma saída, sem relógio e sem `Math.random` (o `now` vem em
+ * `params`).
+ *
+ * A mesma ordenação está escrita duas vezes de propósito: no SQL de
+ * `selectRotationKeys`, para o `LIMIT` cortar as linhas certas usando o índice,
+ * e aqui, para a regra ser provada sem banco. As duas cópias precisam andar
+ * juntas — o spec unitário é o que as mantém honestas.
+ *
+ * Ordem final:
+ * 1. **hot**, pela requisição mais recente; empate resolvido por `sourceKey`
+ *    crescente (comparação de code units, a mesma do `COLLATE "C"` do SQL).
+ * 2. **cold**, as vencidas (fora do TTL de `coldMaxDays`) primeiro, depois as
+ *    frias (`coldMinDays`), e dentro de cada grupo as mais antigas; empate por
+ *    `sourceKey` crescente.
+ *
+ * Chave que aparece nos dois conjuntos conta **uma vez**, na posição do hot —
+ * é o "sem repetir chave entre hot e cold" da issue.
+ */
+export function mergeRotationKeys(params: RotationParams, pool: RotationPool): string[] {
+  const cycleSlots = Math.max(0, params.cycleSlots);
+  const hotSlots = Math.max(0, Math.min(params.hotSlots, cycleSlots));
+  const coldSince = daysBefore(params.now, params.coldMinDays);
+  const expiredSince = daysBefore(params.now, params.coldMaxDays);
+
+  const keys: string[] = [];
+  const chosen = new Set<string>();
+
+  const hot = [...pool.hot].sort((left, right) => {
+    const byRequest = time(right.requestedAt) - time(left.requestedAt);
+    return byRequest !== 0 ? byRequest : compareKeys(left.sourceKey, right.sourceKey);
+  });
+  for (const candidate of hot) {
+    if (keys.length >= hotSlots) {
+      break;
+    }
+    pushUnique(keys, chosen, candidate.sourceKey);
+  }
+
+  const cold = [...pool.cold].sort((left, right) => {
+    const byBand = coldBand(left, coldSince) - coldBand(right, coldSince);
+    if (byBand !== 0) {
+      return byBand;
+    }
+    const byExpiry = coldBand(left, expiredSince) - coldBand(right, expiredSince);
+    if (byExpiry !== 0) {
+      return byExpiry;
+    }
+    const byAge = left.lastSeenAt.getTime() - right.lastSeenAt.getTime();
+    return byAge !== 0 ? byAge : compareKeys(left.sourceKey, right.sourceKey);
+  });
+  for (const candidate of cold) {
+    if (keys.length >= cycleSlots) {
+      break;
+    }
+    pushUnique(keys, chosen, candidate.sourceKey);
+  }
+
+  return keys;
+}
+
+/** `0` para quem cruzou o corte, `1` para quem ainda está dentro dele. */
+function coldBand(candidate: RotationCandidate, cutoff: Date): number {
+  return candidate.lastSeenAt.getTime() <= cutoff.getTime() ? 0 : 1;
+}
+
+/** `Date` em ms; `null` (cold sem requisição) vai para o fim da fila do hot. */
+function time(moment: Date | null): number {
+  return moment === null ? Number.NEGATIVE_INFINITY : moment.getTime();
+}
+
+/**
+ * Ordem de `source_key` por code units — a mesma de `COLLATE "C"` no Postgres.
+ * `localeCompare` seguiria o locale do processo e divergiria da consulta.
+ */
+function compareKeys(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+}
+
+function pushUnique(keys: string[], chosen: Set<string>, sourceKey: string): void {
+  if (chosen.has(sourceKey)) {
+    return;
+  }
+  chosen.add(sourceKey);
+  keys.push(sourceKey);
+}
+
+/** `moment - days`, em ms: aritmética sobre o instante injetado, nunca `now()`. */
+function daysBefore(moment: Date, days: number): Date {
+  return new Date(moment.getTime() - days * DAY_MS);
+}
+
+function toHotCandidate(row: HotRow): RotationCandidate {
+  return {
+    sourceKey: row.source_key,
+    requestedAt: row.requested_at,
+    lastSeenAt: row.last_seen_at,
+  };
+}
+
+function toColdCandidate(row: ColdRow): RotationCandidate {
+  return { sourceKey: row.source_key, requestedAt: null, lastSeenAt: row.last_seen_at };
 }
 
 /**

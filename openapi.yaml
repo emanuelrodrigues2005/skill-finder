@@ -806,6 +806,60 @@ components:
         - filters
         - language
         - confidence
+    ExplainItem:
+      type: object
+      properties:
+        skill_id:
+          type: string
+          description: One of the ranked candidate ids; an id outside that set discards
+            the item (§6.5).
+        why:
+          type: string
+          maxLength: 320
+          description: Why this skill fits the query. Plain text from an untrusted source;
+            render escaped.
+        caveats:
+          type: string
+          nullable: true
+          maxLength: 160
+          description: What is missing or risky about this skill; null when there is
+            nothing to call out.
+      required:
+        - skill_id
+        - why
+        - caveats
+    ExplainRecommendation:
+      type: object
+      properties:
+        skill_id:
+          type: string
+          description: Candidate the recommendation highlights; must be the `rank 1` id
+            (§6.5).
+        why:
+          type: string
+          maxLength: 400
+          description: Why the highlighted skill is the starting point. Plain text from an
+            untrusted source; render escaped.
+      required:
+        - skill_id
+        - why
+    ExplainPayload:
+      type: object
+      properties:
+        items:
+          description: One entry per explained candidate; ids outside the retrieved set
+            are discarded.
+          type: array
+          items:
+            $ref: "#/components/schemas/ExplainItem"
+        recommendation:
+          description: Single recommendation, or a repair is requested when it is missing
+            or off-set.
+          allOf:
+            - $ref: "#/components/schemas/ExplainRecommendation"
+      required:
+        - items
+        - recommendation
     TokenUsage:
       type: object
       properties:
@@ -834,6 +888,19 @@ components:
             - unavailable
             - disabled
           description: How the LLM step ended. `disabled` is the LLM_ENABLED=false mode.
+        explain_status:
+          type: string
+          enum:
+            - ok
+            - cached
+            - repaired
+            - invalid_ids
+            - low_confidence
+            - unavailable
+            - disabled
+          nullable: true
+          description: How the explain step ended; null when it was not attempted (e.g. a
+            replayed search).
         model:
           type: string
           nullable: true
@@ -849,6 +916,7 @@ components:
             - $ref: "#/components/schemas/TokenUsage"
       required:
         - status
+        - explain_status
         - model
         - cached
         - tokens

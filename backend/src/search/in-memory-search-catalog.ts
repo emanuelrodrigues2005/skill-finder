@@ -16,6 +16,7 @@ import type {
   SearchCatalogInput,
   SkillPage,
 } from './search-catalog.port';
+import { ftsTerms } from './search-catalog.port';
 
 /** Conteúdo do duplo; tudo por injeção, nada lido do ambiente. */
 export interface InMemoryCatalogSeed {
@@ -54,7 +55,12 @@ export class InMemorySearchCatalog implements SearchCatalog {
   }
 
   search(input: SearchCatalogInput): Promise<readonly SkillSummary[]> {
-    const terms = input.query.toLowerCase().split(/\s+/).filter((term) => term.length > 0);
+    // Mesma semântica do adaptador Postgres (issue #40): quem casa com o texto é
+    // o termo em inglês da intenção, não a consulta crua.
+    const terms = ftsTerms(input)
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((term) => term.length > 0);
     return Promise.resolve(
       this.skills
         .filter((skill) => input.category === null || skill.category === input.category)

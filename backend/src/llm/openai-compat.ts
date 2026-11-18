@@ -116,6 +116,11 @@ export class OpenAICompatParser implements IntentParser {
         status: DEGRADED_BY_STATUS[cached.status] ? cached.status : 'cached',
         model: null,
         tokens: null,
+        // Sem esta linha o hit do cache perdia os termos em inglês e o FTS
+        // voltava a receber a consulta crua (em PT) contra um `search_doc` em
+        // inglês: o defeito da #40 reaparecia na SEGUNDA busca idêntica, em
+        // silêncio, porque `cached` não degrada.
+        keywordsEn: cached.keywordsEn,
       };
     }
 
@@ -185,9 +190,12 @@ export class OpenAICompatParser implements IntentParser {
     if (typeof content !== 'string' || content.trim().length === 0) {
       return { intent: lexicalIntent(query), status: 'unavailable', model: null, tokens: null };
     }
-    const { intent, status } = parseIntentPayload(content, { query, categories });
+    const { intent, status, keywordsEn } = parseIntentPayload(content, { query, categories });
     return {
       intent,
+      // Termos em inglês para o `tsquery` do `search_doc` (issue #40): viajam fora
+      // da `Intent` para não tocar no contrato público.
+      keywordsEn,
       status,
       model:
         typeof data.model === 'string' && data.model.length > 0 ? data.model : this.options.model,

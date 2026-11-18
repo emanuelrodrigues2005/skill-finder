@@ -16,12 +16,41 @@ import type { SkillSortField } from './constants';
 
 /** Argumentos da recuperação de candidatos (`POST /api/v1/search`). */
 export interface SearchCatalogInput {
-  /** Texto já validado do usuário; a consulta é livre, o resultado é ranqueado. */
+  /**
+   * Texto já validado do usuário, **cru**. Serve só ao `name ILIKE`: o nome da
+   * skill pode estar no idioma da consulta, e é isso que faz uma busca em
+   * português citar a skill pelo nome.
+   */
   readonly query: string;
+  /**
+   * Termos em inglês que o passo de intenção extraiu (issue #40).
+   *
+   * O `search_doc` é indexado com `to_tsvector('english', ...)`, então é por aqui
+   * — e não pela consulta crua — que a busca textual casa. Lista vazia é
+   * permitida: o adaptador cai na `query` e a busca nunca deixa de responder.
+   */
+  readonly keywords: readonly string[];
   /** Slug existente ou `null` para todas as categorias. */
   readonly category: string | null;
   /** Quantos candidatos trazer: o ranking corta depois. */
   readonly limit: number;
+}
+
+/**
+ * Texto que vai ao `tsquery` do `search_doc`: os termos em inglês da intenção,
+ * unidos por espaço (issue #40).
+ *
+ * Vive na porta, e não em cada adaptador, porque é a mesma regra para todos: sem
+ * termo em inglês (intenção degradada, provedor `disabled`) volta à consulta crua
+ * — a busca responde pior, mas nunca deixa de responder. O adaptador em memória
+ * imita exatamente esta semântica.
+ */
+export function ftsTerms(input: Pick<SearchCatalogInput, 'query' | 'keywords'>): string {
+  const joined = input.keywords
+    .map((keyword) => keyword.trim())
+    .filter((keyword) => keyword.length > 0)
+    .join(' ');
+  return joined.length > 0 ? joined : input.query;
 }
 
 /** Argumentos de `GET /api/v1/skills` (§5.4, §5.6). */

@@ -115,7 +115,22 @@ describe('PrismaCatalogRepository — runs', () => {
 
     const [call] = prisma.calls;
     expect(call?.sql).toContain('INSERT INTO "ingest_run"');
-    expect(call?.values).toEqual(['fixture', SEEN_AT]);
+    // `items_requested` entra como `null` quando o run não é de rodízio: dado
+    // ausente é NULL, nunca zero (#45).
+    expect(call?.values).toEqual(['fixture', SEEN_AT, null]);
+  });
+
+  it('records the size of the rotation cycle on the run', async () => {
+    const { prisma, repo } = repository();
+    prisma.queryRows = [{ id: 43n }];
+
+    expect(
+      await repo.startRun({ adapter: 'fixture', started_at: SEEN_AT, items_requested: 720 }),
+    ).toBe(43);
+
+    const [call] = prisma.calls;
+    expect(call?.sql).toContain('items_requested');
+    expect(call?.values).toEqual(['fixture', SEEN_AT, 720]);
   });
 
   it('throws instead of returning NaN when the insert comes back empty', async () => {
@@ -195,6 +210,18 @@ describe('PrismaCatalogRepository — contagem e desativação', () => {
     const [call] = prisma.calls;
     expect(call?.sql).toContain('SET is_active = false');
     expect(call?.sql).toContain('last_seen_at <');
+    expect(call?.values).toEqual([SEEN_AT]);
+  });
+
+  it('runs the TTL sweep against an external cutoff', async () => {
+    const { prisma, repo } = repository();
+
+    // Expurgo de 28 dias: o corte vem de fora, não do relógio de um run (#45).
+    expect(await repo.deactivateSkillsStaleBefore(SEEN_AT)).toBe(1);
+
+    const [call] = prisma.calls;
+    expect(call?.sql).toContain('SET is_active = false');
+    expect(call?.sql).toContain('WHERE is_active = true');
     expect(call?.values).toEqual([SEEN_AT]);
   });
 });
