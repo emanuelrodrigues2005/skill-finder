@@ -25,7 +25,15 @@
 import { Logger } from '@nestjs/common';
 import axios, { type AxiosInstance } from 'axios';
 
-import { DEFAULT_LLM_TOTAL_DEADLINE_MS } from '@/config/env.schema';
+// Import de VALOR: caminho relativo, nunca `@/`.
+//
+// O alias `@/` (`tsconfig.json` → `paths`) só é resolvido pelo `tsc` e pelo Jest
+// (`moduleNameMapper`). `ts-node` **não** o resolve em runtime, e
+// `scripts/generate-openapi.ts` roda por ts-node: um import de valor via `@/`
+// derruba o `openapi:generate` no CI com `MODULE_NOT_FOUND` (foi o que
+// aconteceu na primeira execução da F2.10). Import `type` pode usar `@/`, porque
+// o compilador o apaga.
+import { DEFAULT_LLM_TOTAL_DEADLINE_MS } from '../config/env.schema';
 import type { TokenUsage } from '@/contract/dto/search-response.dto';
 
 import { DEGRADED_BY_STATUS } from './degradation';

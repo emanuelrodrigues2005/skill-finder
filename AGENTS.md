@@ -33,6 +33,13 @@ Escopos: `typecheck`, `openapi`, `unit`, `e2e`, `docs`, ou vazio para tudo.
   verificação completa é do orquestrador, no fim da issue.
 - `verify.sh --native` roda no `/mnt/c` — só para comparar, nunca no fluxo.
 - O espelho é descartável: `--delete` a cada execução. Nada é escrito no checkout.
+- **Import de valor dentro de `backend/src/` é relativo, nunca `@/`.** O alias `@/`
+  (`tsconfig.json` → `paths`) só é resolvido pelo `tsc` e pelo Jest
+  (`moduleNameMapper`); `ts-node` **não** o resolve em runtime, e
+  `scripts/generate-openapi.ts` roda por ts-node — então um import de valor via
+  `@/` derruba o `openapi:generate` no CI com `MODULE_NOT_FOUND`. Import `type`
+  pode usar `@/`, porque o compilador o apaga. Quebrou uma vez na F2.10; a regra
+  existe para não quebrar de novo.
 
 ## Regras que não se deduzem do código
 
