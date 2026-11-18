@@ -334,6 +334,8 @@ function staticSource(items: SkillRecord[]): SkillSource {
   return {
     capabilities: { supports_categories: false, supports_documents: false },
     listCategories: () => Promise.resolve([]),
+    // A ingestão de hoje pagina; quem pede chaves é o rodízio (#44, #46).
+    fetchSkills: () => Promise.resolve([]),
     fetchCatalog: (pageNumber: number) =>
       Promise.resolve({ items: pageNumber === 1 ? items : [], page: pageNumber, has_more: false }),
     fetchDocument: () => Promise.resolve(null),

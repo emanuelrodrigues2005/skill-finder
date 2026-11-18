@@ -4,6 +4,7 @@
  * Contrato exigido do código de produção (`backend/src/catalog/fixture-source.ts`):
  *
  *   export function createFixtureSource(options?: { path?: string }): SkillSource;
+ *   fetchCatalog(page), fetchDocument(key), fetchSkills(keys)   // #44: a chave é a unidade do rodízio
  *
  * O adaptador lê a amostra congelada da descoberta (`docs/app/amostras/skills-sample-2026-11-15.json`,
  * 25 skills reais de 2026-11-15), copiada byte a byte para `backend/test/fixtures/catalog-sample.json`
@@ -121,5 +122,59 @@ describe('catalog fixture source (docs/app/amostras/README.md)', () => {
 
     expect(adapter.capabilities.supports_documents).toBe(false);
     expect(await adapter.fetchDocument(FIRST_KEY)).toBeNull();
+  });
+
+  /**
+   * Issue #44 — `fetchSkills(keys)`: a chave é a unidade que o rodízio pede
+   * (720 por ciclo), não a página. Não existe listagem paginada no skills.sh:
+   * existem sitemap + página de detalhe, então quem sabe o `source_key` pede
+   * por ele. Contrato: **só** chaves conhecidas, na ordem pedida, chave
+   * desconhecida é ausência (nunca erro), repetida devolve um registro só.
+   *
+   * Chaves literais da amostra, tiradas da fixture — independentes do código.
+   */
+  describe('fetchSkills(keys) — a unidade do rodízio (#44)', () => {
+    const SECOND_KEY = 'anthropics/skills/webapp-testing';
+    const THIRD_KEY = 'clerk/skills/clerk-webhooks';
+
+    it('devolve um registro por chave conhecida, na ordem pedida', async () => {
+      const skills = await source().fetchSkills([SECOND_KEY, FIRST_KEY]);
+
+      expect(skills.map((skill) => skill.source_key)).toEqual([SECOND_KEY, FIRST_KEY]);
+      expect(skills[1]?.name).toBe('find-skills');
+      expect(skills[1]?.installs).toBe(4400000);
+    });
+
+    it('omite as chaves desconhecidas e não lança', async () => {
+      const skills = await source().fetchSkills([
+        'nao-existe/skills/fantasma',
+        FIRST_KEY,
+        '../../etc/passwd',
+        '',
+      ]);
+
+      expect(skills.map((skill) => skill.source_key)).toEqual([FIRST_KEY]);
+    });
+
+    it('só chaves desconhecidas: lista vazia, sem erro', async () => {
+      await expect(source().fetchSkills(['nada/aqui/nao-existe'])).resolves.toEqual([]);
+    });
+
+    it('nenhuma chave pedida: lista vazia, sem tocar a fixture', async () => {
+      await expect(source().fetchSkills([])).resolves.toEqual([]);
+    });
+
+    it('chave repetida devolve um registro só, na primeira posição pedida', async () => {
+      const skills = await source().fetchSkills([FIRST_KEY, SECOND_KEY, FIRST_KEY]);
+
+      expect(skills.map((skill) => skill.source_key)).toEqual([FIRST_KEY, SECOND_KEY]);
+    });
+
+    it('não devolve chave que não foi pedida', async () => {
+      const skills = await source().fetchSkills([THIRD_KEY]);
+
+      expect(skills).toHaveLength(1);
+      expect(skills[0]?.source_key).toBe(THIRD_KEY);
+    });
   });
 });

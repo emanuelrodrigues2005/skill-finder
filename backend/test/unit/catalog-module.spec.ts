@@ -27,7 +27,7 @@ import type { PrismaClient } from '@prisma/client';
 import { CATALOG_ADAPTER, CATALOG_REPOSITORY, CATALOG_SOURCE, CatalogModule, type CatalogModuleOptions } from '@/catalog/catalog.module';
 import type { CatalogRepository } from '@/catalog/catalog-repository';
 import { PrismaCatalogRepository } from '@/catalog/prisma-catalog.repository';
-import type { CatalogPage, SkillSource } from '@/catalog/skill-source';
+import type { CatalogPage, SkillRecord, SkillSource } from '@/catalog/skill-source';
 
 /** Fonte injetada: o módulo tem de devolver **esta** referência. */
 function stubSource(): SkillSource & { calls: number[] } {
@@ -37,6 +37,8 @@ function stubSource(): SkillSource & { calls: number[] } {
     capabilities: { supports_categories: true, supports_documents: true },
     listCategories: () =>
       Promise.resolve([{ slug: 'backend', label_en: 'Backend', position: 1 }]),
+    // O módulo só repassa a fonte: construir não deve chamar nem chaves nem páginas.
+    fetchSkills: (): Promise<SkillRecord[]> => Promise.resolve([]),
     fetchCatalog: (page: number): Promise<CatalogPage> => {
       calls.push(page);
       return Promise.resolve({ items: [], page, has_more: false });

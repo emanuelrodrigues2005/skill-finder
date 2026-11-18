@@ -213,6 +213,8 @@ function staticSource(items: SkillRecord[]): SkillSource {
   return {
     capabilities: { supports_categories: false, supports_documents: false },
     listCategories: () => Promise.resolve([]),
+    // A ingestão de hoje pagina; quem pede chaves é o rodízio (#44, #46).
+    fetchSkills: () => Promise.resolve([]),
     fetchCatalog: (pageNumber: number) =>
       Promise.resolve(pageNumber === 1 ? page(items, 1, false) : page([], pageNumber, false)),
     fetchDocument: () => Promise.resolve(null),
@@ -224,6 +226,7 @@ function throwingSource(error: Error): SkillSource {
   return {
     capabilities: { supports_categories: false, supports_documents: false },
     listCategories: () => Promise.resolve([]),
+    fetchSkills: () => Promise.resolve([]),
     fetchCatalog: () => Promise.reject(error),
     fetchDocument: () => Promise.resolve(null),
   };
@@ -234,6 +237,7 @@ function firstPageThenThrow(items: SkillRecord[], error: Error): SkillSource {
   return {
     capabilities: { supports_categories: false, supports_documents: false },
     listCategories: () => Promise.resolve([]),
+    fetchSkills: () => Promise.resolve([]),
     fetchCatalog: (pageNumber: number) =>
       pageNumber === 1 ? Promise.resolve(page(items, 1, true)) : Promise.reject(error),
     fetchDocument: () => Promise.resolve(null),

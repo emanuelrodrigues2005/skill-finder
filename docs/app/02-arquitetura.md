@@ -75,7 +75,7 @@ flowchart LR
 
 | Seam | Contrato | O que permite trocar sem retrabalho |
 | --- | --- | --- |
-| `SkillSource` | `list_categories()`, `fetch_catalog(page)`, `fetch_document(key)` | JSON público → scraping → fixture de teste, por variável de ambiente |
+| `SkillSource` | `list_categories()`, `fetch_skills(keys)`, `fetch_document(key)`, `fetch_catalog(page)` (`@deprecated`, sai na #46) | JSON público → scraping → fixture de teste, por variável de ambiente |
 | `LLMProvider` | `extract_intent()`, `explain()` | opencode → qualquer provedor OpenAI-compatible → `NullProvider` |
 | UI ↔ API | `openapi.yaml` gerado pelos decorators do `@nestjs/swagger` (`scripts/generate-openapi.ts`) | Reescrever a SPA sem tocar no backend |
 | API ↔ Banco | migrations Prisma (`prisma migrate`) | Trocar Postgres gerenciado (Opção 2 de `docs/01` §4.3) sem alterar código de domínio |
@@ -449,10 +449,13 @@ O response marca `llm.status ∈ {ok, cached, repaired, invalid_ids, low_confide
 ```text
 SkillSource
   listCategories()                   -> Promise<CategoryRecord[]>
-  fetchCatalog(page: number)         -> Promise<Page<SkillRecord>>     // paginação até esgotar
+  fetchSkills(keys: source_key[])    -> Promise<SkillRecord[]>         // só as conhecidas, na ordem pedida; chave faltante não lança
   fetchDocument(sourceKey)           -> Promise<DocumentRecord | null> // SKILL.md, opcional
+  fetchCatalog(page: number)         -> Promise<Page<SkillRecord>>     // @deprecated: sai na #46
   capabilities                       -> {supports_documents, supports_categories, pagination_style}
 ```
+
+**A chave é a unidade de aquisição, não a página** (#44). O rodízio (§7.3) escolhe até 720 `source_key` por ciclo e pede exatamente essas: `fetchSkills(keys)` é a chamada dele. O skills.sh não publica listagem paginada — só sitemap e página de detalhe —, então paginar o catálogo inteiro era a unidade errada. Contrato: devolve **só** as chaves conhecidas, na ordem em que foram pedidas, com a repetida aparecendo uma vez; chave desconhecida é omitida (ausência, não erro) e **nunca lança** por causa dela, porque uma chave que sumiu da fonte não pode derrubar o ciclo. `fetchCatalog(page)` fica por compatibilidade, marcado `@deprecated`, até a #46 reescrever a ingestão; nenhum código novo deve chamá-lo.
 
 `SkillRecord` já é o formato interno (não o formato do site): `source_key`, `name`, `summary`, `category_slug`, `stars`, `installs`, `vulnerability_count`, `security_status`, `repo_url`, `skill_md_url`, `raw`. **Toda a normalização vive no adaptador** — é o único lugar que conhece o formato do skills.sh.
 

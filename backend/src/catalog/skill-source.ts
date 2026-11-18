@@ -70,6 +70,24 @@ export interface SkillSourceCapabilities {
 export interface SkillSource {
   readonly capabilities: SkillSourceCapabilities;
   listCategories(): Promise<CategoryRecord[]>;
+  /**
+   * Skills conhecidas para as chaves pedidas, na ordem pedida — a unidade do
+   * rodízio (§7.3), que escolhe até 720 `source_key` por ciclo e pede
+   * exatamente essas. O skills.sh não publica listagem paginada (só sitemap +
+   * página de detalhe), então a chave é a única unidade honesta de aquisição.
+   *
+   * Contrato: devolve **só** as chaves conhecidas, com a repetida aparecendo
+   * uma vez (na primeira posição pedida). Chave desconhecida é ausência, não
+   * erro: é omitida e **nunca lança** por causa dela — uma chave que sumiu da
+   * fonte, ou que veio corrompida, não pode derrubar o ciclo de ingestão.
+   */
+  fetchSkills(keys: readonly string[]): Promise<SkillRecord[]>;
+  /**
+   * Página da listagem do catálogo.
+   *
+   * @deprecated a fonte não tem listagem paginada; sai na #46, junto com a
+   * reescrita da ingestão, que passa a pedir chaves por `fetchSkills(keys)`.
+   */
   fetchCatalog(page: number): Promise<CatalogPage>;
   fetchDocument(sourceKey: string): Promise<DocumentRecord | null>;
 }

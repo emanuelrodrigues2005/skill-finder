@@ -15,12 +15,23 @@
  * `null`. A fonte não tem categorias nem `SKILL.md`: `listCategories()` devolve
  * `[]` e `fetchDocument()` devolve `null` — resposta honesta, com as
  * capabilities avisando de antemão.
+ *
+ * `fetchSkills(keys)` (#44) é o caminho do rodízio: normaliza a amostra uma vez
+ * num índice `source_key -> SkillRecord` e responde só o que foi pedido. Chave
+ * desconhecida é omitida e não vira exceção (contrato em `skill-source.ts`).
+ * `fetchCatalog` fica como compatibilidade até a #46, sobre a mesma leitura
+ * memoizada.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { normaliseSkill, type RawSkill } from './normalise';
-import type { CatalogPage, SkillSource, SkillSourceCapabilities } from './skill-source';
+import type {
+  CatalogPage,
+  SkillRecord,
+  SkillSource,
+  SkillSourceCapabilities,
+} from './skill-source';
 
 /** Caminho padrão, relativo ao diretório de trabalho do backend. */
 export const DEFAULT_FIXTURE_PATH = join('test', 'fixtures', 'catalog-sample.json');
@@ -41,6 +52,7 @@ const FIRST_PAGE = 1;
 export function createFixtureSource(options: FixtureSourceOptions = {}): SkillSource {
   const path = options.path ?? join(process.cwd(), DEFAULT_FIXTURE_PATH);
   let cached: readonly RawSkill[] | null = null;
+  let index: ReadonlyMap<string, SkillRecord> | null = null;
 
   function rawSkills(): readonly RawSkill[] {
     // Leitura preguiçosa e memoizada por instância: criar a fonte não toca o disco.
@@ -50,9 +62,44 @@ export function createFixtureSource(options: FixtureSourceOptions = {}): SkillSo
     return cached;
   }
 
+  function skillsByKey(): ReadonlyMap<string, SkillRecord> {
+    // A normalização custa a amostra inteira; o rodízio pede várias chaves por
+    // ciclo, então o índice é construído na primeira chamada e reusado.
+    if (index === null) {
+      index = new Map(
+        rawSkills().map((raw) => {
+          const record = normaliseSkill(raw);
+          return [record.source_key, record] as const;
+        }),
+      );
+    }
+    return index;
+  }
+
   return {
     capabilities: CAPABILITIES,
     listCategories: () => Promise.resolve([]),
+    fetchSkills: async (keys: readonly string[]): Promise<SkillRecord[]> => {
+      // Sem chaves pedidas, a fixture nem é lida: resposta vazia não é erro.
+      if (keys.length === 0) {
+        return Promise.resolve([]);
+      }
+      const known = skillsByKey();
+      const asked = new Set<string>();
+      const records: SkillRecord[] = [];
+      for (const key of keys) {
+        if (asked.has(key)) {
+          continue;
+        }
+        asked.add(key);
+        const record = known.get(key);
+        if (record !== undefined) {
+          // Chave desconhecida simplesmente não entra: ausência, não exceção.
+          records.push(record);
+        }
+      }
+      return Promise.resolve(records);
+    },
     fetchCatalog: (page: number): Promise<CatalogPage> => {
       if (page !== FIRST_PAGE) {
         return Promise.resolve({ items: [], page, has_more: false });
