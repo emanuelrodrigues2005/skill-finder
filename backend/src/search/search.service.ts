@@ -469,7 +469,11 @@ export class SearchService {
         flags: withRepairedFlag(explanation.flags, prose?.repaired === true),
         // O `caveats` do agente manda; sem ele, vale o aviso de evidência
         // incompleta do template (regra 3: a lacuna nunca fica invisível).
-        caveats: prose?.caveats ?? explanation.caveats,
+          // O `caveats` ja vem RESOLVIDO do `explainItem` (que prefere o
+          // `caveatsTemplate` do agente e cai no aviso de evidencia incompleta
+          // quando ele falta). Republicar `prose.caveats` aqui descartava a
+          // resolucao e mandava `{{skill:<id>}}` cru para a tela - HIGH da #42.
+          caveats: explanation.caveats,
       });
     }
 
