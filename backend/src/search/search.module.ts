@@ -1,25 +1,32 @@
 /**
- * Módulo da busca (§3, F2.6): as cinco rotas públicas e as duas portas que as
+ * Módulo da busca (§3, F2.6): as cinco rotas públicas e as portas que as
  * sustentam.
  *
  * O grafo é montado por `forRoot()` porque **nada** aqui pode depender do
  * ambiente no momento em que o decorator é avaliado: `SEARCH_CATALOG`,
- * `SEARCH_STORE` e `INTENT_PARSER` nascem de fábricas que injetam
+ * `SEARCH_STORE`, `INTENT_PARSER` e `EXPLAIN_PORT` nascem de fábricas que injetam
  * `PrismaService` e `AppConfigService`. O mesmo `forRoot` aceita portas prontas
  * (`catalog`/`store`) — é o seam dos duplos em memória, sem nenhum `if` de teste
  * no código de produção.
  *
- * `INTENT_PARSER` vem do `LlmModule` (a factory dele), nunca daqui: quem decide
- * entre provedor real e modo degradado é a configuração `LLM_ENABLED`, num lugar
- * só.
+ * As duas portas de LLM vêm das fábricas do `LlmModule` (passo 4 e passo 7),
+ * nunca daqui: quem decide entre provedor real e modo degradado é a configuração
+ * `LLM_ENABLED`, num lugar só.
  */
 import { type DynamicModule, Module } from '@nestjs/common';
 
 import { MetricsModule } from '../common/metrics/metrics.module';
 import { AppConfigService } from '../config/config.module';
 import type { Env } from '../config/env.schema';
+import type { ExplainParser } from '../llm/explain-parser';
 import type { IntentParser } from '../llm/intent-parser';
-import { createIntentParser, INTENT_PARSER, type LlmModuleOptions } from '../llm/llm.module';
+import {
+  createExplainParser,
+  createIntentParser,
+  EXPLAIN_PORT,
+  INTENT_PARSER,
+  type LlmModuleOptions,
+} from '../llm/llm.module';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { CategoriesController } from './categories.controller';
@@ -77,6 +84,14 @@ export class SearchModule {
           inject: [AppConfigService],
           useFactory: (config: AppConfigService): IntentParser =>
             createIntentParser(llmOptions(config.env)),
+        },
+        {
+          // Passo 7 (§6.5, issue #42). Sai da **mesma** fábrica do passo 4 — a
+          // regra "`LLM_ENABLED` escolhe o provedor" mora em `createLlmClient`.
+          provide: EXPLAIN_PORT,
+          inject: [AppConfigService],
+          useFactory: (config: AppConfigService): ExplainParser =>
+            createExplainParser(llmOptions(config.env)),
         },
       ],
       exports: [SEARCH_CATALOG, SEARCH_STORE],

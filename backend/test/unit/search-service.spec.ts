@@ -58,8 +58,9 @@ import { AppConfigService } from '@/config/config.module';
 import { loadEnv } from '@/config/env.schema';
 import type { CategoryItem, SkillDetail, SkillSummary } from '@/contract/dto/catalog.dto';
 import type { Intent, SearchResponse } from '@/contract/dto/search-response.dto';
+import type { ExplainParser, ExplainRequest, ExplainResult } from '@/llm/explain-parser';
 import type { IntentParser, IntentParserResult } from '@/llm/intent-parser';
-import { INTENT_PARSER, LlmModule } from '@/llm/llm.module';
+import { EXPLAIN_PORT, INTENT_PARSER, LlmModule } from '@/llm/llm.module';
 import { OpenAICompatParser } from '@/llm/openai-compat';
 import { decodeSkillId, encodeSkillId } from '@/search/ids';
 import type { SearchCatalog, SearchCatalogInput } from '@/search/search-catalog.port';
@@ -119,6 +120,11 @@ class CatalogStub implements SearchCatalog {
   searchCalls = 0;
   /** Entradas recebidas em `search`, na ordem: é o contrato com o recuperador. */
   readonly searchInputs: SearchCatalogInput[] = [];
+  /** Evidência extra do detalhe: só o rank 1 pode chegar ao passo de explicação. */
+  summary: string | null = null;
+  skillMdExcerpt: string | null = null;
+  /** Ids pedidos ao detalhe: prova que a busca não paga uma consulta por item. */
+  readonly detailInputs: bigint[] = [];
 
   search(input: SearchCatalogInput): Promise<readonly SkillSummary[]> {
     this.searchCalls += 1;
@@ -136,11 +142,18 @@ class CatalogStub implements SearchCatalog {
   }
 
   detail(skillId: bigint): Promise<SkillDetail | null> {
+    this.detailInputs.push(skillId);
     const found = this.skills.find((item) => decodeSkillId(item.skill_id) === skillId);
     return Promise.resolve(
       found === undefined
         ? null
-        : { ...found, summary: null, repo_url: null, skill_md_excerpt: null, data_snapshot: null },
+        : {
+            ...found,
+            summary: this.summary,
+            repo_url: null,
+            skill_md_excerpt: this.skillMdExcerpt,
+            data_snapshot: null,
+          },
     );
   }
 
@@ -200,10 +213,122 @@ const METRICS_STUB = {
 
 class OkIntentParser implements IntentParser {
   calls = 0;
+  /** Orçamento recebido do serviço: o mesmo que o passo de explicação vai ver. */
+  deadlineAtMs?: number;
 
-  parse(): Promise<IntentParserResult> {
+  parse(
+    _query: string,
+    _categories: readonly string[],
+    budget?: { readonly deadlineAtMs?: number },
+  ): Promise<IntentParserResult> {
     this.calls += 1;
+    this.deadlineAtMs = budget?.deadlineAtMs;
     return Promise.resolve(OK_PARSER_RESULT);
+  }
+}
+
+/** Intenção de confiança baixa: o passo de explicação não deve ser tentado (#42). */
+class LowConfidenceParser implements IntentParser {
+  parse(): Promise<IntentParserResult> {
+    return Promise.resolve({
+      intent: { ...OK_INTENT, confidence: 0.2 },
+      status: 'low_confidence',
+      model: null,
+      tokens: null,
+    });
+  }
+}
+
+/**
+ * Prosa do "agente" determinística: cita a skill só por `{{skill:<id>}}` e diz
+ * algo que o template nunca diz, para os casos distinguirem **de onde** veio o
+ * texto da resposta.
+ */
+class ProseExplain implements ExplainParser {
+  readonly requests: ExplainRequest[] = [];
+
+  explain(request: ExplainRequest): Promise<ExplainResult> {
+    this.requests.push(request);
+    const [rank1] = request.candidates;
+    return Promise.resolve({
+      items: request.candidates.map((candidate) => ({
+        skill_id: candidate.skill_id,
+        why: `{{skill:${candidate.skill_id}}} atende ao pedido segundo o agente.`,
+        caveats: null,
+        repaired: false,
+      })),
+      recommendation: {
+        skill_id: rank1?.skill_id ?? '',
+        why: `{{skill:${rank1?.skill_id ?? ''}}} é a recomendação do agente para esta busca.`,
+        repaired: false,
+      },
+      status: 'ok',
+      reason: null,
+      model: 'fake-model',
+      tokens: { prompt: 20, completion: 10 },
+    });
+  }
+}
+
+/** Porta `explain` com desfecho fixo — o caso controla o status do passo. */
+class ExplainStub implements ExplainParser {
+  readonly requests: ExplainRequest[] = [];
+
+  constructor(private readonly result: ExplainResult) {}
+
+  explain(request: ExplainRequest): Promise<ExplainResult> {
+    this.requests.push(request);
+    return Promise.resolve(this.result);
+  }
+}
+
+/** Item que precisou de reparo na escada de validação (§5.3, degrau 5). */
+class RepairedExplain implements ExplainParser {
+  explain(request: ExplainRequest): Promise<ExplainResult> {
+    return Promise.resolve({
+      items: request.candidates.map((candidate) => ({
+        skill_id: candidate.skill_id,
+        why: `{{skill:${candidate.skill_id}}} texto que precisou de reparo.`,
+        caveats: 'risco apontado pelo agente',
+        repaired: true,
+      })),
+      recommendation: {
+        skill_id: request.candidates[0]?.skill_id ?? '',
+        why: 'a recomendação também precisou de reparo.',
+        repaired: true,
+      },
+      status: 'repaired',
+      reason: null,
+      model: 'fake-model',
+      tokens: null,
+    });
+  }
+}
+
+/**
+ * Cache devolvendo prosa de **outra** ordem: a recomendação aponta para o segundo
+ * colocado. O serviço tem de revalidar contra o rank 1 antes de responder (§4).
+ */
+class WrongOrderRecommendation implements ExplainParser {
+  explain(request: ExplainRequest): Promise<ExplainResult> {
+    const second = request.candidates[1];
+    return Promise.resolve({
+      items: request.candidates.map((candidate) => ({
+        skill_id: candidate.skill_id,
+        why: `{{skill:${candidate.skill_id}}} atende ao pedido.`,
+        caveats: null,
+        repaired: false,
+      })),
+      recommendation: {
+        skill_id: second?.skill_id ?? '',
+        why: `{{skill:${second?.skill_id ?? ''}}} é a recomendação do agente para esta busca.`,
+        repaired: false,
+      },
+      status: 'ok',
+      reason: null,
+      model: null,
+      tokens: null,
+    });
   }
 }
 
@@ -220,12 +345,13 @@ async function build(
     parser?: IntentParser;
     catalog?: CatalogStub;
     store?: StoreStub;
+    explain?: ExplainParser;
   } = {},
 ): Promise<Harness> {
   const catalog = options.catalog ?? new CatalogStub();
   const store = options.store ?? new StoreStub();
 
-  const builder = Test.createTestingModule({
+  let builder = Test.createTestingModule({
     // `LLM_ENABLED=false` (o modo degradado de dev/CI) entra pelo módulo real:
     // é a fiação que decide o parser, não o teste.
     imports: [
@@ -247,11 +373,16 @@ async function build(
 
   // O provedor falso só entra quando o caso pede um parser bom; no caso
   // `LLM_ENABLED=false` quem responde é o parser `disabled` do módulo real.
-  const moduleRef = await (
-    options.parser === undefined
-      ? builder
-      : builder.overrideProvider(INTENT_PARSER).useValue(options.parser)
-  ).compile();
+  if (options.parser !== undefined) {
+    builder = builder.overrideProvider(INTENT_PARSER).useValue(options.parser);
+  }
+  // A porta de explicação é sempre injetada (é o passo 7 do #42): o duplo entra
+  // por `overrideProvider`, nunca por variável de ambiente (regra 5).
+  if (options.explain !== undefined) {
+    builder = builder.overrideProvider(EXPLAIN_PORT).useValue(options.explain);
+  }
+
+  const moduleRef = await builder.compile();
 
   return {
     service: moduleRef.get<SearchService>(SearchService),
@@ -606,6 +737,254 @@ describe('SearchService.search (F2.6)', () => {
       expect(projection.query_hash).toBe(stored.query_hash);
       expect(projection.result_ids).toEqual(stored.result_ids.map((id) => id.toString()));
       expect(projection.status).toBe('ok');
+    });
+  });
+
+  /**
+   * Issue #42 (F2.10): o passo 7 — a prosa do agente chega ao usuário.
+   *
+   * O contrato com a porta `explain` (`backend/src/llm/explain-parser.ts`):
+   * - um **único** `deadlineAtMs` para os dois passos de LLM da busca;
+   * - `candidates` na ordem do ranking, com `summary`/`skill_md_excerpt` só do
+   *   rank 1 (é o que informa a decisão e corta ~1,6k tokens);
+   * - `catalog_snapshot` no pedido (entra na chave do cache de explicação);
+   * - `result.status` -> `llm.explain_status`, `null` quando o passo não foi
+   *   tentado; falha do explain **não** degrada a resposta;
+   * - `items[].why` (ainda com `{{skill:<id>}}`) é `template` de `explainItem`,
+   *   nunca atribuído direto a `results[].explanation`.
+   */
+  describe('explain step (issue #42)', () => {
+    it('serves the agent prose, resolves the placeholder and drops the template warning', async () => {
+      const explain = new ProseExplain();
+      const parser = new OkIntentParser();
+      const harness = await build({ parser, explain });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(explain.requests).toHaveLength(1);
+      const request = first(explain.requests);
+      // Um orçamento só: o mesmo instante para a intenção e para a explicação.
+      expect(request.deadlineAtMs).toBe(parser.deadlineAtMs);
+      expect(typeof request.deadlineAtMs).toBe('number');
+      expect(request.deadlineAtMs).toBeGreaterThan(Date.now());
+      // `catalog_snapshot` é o mesmo instante publicado em `data.catalog_snapshot`.
+      expect(request.catalog_snapshot).toBe(response.data.catalog_snapshot);
+      // `candidates[0]` é o rank 1, na ordem do ranking.
+      expect(request.candidates.map((candidate) => candidate.skill_id)).toEqual(
+        response.results.map((item) => item.skill.skill_id),
+      );
+
+      expect(response.llm.explain_status).toBe('ok');
+      // Todas as explicações vieram do agente: sem aviso de template.
+      expect(response.warnings).not.toContain('explanation_from_template');
+
+      for (const item of response.results) {
+        // Placeholder resolvido pelo `explainItem`: nome publicado, sem `{{`.
+        expect(item.explanation).toContain(item.skill.name);
+        expect(item.explanation).not.toContain('{{');
+        // O texto do template determinístico não aparece: a prosa é a do agente.
+        expect(item.explanation).not.toContain('Todos os dados do score vieram');
+      }
+      expect(response.recommendation?.skill_id).toBe(response.results[0]?.skill.skill_id);
+      expect(response.recommendation?.text).toContain('recomendação do agente');
+      expect(response.recommendation?.text).not.toContain('{{');
+      // Falha do explain não muda a intenção: a resposta não degrada.
+      expect(response.data.degraded).toBe(false);
+      expect(response.data.degraded_reason).toBeNull();
+    });
+
+    it('a failing explain keeps 200 without degrading and fills explain_status', async () => {
+      const explain = new ExplainStub({
+        items: [],
+        recommendation: null,
+        status: 'unavailable',
+        reason: 'provider_error',
+        model: null,
+        tokens: null,
+      });
+      const harness = await build({ parser: new OkIntentParser(), explain });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(response.llm.explain_status).toBe('unavailable');
+      // §7.4: `data.degraded` fala de intenção/catálogo, nunca do passo 7.
+      expect(response.data.degraded).toBe(false);
+      expect(response.data.degraded_reason).toBeNull();
+      // Fallback determinístico, item a item, e o aviso que já existia (D-C).
+      for (const item of response.results) {
+        expect(item.explanation).toContain('estrelas');
+        expect(item.explanation).not.toContain('{{');
+      }
+      expect(response.warnings).toContain('explanation_from_template');
+      expect(response.recommendation?.skill_id).toBe(response.results[0]?.skill.skill_id);
+    });
+
+    it('a port that throws still answers 200 with the template instead of dying', async () => {
+      // §7.4: a busca nunca morre por causa da LLM. O cliente real devolve
+      // `unavailable` em vez de lançar, mas o serviço não pode depender de a porta
+      // ser bem-comportada — um erro solto aqui derrubaria a resposta inteira.
+      const explain: ExplainParser = {
+        explain(): Promise<ExplainResult> {
+          throw new Error('porta fora do contrato');
+        },
+      };
+      const harness = await build({ parser: new OkIntentParser(), explain });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(response.llm.explain_status).toBe('unavailable');
+      expect(response.data.degraded).toBe(false);
+      expect(response.results).toHaveLength(CANDIDATES.length);
+      expect(response.warnings).toContain('explanation_from_template');
+    });
+
+    it('invalid_ids from the explain step falls back to the deterministic template', async () => {
+      const explain = new ExplainStub({
+        items: [],
+        recommendation: null,
+        status: 'invalid_ids',
+        reason: 'invalid_ids',
+        model: null,
+        tokens: null,
+      });
+      const harness = await build({ parser: new OkIntentParser(), explain });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(response.llm.explain_status).toBe('invalid_ids');
+      expect(response.results).toHaveLength(CANDIDATES.length);
+      for (const item of response.results) {
+        expect(item.explanation.trim().length).toBeGreaterThan(0);
+        expect(item.explanation).not.toContain('{{');
+      }
+      expect(response.warnings).toContain('explanation_from_template');
+      expect(response.data.degraded).toBe(false);
+    });
+
+    it('a replay does not attempt the explain step and answers explain_status null (replay)', async () => {
+      const explain = new ProseExplain();
+      const harness = await build({ parser: new OkIntentParser(), explain });
+
+      const created = await harness.service.search(SEARCH_INPUT);
+      expect(explain.requests).toHaveLength(1);
+
+      const replay = await harness.service.replay(created.request_id);
+
+      // Nenhum provedor é chamado no replay: o passo 7 não é tentado.
+      expect(explain.requests).toHaveLength(1);
+      expect(replay.llm.explain_status).toBeNull();
+      expect(replay.llm.cached).toBe(true);
+      expect(replay.warnings).toContain('explanation_from_template');
+      expect(replay.results.map((item) => item.skill.skill_id)).toEqual(
+        created.results.map((item) => item.skill.skill_id),
+      );
+    });
+
+    it('does not attempt the explain step below 0.35 of intent confidence', async () => {
+      const explain = new ProseExplain();
+      const harness = await build({ parser: new LowConfidenceParser(), explain });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(explain.requests).toHaveLength(0);
+      // Ausência de tentativa, não falha (§6.3).
+      expect(response.llm.explain_status).toBeNull();
+      expect(response.warnings).toContain('explanation_from_template');
+      expect(response.data.degraded).toBe(true);
+      expect(response.data.degraded_reason).toBe('llm_unavailable');
+    });
+
+    it('sends the summary and the SKILL.md excerpt of the rank 1 only (rank 1)', async () => {
+      const catalog = new CatalogStub();
+      catalog.summary = 'resumo do rank 1';
+      catalog.skillMdExcerpt = 'trecho do SKILL.md do rank 1';
+      const explain = new ProseExplain();
+      const harness = await build({ catalog, parser: new OkIntentParser(), explain });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      const request = first(explain.requests);
+      expect(request.candidates[0]?.summary).toBe('resumo do rank 1');
+      expect(request.candidates[0]?.skill_md_excerpt).toBe('trecho do SKILL.md do rank 1');
+      // Os demais candidatos vão só com números: é o corte de ~1,6k tokens.
+      for (const candidate of request.candidates.slice(1)) {
+        expect(candidate.summary).toBeNull();
+        expect(candidate.skill_md_excerpt).toBeNull();
+      }
+      // A evidência extra é buscada uma vez, para o rank 1 — nunca por item.
+      const rank1Id = response.results[0]?.skill.skill_id ?? '';
+      expect(catalog.detailInputs.map((id) => encodeSkillId(id))).toEqual([rank1Id]);
+    });
+
+    it('gives the explain request the catalog snapshot of the answer (cache_key)', async () => {
+      const catalog = new CatalogStub();
+      const explain = new ProseExplain();
+      const harness = await build({ catalog, parser: new OkIntentParser(), explain });
+
+      const firstRun = await harness.service.search(SEARCH_INPUT);
+      catalog.snapshotAt = new Date(Date.now() - 2 * HOUR_MS);
+      const secondRun = await harness.service.search(SEARCH_INPUT);
+
+      // A prosa cita estrelas/instalações: sem o snapshot na chave do cache, a
+      // segunda busca receberia números vencidos (§4.1).
+      expect(first(explain.requests).catalog_snapshot).toBe(firstRun.data.catalog_snapshot);
+      expect(second(explain.requests).catalog_snapshot).toBe(secondRun.data.catalog_snapshot);
+      expect(first(explain.requests).catalog_snapshot).not.toBe(
+        second(explain.requests).catalog_snapshot,
+      );
+    });
+
+    it('carries the agent caveats and flags a repaired item (§5.3)', async () => {
+      const harness = await build({ parser: new OkIntentParser(), explain: new RepairedExplain() });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(response.llm.explain_status).toBe('repaired');
+      const top = first(response.results);
+      expect(top.caveats).toBe('risco apontado pelo agente');
+      expect(top.flags).toContain('explanation_repaired');
+    });
+
+    it('revalidates recommendation.skill_id against the rank 1 before answering', async () => {
+      const harness = await build({
+        parser: new OkIntentParser(),
+        explain: new WrongOrderRecommendation(),
+      });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      // O cache pode devolver recomendação de outra ordem: vale o rank 1 desta
+      // resposta, com o texto determinístico — nunca a prosa do outro item.
+      expect(response.recommendation?.skill_id).toBe(response.results[0]?.skill.skill_id);
+      expect(response.recommendation?.text).not.toContain('recomendação do agente');
+      expect(response.llm.explain_status).toBe('ok');
+    });
+
+    it('has no candidate to explain when the catalog returns nothing', async () => {
+      const catalog = new CatalogStub();
+      catalog.skills = [];
+      const explain = new ProseExplain();
+      const harness = await build({ catalog, parser: new OkIntentParser(), explain });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(explain.requests).toHaveLength(0);
+      expect(response.llm.explain_status).toBeNull();
+      expect(response.warnings).toContain('no_results');
+      expect(response.warnings).not.toContain('explanation_from_template');
+    });
+
+    it('the disabled port keeps explain_status null and the template (LLM_ENABLED=false)', async () => {
+      // Sem `explain` no harness, quem responde é o cliente `disabled` do módulo.
+      const harness = await build({ parser: new OkIntentParser() });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(response.llm.explain_status).toBeNull();
+      expect(response.warnings).toContain('explanation_from_template');
+      for (const item of response.results) {
+        expect(item.explanation.trim().length).toBeGreaterThan(0);
+      }
     });
   });
 });

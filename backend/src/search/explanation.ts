@@ -39,6 +39,13 @@ export interface ExplanationItem {
   readonly evidence_completeness: EvidenceCompleteness;
   /** Texto bruto com placeholders; ausente = template determinístico. */
   readonly template?: string;
+  /**
+   * `caveats` vindo do agente, **com placeholders**. Passa pelo mesmo resolvedor
+   * da explicacao: o degrau 5 do `explain-parser` preserva de proposito
+   * `{{skill:<id>}}`, e publicar o texto cru colocaria `{{...}}` na interface
+   * (achado HIGH do parecer da #42).
+   */
+  readonly caveatsTemplate?: string | null;
 }
 
 /** Resultado pronto para o `ResultItem` do contrato. */
@@ -192,10 +199,22 @@ export function explainItem(
   // interface: cai no template determinístico, ainda sinalizado como reparado.
   const body = text.length > 0 ? text : collapseSpaces(defaultTemplate(item));
 
+  // `caveats` do agente passa pelo mesmo resolvedor da explicacao: o degrau 5
+  // preserva `{{skill:<id>}}` de proposito, e publicar cru colocaria `{{...}}`
+  // na tela (achado HIGH do parecer da #42).
+  const rawCaveats = item.caveatsTemplate?.trim();
+  const resolvedCaveats =
+    rawCaveats === undefined || rawCaveats.length === 0
+      ? null
+      : resolvePlaceholders(rawCaveats, known);
+
   return {
     explanation: truncate(body, MAX_EXPLANATION_CHARS),
     flags: repaired ? [EXPLANATION_REPAIRED_FLAG] : [],
-    caveats: caveatsFor(item),
+    caveats:
+      resolvedCaveats !== null && resolvedCaveats.text.length > 0
+        ? truncate(resolvedCaveats.text, MAX_CAVEATS_CHARS)
+        : caveatsFor(item),
   };
 }
 

@@ -406,6 +406,23 @@ describe('search endpoints (e2e)', () => {
     expect(malformed.body.error.code).toBe('NOT_FOUND');
   });
 
+  /**
+   * Issue #42: com `LLM_ENABLED=false` o passo 7 **não é tentado** — `explain_status`
+   * vem `null` (ausência, não falha) e o texto sai do template determinístico.
+   * Este é o modo degradado de dev/CI (regra 5 do AGENTS.md).
+   */
+  it('answers explain_status null and the template when the LLM is disabled (issue #42)', async () => {
+    const response = await postSearch({ query: OK_QUERY }).expect(200);
+
+    expect(response.body.llm.status).toBe('disabled');
+    expect(response.body.llm.explain_status).toBeNull();
+    expect(response.body.warnings).toContain('explanation_from_template');
+    for (const item of response.body.results as ResultItem[]) {
+      expect(item.explanation.trim().length).toBeGreaterThan(0);
+      expect(item.explanation).not.toContain('{{');
+    }
+  });
+
   it('replays a stored search in the same order with llm.cached=true (D-D)', async () => {
     const created = await postSearch({ query: OK_QUERY }).expect(200);
     const requestId = created.body.request_id as string;
@@ -421,6 +438,8 @@ describe('search endpoints (e2e)', () => {
     expect(replay.body.llm.cached).toBe(true);
     expect(replay.body.llm.model).toBeNull();
     expect(replay.body.llm.tokens).toBeNull();
+    // Issue #42: o replay não tenta o passo 7 — nenhum provedor é chamado.
+    expect(replay.body.llm.explain_status).toBeNull();
   });
 
   it('answers 404 for an unknown permalink and 410 for one past the 30-day retention', async () => {

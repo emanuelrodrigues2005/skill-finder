@@ -31,6 +31,21 @@ export interface IntentParserResult {
 }
 
 /** Porta injetada em quem precisa de uma intenção a partir do texto do usuário. */
+/** Orcamento de tempo compartilhado com a busca (ver `LLM_TOTAL_DEADLINE_MS`). */
+export interface LlmBudget {
+  /**
+   * Instante (epoch ms) em que o orcamento **total** da busca expira. O passo de
+   * intencao e o de explicacao recebem o MESMO numero: sem isso cada etapa
+   * ganharia o seu proprio teto e o "teto somado" da spec nao valeria.
+   */
+  readonly deadlineAtMs?: number;
+}
+
+/** Porta injetada em quem precisa de uma intencao a partir do texto do usuario. */
 export interface IntentParser {
-  parse(query: string, categories: readonly string[]): Promise<IntentParserResult>;
+  parse(
+    query: string,
+    categories: readonly string[],
+    budget?: LlmBudget,
+  ): Promise<IntentParserResult>;
 }

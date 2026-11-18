@@ -4,16 +4,20 @@
  * O caminho é sempre o mesmo, e nenhuma etapa conhece a implementação da outra:
  *
  *   categoria (D-A) -> snapshot do cache (503) -> intenção (LLM ou fallback)
- *   -> candidatos -> ranking determinístico -> explicação (D-C) -> persistência
+ *   -> candidatos -> ranking determinístico -> explicação (LLM ou template)
+ *   -> persistência
  *
  * Invariantes que valem aqui dentro:
- * - o ranking é do servidor (regra 1): a LLM só entrega a `Intent`, e a ordem
- *   sai de `src/ranking`, uma função pura;
+ * - o ranking é do servidor (regra 1): a LLM só entrega a `Intent` e a prosa, e a
+ *   ordem sai de `src/ranking`, uma função pura;
  * - dado ausente é `null`, nunca zero (regra 3): a lacuna vira
  *   `evidence_completeness`/`caveats`, não um `0` inventado;
  * - degradação é visível (regra 7): catálogo velho ou LLM fora do ar mudam
  *   `data.degraded` e `warnings`, nunca a resposta em silêncio;
- * - o `request_id` da resposta é cunhado aqui (C4), não vem do header.
+ * - o `request_id` da resposta é cunhado aqui (C4), não vem do header;
+ * - a prosa do passo 7 é **sempre** renderizada por `explainItem` (issue #42):
+ *   o `why` do agente carrega `{{skill:<id>}}` e nunca é copiado direto para a
+ *   resposta.
  */
 import { HttpStatus, Inject, Injectable, Optional } from '@nestjs/common';
 
@@ -21,12 +25,25 @@ import { ERROR_CODES } from '../common/errors/error-codes';
 import { ApiError } from '../common/errors/http-exception.filter';
 import { MetricsService } from '../common/metrics/metrics.service';
 import { AppConfigService } from '../config/config.module';
+import { DEFAULT_LLM_TOTAL_DEADLINE_MS } from '../config/env.schema';
 import type { CategoryItem, SkillDetail, SkillSummary } from '../contract/dto/catalog.dto';
-import type { Intent, LlmStatus, SearchResponse } from '../contract/dto/search-response.dto';
+import type {
+  Intent,
+  LlmStatus,
+  Recommendation,
+  SearchResponse,
+} from '../contract/dto/search-response.dto';
 import type { ResultItem } from '../contract/dto/result-item.dto';
 import { resolveDegradation } from '../llm/degradation';
-import { INTENT_PARSER } from '../llm/llm.module';
+import type {
+  ExplainCandidate,
+  ExplainParser,
+  ExplainRequest,
+  ExplainResult,
+} from '../llm/explain-parser';
 import type { IntentParser, IntentParserResult } from '../llm/intent-parser';
+import { MIN_CONFIDENCE } from '../llm/intent-schema';
+import { EXPLAIN_PORT, INTENT_PARSER } from '../llm/llm.module';
 import { rank } from '../ranking';
 import type { RankingWeights } from '../ranking';
 
@@ -39,7 +56,12 @@ import {
   SOURCE_UNAVAILABLE_REASON,
   VALIDATION_REASON,
 } from './constants';
-import { explainItem, recommend, type ExplanationItem } from './explanation';
+import {
+  EXPLANATION_REPAIRED_FLAG,
+  explainItem,
+  recommend,
+  type ExplanationItem,
+} from './explanation';
 import { decodeSkillId } from './ids';
 import { mintSearchRequestId } from './request-id';
 import type { ListSkillsInput, SearchCatalog, SkillPage } from './search-catalog.port';
@@ -73,6 +95,25 @@ export interface CategoryList {
 }
 
 /**
+ * Orçamento e dados do passo 7 (issue #42, §6.5).
+ *
+ * O instante-limite é calculado **uma** vez, no começo de
+ * {@link SearchService.search}, e entregue aos dois passos de LLM: sem isso cada
+ * etapa ganharia `LLM_TOTAL_DEADLINE_MS` próprio e o teto somado (7 s) não
+ * valeria — a intenção poderia gastar 3 s e a explicação mais 4 s a partir dali.
+ */
+interface ExplainBudget {
+  readonly deadlineAtMs: number;
+  /** `data.catalog_snapshot`: entra na chave do cache de explicação (§4.1). */
+  readonly catalogSnapshot: string;
+  /**
+   * `false` quando a intenção é fraca demais para valer a prosa: o passo 7 não é
+   * tentado e `explain_status` fica `null` (ausência, não falha).
+   */
+  readonly attempt: boolean;
+}
+
+/**
  * Estados em que `strict_llm=true` troca a degradação por 502.
  *
  * `low_confidence` fica de fora: confiança baixa é um resultado legítimo, não um
@@ -90,6 +131,10 @@ export class SearchService {
     @Inject(SEARCH_STORE) private readonly store: SearchStore,
     @Inject(INTENT_PARSER) private readonly parser: IntentParser,
     private readonly config: AppConfigService,
+    // Passo 7 (§6.5): a porta que redige o porquê. Fica ao lado do `IntentParser`
+    // porque as duas saem do mesmo cliente — e é o único caminho da prosa até a
+    // resposta (issue #42).
+    @Inject(EXPLAIN_PORT) private readonly explain: ExplainParser,
     // Opcional de propósito: a métrica é observabilidade, não requisito da busca.
     @Optional() private readonly metrics?: MetricsService,
   ) {}
@@ -102,6 +147,9 @@ export class SearchService {
    */
   async search(input: SearchInput): Promise<SearchResponse> {
     const startedAt = process.hrtime.bigint();
+    // Um orçamento só para os dois passos de LLM (#42): o instante-limite nasce
+    // aqui, antes da intenção, e é o mesmo que a explicação recebe depois.
+    const deadlineAtMs = this.llmDeadlineAt();
 
     // D-A: a categoria é um enum fechado; validar antes do cache evita pagar
     // uma consulta de recuperação para responder 422 depois.
@@ -113,11 +161,12 @@ export class SearchService {
     if (snapshot === null) {
       throw cacheEmpty();
     }
+    const catalogSnapshot = snapshot.toISOString();
 
     // O vocabulário de categorias é o do catálogo do momento: a intenção que
     // citar uma categoria fora dele é reparada por `parseIntentPayload` (§6.3).
     const categories = await this.catalog.listCategories();
-    const parsed = await this.parseIntent(input.query, categories);
+    const parsed = await this.parseIntent(input.query, categories, deadlineAtMs);
     this.observeLlmCall(parsed.status);
     if (input.strictLlm && STRICT_FAILURE_STATUSES.has(parsed.status)) {
       throw new ApiError(
@@ -142,7 +191,8 @@ export class SearchService {
       category: input.category,
       limit: Math.max(input.limit, CANDIDATE_POOL_SIZE),
     });
-    const { results, recommendation, warnings } = this.rankAndExplain(
+    const { results, recommendation, warnings, explainStatus } = await this.rankAndExplain(
+      input.query,
       candidates,
       parsed.intent,
       input.limit,
@@ -151,6 +201,12 @@ export class SearchService {
       // `low_confidence`, então amarrar o aviso em `degradation.degraded` diria
       // "catálogo velho" com snapshot fresco (o default de dev/CI, sem LLM).
       ageMs > SOURCE_STALE_AFTER_MS ? SEARCH_WARNINGS.sourceStale : null,
+      {
+        deadlineAtMs,
+        catalogSnapshot,
+        // A prosa não vale a chamada quando a intenção é fraca (ver `ExplainBudget`).
+        attempt: parsed.intent.confidence >= MIN_CONFIDENCE,
+      },
     );
 
     const record: StoredSearchInput = {
@@ -181,17 +237,16 @@ export class SearchService {
         model: parsed.model,
         cached: false,
         tokens: parsed.tokens,
-        // O contrato marca `explain_status` como `required` + `nullable`. A
-        // busca nova ainda NÃO tenta a explicação (issue #42), então o valor
-        // correto é `null` ("não tentado") — nunca o campo ausente. Ausente com
-        // `required` no YAML é contrato mentindo para todo cliente gerado.
-        explain_status: null,
+        // `explain_status` é `required` + `nullable` no contrato: sempre presente,
+        // `null` quando o passo 7 não foi tentado (budget, `disabled`, sem
+        // candidato, confiança baixa).
+        explain_status: explainStatus,
       },
       data: {
         degraded: degradation.degraded,
         degraded_reason: degradation.degraded_reason,
         source: 'cache',
-        catalog_snapshot: snapshot.toISOString(),
+        catalog_snapshot: catalogSnapshot,
         age_seconds: Math.round(ageMs / 1000),
       },
       results,
@@ -246,12 +301,18 @@ export class SearchService {
     const ageMs = Math.max(0, now.getTime() - (snapshot ?? row.created_at).getTime());
     const degradation = resolveDegradation(row.llm_status, ageMs > SOURCE_STALE_AFTER_MS);
 
-    const { results, recommendation, warnings } = this.rankAndExplain(
+    const { results, recommendation, warnings } = await this.rankAndExplain(
+      // O replay não explica, mas a assinatura é a mesma dos dois caminhos: a
+      // consulta gravada pode nem existir (`SEARCH_LOG_STORE_TEXT=false`).
+      row.query_text ?? '',
       storedOrder,
       row.intent,
       storedOrder.length,
       // Mesmo critério da busca: frescor do snapshot, nunca o status da LLM.
       ageMs > SOURCE_STALE_AFTER_MS ? SEARCH_WARNINGS.sourceStale : null,
+      // Hit do cache de busca: o passo 7 não é tentado (nenhum provedor é
+      // chamado numa leitura de permalink), e o texto volta do template.
+      null,
     );
 
     return {
@@ -327,17 +388,26 @@ export class SearchService {
     };
   }
 
-  /** Ranqueia, explica e monta o envelope comum a busca e permalink. */
-  private rankAndExplain(
+  /**
+   * Ranqueia, explica e monta o envelope comum a busca e permalink.
+   *
+   * O passo 7 (`explain`) só é tentado quando `budget` não é `null`, ou seja: na
+   * busca nova, com intenção confiável e com candidato. O replay de um permalink
+   * passa `null` — nenhum provedor é chamado numa leitura de histórico.
+   */
+  private async rankAndExplain(
+    query: string,
     candidates: readonly SkillSummary[],
     intent: Intent,
     limit: number,
     staleWarning: string | null,
-  ): {
+    budget: ExplainBudget | null,
+  ): Promise<{
     results: ResultItem[];
-    recommendation: SearchResponse['recommendation'];
+    recommendation: Recommendation | null;
     warnings: string[];
-  } {
+    explainStatus: LlmStatus | null;
+  }> {
     const bySkillId = new Map(candidates.map((skill) => [skill.skill_id, skill]));
     const ranked = rank(
       candidates.map((skill) => ({
@@ -353,36 +423,53 @@ export class SearchService {
     // O conjunto de nomes que pode aparecer num placeholder é o ranqueado: a
     // explicação nunca cita uma skill fora da resposta (regra 1).
     const known = new Map<string, string>();
-    for (const row of ranked) {
-      const skill = bySkillId.get(row.skill_id);
-      if (skill !== undefined) {
-        known.set(row.skill_id, skill.name);
-      }
-    }
-
-    const items: ExplanationItem[] = [];
-    const results: ResultItem[] = [];
-    for (const row of ranked) {
-      const skill = bySkillId.get(row.skill_id);
+    const entries = ranked.flatMap((ranked) => {
+      const skill = bySkillId.get(ranked.skill_id);
       if (skill === undefined) {
+        return [];
+      }
+      known.set(ranked.skill_id, skill.name);
+      return [{ row: ranked, skill }];
+    });
+    const items: ExplanationItem[] = entries.map(({ row, skill }) => ({
+      skill,
+      score_breakdown: row.score_breakdown,
+      evidence_completeness: row.evidence_completeness,
+    }));
+
+    const explained = await this.explainRanked(query, items, intent, budget);
+
+    const results: ResultItem[] = [];
+    let fromTemplate = 0;
+    for (const [index, item] of items.entries()) {
+      const row = entries[index]?.row;
+      if (row === undefined) {
         continue;
       }
-      const item: ExplanationItem = {
-        skill,
-        score_breakdown: row.score_breakdown,
-        evidence_completeness: row.evidence_completeness,
-      };
-      const explanation = explainItem(item, known);
-      items.push(item);
+      const prose = explained.items.get(item.skill.skill_id);
+      // Issue #42: `items[].why` é **template** de `explainItem` — o único caminho
+      // da prosa até a resposta. O placeholder `{{skill:<id>}}` é resolvido aqui e
+      // o texto ainda passa pelos tetos e pelo escape do dado de terceiro.
+      const explanation = explainItem(
+        prose === undefined
+          ? item
+          : { ...item, template: prose.why, caveatsTemplate: prose.caveats },
+        known,
+      );
+      if (prose === undefined) {
+        fromTemplate += 1;
+      }
       results.push({
         rank: row.rank,
         score: row.score,
         score_breakdown: row.score_breakdown,
         evidence_completeness: row.evidence_completeness,
-        skill,
+        skill: item.skill,
         explanation: explanation.explanation,
-        flags: explanation.flags,
-        caveats: explanation.caveats,
+        flags: withRepairedFlag(explanation.flags, prose?.repaired === true),
+        // O `caveats` do agente manda; sem ele, vale o aviso de evidência
+        // incompleta do template (regra 3: a lacuna nunca fica invisível).
+        caveats: prose?.caveats ?? explanation.caveats,
       });
     }
 
@@ -390,8 +477,9 @@ export class SearchService {
     if (results.length === 0) {
       // Lista vazia é um estado explicado, nunca um branco silencioso (regra 7).
       warnings.push(SEARCH_WARNINGS.noResults);
-    } else {
-      // D-C: sem `explain` na porta da LLM, o texto sai do template determinístico.
+    } else if (fromTemplate > 0) {
+      // D-C: pelo menos um item saiu do template determinístico — o aviso existe
+      // só quando houve fallback, nunca numa resposta 100% do agente.
       warnings.push(SEARCH_WARNINGS.explanationFromTemplate);
     }
     if (staleWarning !== null) {
@@ -400,20 +488,157 @@ export class SearchService {
 
     return {
       results,
-      recommendation: recommend(items),
+      recommendation: buildRecommendation(items, known, explained.recommendation),
       warnings,
+      explainStatus: explained.status,
     };
   }
 
-  /** Intenção do passo de LLM; o parser já devolve o fallback lexical quando pode. */
+  /**
+   * Passo 7 (§6.5): pede a prosa à porta `explain` e devolve o que ela validou.
+   *
+   * Nada do que sai daqui é publicado sem passar por `explainItem` — este método
+   * só escolhe **o que** mandar e **se** vale mandar.
+   */
+  private async explainRanked(
+    query: string,
+    items: readonly ExplanationItem[],
+    intent: Intent,
+    budget: ExplainBudget | null,
+  ): Promise<{
+    status: LlmStatus | null;
+    items: ReadonlyMap<string, ExplainedProse>;
+    recommendation: ExplainedProse | null;
+  }> {
+    const skipped = { status: null, items: new Map<string, ExplainedProse>(), recommendation: null };
+    const [rank1] = items;
+    // Sem candidato não há o que explicar; sem orçamento/intenção confiável, o
+    // passo não é tentado e `explain_status` fica `null` (ausência, não falha).
+    if (budget === null || !budget.attempt || rank1 === undefined) {
+      return skipped;
+    }
+
+    // O enriquecimento do rank 1 (`catalog.detail`) faz I/O: se ele falhar, a
+    // busca NAO pode morrer com 500 - o passo 7 e opcional por contrato (7.4).
+    // Antes esta consulta ficava fora do try e um erro nela derrubava a resposta
+    // inteira (achado MEDIUM do parecer da #42).
+    let candidates: readonly ExplainCandidate[];
+    try {
+      candidates = await this.explainCandidates(items, rank1);
+    } catch {
+      return { status: 'unavailable', items: new Map(), recommendation: null };
+    }
+
+    const request: ExplainRequest = {
+      query,
+      intent,
+      candidates,
+      catalog_snapshot: budget.catalogSnapshot,
+      deadlineAtMs: budget.deadlineAtMs,
+    };
+
+    let result: ExplainResult;
+    try {
+      result = await this.explain.explain(request);
+    } catch {
+      // §7.4: a busca nunca morre por causa da LLM. O cliente real devolve
+      // `unavailable` em vez de lançar, mas o serviço não pode depender de a porta
+      // ser bem-comportada: um erro solto aqui derrubaria a resposta inteira.
+      return { status: 'unavailable', items: new Map(), recommendation: null };
+    }
+
+    const prose = new Map<string, ExplainedProse>();
+    for (const item of result.items) {
+      prose.set(item.skill_id, {
+        skill_id: item.skill_id,
+        why: item.why,
+        caveats: item.caveats,
+        repaired: item.repaired,
+      });
+    }
+    return {
+      status: result.status,
+      items: prose,
+      recommendation:
+        result.recommendation === null
+          ? null
+          : {
+              skill_id: result.recommendation.skill_id,
+              why: result.recommendation.why,
+              caveats: null,
+              repaired: result.recommendation.repaired,
+            },
+    };
+  }
+
+  /**
+   * Candidatos na forma que o prompt consome (§6.5).
+   *
+   * `summary` e `skill_md_excerpt` vão **só do rank 1**: é ele que informa a
+   * decisão, e repetir o trecho de cada item somaria ~1,6k tokens por busca.
+   */
+  private async explainCandidates(
+    items: readonly ExplanationItem[],
+    rank1: ExplanationItem,
+  ): Promise<readonly ExplainCandidate[]> {
+    const evidence = await this.rankOneEvidence(rank1.skill.skill_id);
+    return items.map((item, index) => ({
+      skill_id: item.skill.skill_id,
+      name: item.skill.name,
+      category: item.skill.category,
+      stars: item.skill.stars,
+      installs: item.skill.installs,
+      // Dado ausente é `null`, nunca zero (regra 3); o prompt mostra `n/a`.
+      vulnerability_count: item.skill.vulnerability_count,
+      summary: index === 0 ? evidence.summary : null,
+      skill_md_excerpt: index === 0 ? evidence.skill_md_excerpt : null,
+    }));
+  }
+
+  /**
+   * `summary`/`skill_md_excerpt` do rank 1 (issue #42, §7.5).
+   *
+   * O recuperador devolve `SkillSummary`, que não carrega os dois campos — o
+   * detalhe é a única fonte deles. Uma consulta por busca, só para o topo.
+   */
+  private async rankOneEvidence(
+    skillId: string,
+  ): Promise<{ summary: string | null; skill_md_excerpt: string | null }> {
+    const id = decodeSkillId(skillId);
+    if (id === null) {
+      return { summary: null, skill_md_excerpt: null };
+    }
+    const detail = await this.catalog.detail(id);
+    return {
+      summary: detail?.summary ?? null,
+      skill_md_excerpt: detail?.skill_md_excerpt ?? null,
+    };
+  }
+
+  /**
+   * Intenção do passo de LLM; o parser já devolve o fallback lexical quando pode.
+   *
+   * O `deadlineAtMs` é o **mesmo** que a explicação vai receber: é ele que faz o
+   * teto valer para a soma dos dois passos, não para cada um.
+   */
   private parseIntent(
     query: string,
     categories: readonly CategoryItem[],
+    deadlineAtMs: number,
   ): Promise<IntentParserResult> {
     return this.parser.parse(
       query,
       categories.map((category) => category.slug),
+      { deadlineAtMs },
     );
+  }
+
+  /** Instante em que o orçamento somado dos passos de LLM expira (§6.5). */
+  private llmDeadlineAt(): number {
+    // `LLM_TOTAL_DEADLINE_MS` é o teto do conjunto; o `??` cobre contextos que
+    // montam `env` parcial (dublês de teste) e nunca deixa o prazo virar `NaN`.
+    const totalMs = this.config.env.llmTotalDeadlineMs ?? DEFAULT_LLM_TOTAL_DEADLINE_MS;
+    return Date.now() + totalMs;
   }
 
   /** `llm_calls_total{status}` (D-F): o status é o do contrato, não um rótulo novo. */
@@ -434,6 +659,52 @@ export class SearchService {
 /** Milissegundos inteiros desde `startedAt` (`latency_ms`). */
 function elapsedMs(startedAt: bigint): number {
   return Number((process.hrtime.bigint() - startedAt) / 1_000_000n);
+}
+
+/**
+ * Prosa validada pela porta `explain`, ainda com os placeholders do §6.5.
+ *
+ * Ela **não** é texto de resposta: o único caminho até `results[].explanation` e
+ * `recommendation.text` é `explainItem` (issue #42).
+ */
+interface ExplainedProse {
+  readonly skill_id: string;
+  readonly why: string;
+  readonly caveats: string | null;
+  readonly repaired: boolean;
+}
+
+/** Acrescenta `explanation_repaired` sem duplicar a flag já vinda do template (§5.3). */
+function withRepairedFlag(flags: readonly string[], repaired: boolean): string[] {
+  if (!repaired || flags.includes(EXPLANATION_REPAIRED_FLAG)) {
+    return [...flags];
+  }
+  return [...flags, EXPLANATION_REPAIRED_FLAG];
+}
+
+/**
+ * Recomendação da resposta (§5.3).
+ *
+ * A prosa do agente só vale quando ela destaca o **rank 1 desta** resposta; o
+ * `skill_id` é revalidado aqui antes de responder porque o cache de explicação
+ * pode devolver a prosa de uma ordem antiga (US-05 AC1: o destaque é o topo).
+ * Em qualquer outro caso, o texto determinístico de `recommend` responde.
+ */
+function buildRecommendation(
+  items: readonly ExplanationItem[],
+  known: ReadonlyMap<string, string>,
+  prose: ExplainedProse | null,
+): Recommendation | null {
+  const [first] = items;
+  if (first === undefined) {
+    return null;
+  }
+  if (prose === null || prose.skill_id !== first.skill.skill_id) {
+    return recommend(items);
+  }
+  // Mesmo caminho de `explainItem`: placeholder resolvido, nome escapado e teto.
+  const { explanation } = explainItem({ ...first, template: prose.why }, known);
+  return { skill_id: first.skill.skill_id, text: explanation };
 }
 
 /**
