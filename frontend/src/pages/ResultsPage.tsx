@@ -14,6 +14,7 @@ import type {
   SearchResponse,
 } from "../types";
 import { STR } from "../ui/strings";
+import { color, font, radius, space } from "../ui/tokens";
 
 type LoadState =
   | { status: "idle" }
@@ -130,7 +131,7 @@ function degradedHeadline(reason: string | null): string {
 function Meta({ item }: { item: ResultItem }) {
   const { skill } = item;
   return (
-    <p style={{ margin: "0.35rem 0 0", fontSize: "0.8rem", color: "#475569" }}>
+    <p style={{ margin: "0.35rem 0 0", fontSize: font.size.small, color: color.textMuted }}>
       {STR.results.card.meta(
         show(skill.category),
         show(skill.stars),
@@ -156,15 +157,15 @@ function DegradedBanner({ data }: { data: SearchData }) {
       role="status"
       aria-live="polite"
       style={{
-        border: "1px solid #fbbf24",
-        background: "#fffbeb",
-        borderRadius: 8,
-        padding: "0.6rem 0.75rem",
-        margin: "0 0 1rem",
+        border: `1px solid ${color.warn}`,
+        background: color.warnSurface,
+        borderRadius: radius.md,
+        padding: `0.6rem ${space.md}`,
+        margin: `0 0 ${space.lg}`,
       }}
     >
-      <p style={{ margin: 0, fontWeight: 600 }}>{degradedHeadline(reason)}</p>
-      <p style={{ margin: "0.35rem 0 0", fontSize: "0.85rem", color: "#92400e" }}>
+      <p style={{ margin: 0, fontWeight: font.weight.strong }}>{degradedHeadline(reason)}</p>
+      <p style={{ margin: "0.35rem 0 0", fontSize: font.size.compact, color: color.warnText }}>
         {STR.results.degraded.reasonLabel} <code>{show(reason)}</code> ·{" "}
         {STR.results.degraded.snapshotLabel} {data.catalog_snapshot}
         {reason === "source_stale"
@@ -194,24 +195,24 @@ function RecommendationPanel({
     <section
       aria-labelledby="recommendation-heading"
       style={{
-        border: "1px solid #1d4ed8",
-        borderLeft: "4px solid #1d4ed8",
-        borderRadius: 8,
-        padding: "0.75rem",
-        margin: "0 0 1rem",
+        border: `1px solid ${color.link}`,
+        borderLeft: `4px solid ${color.link}`,
+        borderRadius: radius.md,
+        padding: space.md,
+        margin: `0 0 ${space.lg}`,
       }}
     >
-      <h3 id="recommendation-heading" style={{ margin: 0, fontSize: "0.95rem" }}>
+      <h3 id="recommendation-heading" style={{ margin: 0, fontSize: font.size.lead }}>
         {STR.results.recommendation.heading}
       </h3>
-      <p style={{ margin: "0.35rem 0 0", fontWeight: 600 }}>
-        <Link to={`/skills/${recommendation.skill_id}`} style={{ color: "#1d4ed8" }}>
+      <p style={{ margin: "0.35rem 0 0", fontWeight: font.weight.strong }}>
+        <Link to={`/skills/${recommendation.skill_id}`} style={{ color: color.link }}>
           {cited === null ? recommendation.skill_id : cited.skill.name}
         </Link>
         {cited === null ? null : STR.results.recommendation.rankSuffix(cited.rank, results.length)}
       </p>
       <p style={{ margin: "0.35rem 0 0" }}>{recommendation.text}</p>
-      <p style={{ margin: "0.5rem 0 0", fontSize: "0.8rem", color: "#475569" }}>
+      <p style={{ margin: `${space.sm} 0 0`, fontSize: font.size.small, color: color.textMuted }}>
         {STR.results.recommendation.skillIdLabel} <code>{recommendation.skill_id}</code>{" "}
         {matchesTopPick
           ? STR.results.recommendation.isTopPick
@@ -225,8 +226,8 @@ function RecommendationPanel({
 
 const EXAMPLE_QUERIES = STR.results.emptyActions.examples;
 
-const actionStyle = { color: "#1d4ed8" } as const;
-const actionLineStyle = { margin: "0.35rem 0 0", fontSize: "0.9rem" } as const;
+const actionStyle = { color: color.link } as const;
+const actionLineStyle = { margin: "0.35rem 0 0", fontSize: font.size.body } as const;
 
 /**
  * Ações do estado vazio (issue #28; `docs/app/01-spec-produto.md` US-07 AC2): as três saídas são
@@ -239,8 +240,8 @@ const actionLineStyle = { margin: "0.35rem 0 0", fontSize: "0.9rem" } as const;
  */
 function EmptyActions() {
   return (
-    <div style={{ borderTop: "1px solid #e2e8f0", marginTop: "0.75rem", paddingTop: "0.75rem" }}>
-      <p style={{ margin: 0, fontWeight: 600 }}>{STR.results.emptyActions.heading}</p>
+    <div style={{ borderTop: `1px solid ${color.border}`, marginTop: space.md, paddingTop: space.md }}>
+      <p style={{ margin: 0, fontWeight: font.weight.strong }}>{STR.results.emptyActions.heading}</p>
       <p style={actionLineStyle}>
         <Link to="/" state={{ clearCategory: true }} style={actionStyle}>
           {STR.results.emptyActions.removeCategory}
@@ -272,34 +273,34 @@ function ResultCard({ item, isRecommended }: { item: ResultItem; isRecommended: 
   const badge = evidenceBadge(item.evidence_completeness);
   const badgeTone =
     badge.tone === "complete"
-      ? { border: "#16a34a", background: "#f0fdf4", color: "#166534" }
-      : { border: "#f59e0b", background: "#fffbeb", color: "#92400e" };
+      ? { border: color.success, background: color.successSurface, color: color.successText }
+      : { border: color.warnAccent, background: color.warnSurface, color: color.warnText };
   return (
     <li
       style={{
-        border: "1px solid #e2e8f0",
-        borderRadius: 8,
-        padding: "0.75rem",
-        marginBottom: "0.75rem",
+        border: `1px solid ${color.border}`,
+        borderRadius: radius.md,
+        padding: space.md,
+        marginBottom: space.md,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
-        <h3 style={{ margin: 0, fontSize: "1rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: space.sm }}>
+        <h3 style={{ margin: 0, fontSize: font.size.title }}>
           <Link
             to={`/skills/${item.skill.skill_id}`}
-            style={{ color: "#1d4ed8", fontWeight: 600, textDecoration: "none" }}
+            style={{ color: color.link, fontWeight: font.weight.strong, textDecoration: "none" }}
           >
             {item.rank}. {item.skill.name}
           </Link>
           {isRecommended ? (
             <span
               style={{
-                marginLeft: "0.5rem",
-                border: "1px solid #1d4ed8",
-                borderRadius: 999,
+                marginLeft: space.sm,
+                border: `1px solid ${color.link}`,
+                borderRadius: radius.pill,
                 padding: "0.05rem 0.45rem",
-                fontSize: "0.7rem",
-                color: "#1d4ed8",
+                fontSize: font.size.caption,
+                color: color.link,
                 verticalAlign: "middle",
               }}
             >
@@ -307,14 +308,16 @@ function ResultCard({ item, isRecommended }: { item: ResultItem; isRecommended: 
             </span>
           ) : null}
         </h3>
-        <span style={{ fontVariantNumeric: "tabular-nums", color: "#334155", fontSize: "0.85rem" }}>
+        <span
+          style={{ fontVariantNumeric: "tabular-nums", color: color.textSubtle, fontSize: font.size.compact }}
+        >
           {STR.results.card.score(decimals(item.score, 4))}
         </span>
       </div>
 
-      <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem", color: "#1e293b" }}>
+      <ul style={{ margin: `${space.sm} 0 0`, paddingLeft: "1.1rem", color: color.textBody }}>
         {reasonsFor(item).map((reason, index) => (
-          <li key={`${item.rank}-reason-${index}`} style={{ fontSize: "0.9rem" }}>
+          <li key={`${item.rank}-reason-${index}`} style={{ fontSize: font.size.body }}>
             {reason}
           </li>
         ))}
@@ -323,27 +326,27 @@ function ResultCard({ item, isRecommended }: { item: ResultItem; isRecommended: 
       <Meta item={item} />
 
       {item.flags.length > 0 ? (
-        <p style={{ margin: "0.35rem 0 0", fontSize: "0.8rem", color: "#b45309" }}>
+        <p style={{ margin: "0.35rem 0 0", fontSize: font.size.small, color: color.flagText }}>
           {STR.results.card.flags(item.flags.join(", "))}
         </p>
       ) : null}
 
-      <p style={{ margin: "0.5rem 0 0" }}>
+      <p style={{ margin: `${space.sm} 0 0` }}>
         <span
           style={{
             display: "inline-block",
             border: `1px solid ${badgeTone.border}`,
             background: badgeTone.background,
             color: badgeTone.color,
-            borderRadius: 999,
-            padding: "0.05rem 0.5rem",
-            fontSize: "0.75rem",
-            fontWeight: 600,
+            borderRadius: radius.pill,
+            padding: `0.05rem ${space.sm}`,
+            fontSize: font.size.meta,
+            fontWeight: font.weight.strong,
           }}
         >
           {badge.label}
         </span>
-        <span style={{ marginLeft: "0.5rem", fontSize: "0.75rem", color: "#475569" }}>
+        <span style={{ marginLeft: space.sm, fontSize: font.size.meta, color: color.textMuted }}>
           {badge.detail}
         </span>
       </p>
@@ -426,8 +429,8 @@ export default function ResultsPage() {
     return (
       <section>
         <EmptyState message={STR.states.empty.noSearch} />
-        <p style={{ margin: "0.75rem 0 0" }}>
-          <Link to="/" style={{ color: "#1d4ed8", fontWeight: 600 }}>
+        <p style={{ margin: `${space.md} 0 0` }}>
+          <Link to="/" style={{ color: color.link, fontWeight: font.weight.strong }}>
             {STR.common.newSearch}
           </Link>
         </p>
@@ -446,27 +449,27 @@ export default function ResultsPage() {
     if (state.code === "HISTORY_EXPIRED" || state.httpStatus === 410) {
       return (
         <section>
-          <h2 style={{ fontSize: "1.1rem" }}>{STR.results.expired.heading}</h2>
+          <h2 style={{ fontSize: font.size.heading }}>{STR.results.expired.heading}</h2>
           <div
             role="alert"
             style={{
-              border: "1px solid #fbbf24",
-              background: "#fffbeb",
-              borderRadius: 8,
-              padding: "1rem",
+              border: `1px solid ${color.warn}`,
+              background: color.warnSurface,
+              borderRadius: radius.md,
+              padding: space.lg,
             }}
           >
             <p style={{ margin: 0 }}>{state.message}</p>
-            <p style={{ margin: "0.5rem 0 0", color: "#92400e" }}>
+            <p style={{ margin: `${space.sm} 0 0`, color: color.warnText }}>
               {STR.results.expired.detail}
             </p>
             {state.requestId ? (
-              <div style={{ marginTop: "0.5rem" }}>
+              <div style={{ marginTop: space.sm }}>
                 <CopyText label={STR.common.requestIdLabel} value={state.requestId} />
               </div>
             ) : null}
-            <p style={{ margin: "0.75rem 0 0" }}>
-              <Link to="/" style={{ color: "#1d4ed8", fontWeight: 600 }}>
+            <p style={{ margin: `${space.md} 0 0` }}>
+              <Link to="/" style={{ color: color.link, fontWeight: font.weight.strong }}>
                 {STR.common.newSearch}
               </Link>
             </p>
@@ -491,25 +494,25 @@ export default function ResultsPage() {
 
   return (
     <section aria-labelledby="results-heading">
-      <h2 id="results-heading" style={{ fontSize: "1.1rem" }}>
+      <h2 id="results-heading" style={{ fontSize: font.size.heading }}>
         {STR.results.heading}
       </h2>
 
       {/* Permalink estável: endereçado pelo `request_id`, a mesma resposta em aba nova ou ao
           compartilhar. O reload da mesma aba revalida com `GET /searches/{id}` e, se o histórico
           venceu, mostra a tela de expirado em vez do state restaurado. */}
-      <div style={{ marginBottom: "0.5rem" }}>
+      <div style={{ marginBottom: space.sm }}>
         <CopyText label={STR.results.permalinkLabel} value={permalink} />
       </div>
 
-      <p style={{ color: "#475569", margin: "0 0 0.25rem", fontSize: "0.85rem" }}>
+      <p style={{ color: color.textMuted, margin: `0 0 ${space.xs}`, fontSize: font.size.compact }}>
         {STR.results.intentLine(
           show(intent.category),
           intent.keywords.join(", ") || STR.common.na,
           decimals(intent.confidence, 2),
         )}
       </p>
-      <p style={{ color: "#475569", margin: "0 0 0.75rem", fontSize: "0.85rem" }}>
+      <p style={{ color: color.textMuted, margin: `0 0 ${space.md}`, fontSize: font.size.compact }}>
         {STR.results.snapshotLine(
           data.catalog_snapshot,
           show(data.source),
@@ -526,15 +529,15 @@ export default function ResultsPage() {
         <div
           role="alert"
           style={{
-            border: "1px solid #fbbf24",
-            background: "#fffbeb",
-            borderRadius: 8,
-            padding: "0.75rem",
-            margin: "0 0 1rem",
+            border: `1px solid ${color.warn}`,
+            background: color.warnSurface,
+            borderRadius: radius.md,
+            padding: space.md,
+            margin: `0 0 ${space.lg}`,
           }}
         >
-          <p style={{ margin: 0, fontWeight: 600 }}>{rateLimitNotice}</p>
-          <p style={{ margin: "0.35rem 0 0", fontSize: "0.85rem", color: "#92400e" }}>
+          <p style={{ margin: 0, fontWeight: font.weight.strong }}>{rateLimitNotice}</p>
+          <p style={{ margin: "0.35rem 0 0", fontSize: font.size.compact, color: color.warnText }}>
             {STR.results.rateLimit.codeLabel} <code>RATE_LIMITED</code>{" "}
             {STR.results.rateLimit.detail}
           </p>
@@ -557,7 +560,7 @@ export default function ResultsPage() {
           role="list"
           aria-live="polite"
           aria-labelledby="results-heading"
-          style={{ listStyle: "none", padding: 0, margin: "1rem 0 0" }}
+          style={{ listStyle: "none", padding: 0, margin: `${space.lg} 0 0` }}
         >
           {results.map((item) => (
             <ResultCard
@@ -570,11 +573,11 @@ export default function ResultsPage() {
       )}
 
       {warnings.length > 0 ? (
-        <section aria-labelledby="warnings-heading" style={{ marginTop: "1rem" }}>
-          <h3 id="warnings-heading" style={{ margin: 0, fontSize: "0.95rem" }}>
+        <section aria-labelledby="warnings-heading" style={{ marginTop: space.lg }}>
+          <h3 id="warnings-heading" style={{ margin: 0, fontSize: font.size.lead }}>
             {STR.results.warnings.heading}
           </h3>
-          <ul style={{ color: "#475569", fontSize: "0.8rem", margin: "0.35rem 0 0" }}>
+          <ul style={{ color: color.textMuted, fontSize: font.size.small, margin: "0.35rem 0 0" }}>
             {warnings.map((warning, index) => (
               <li key={`${index}-${warning}`}>{warning}</li>
             ))}

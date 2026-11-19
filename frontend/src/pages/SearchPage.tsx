@@ -5,6 +5,7 @@ import { ApiError, describeApiError, getCategories, searchSkills } from "../api"
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import { QUERY_MAX_LENGTH, QUERY_MIN_LENGTH, type Category } from "../types";
 import { STR } from "../ui/strings";
+import { color, font, space } from "../ui/tokens";
 
 /**
  * Rascunho da busca: sobrevive a voltar da tela de resultados e a um reload (US-09 AC2).
@@ -154,24 +155,24 @@ export default function SearchPage() {
 
   return (
     <section>
-      <h2 style={{ fontSize: "1.1rem" }}>{STR.search.heading}</h2>
+      <h2 style={{ fontSize: font.size.heading }}>{STR.search.heading}</h2>
 
       {/* Aviso de categorias: irmão do formulário, porque o formulário sempre renderiza. */}
       {categoriesFailure ? (
-        <div style={{ marginBottom: "1rem" }}>
+        <div style={{ marginBottom: space.lg }}>
           <ErrorState
             message={categoriesFailure.message}
             code={categoriesFailure.code}
             requestId={categoriesFailure.requestId}
           />
-          <p style={{ margin: "0.5rem 0 0", fontSize: "0.85rem", color: "#475569" }}>
+          <p style={{ margin: `${space.sm} 0 0`, fontSize: font.size.compact, color: color.textMuted }}>
             {STR.search.categoriesUnavailableHint}
           </p>
         </div>
       ) : null}
 
       <form onSubmit={handleSubmit}>
-        <label htmlFor="query" style={{ display: "block", fontWeight: 600 }}>
+        <label htmlFor="query" style={{ display: "block", fontWeight: font.weight.strong }}>
           {STR.search.queryLabel}
         </label>
         <textarea
@@ -183,14 +184,14 @@ export default function SearchPage() {
           maxLength={QUERY_MAX_LENGTH}
           aria-invalid={query !== "" && !isValid}
           aria-describedby="query-help"
-          style={{ width: "100%", marginTop: "0.5rem", padding: "0.5rem", boxSizing: "border-box" }}
+          style={{ width: "100%", marginTop: space.sm, padding: space.sm, boxSizing: "border-box" }}
         />
         {/* O contador conta o texto aparado, que é o que o servidor julga. */}
-        <p id="query-help" style={{ margin: "0.25rem 0 1rem", color: "#475569" }}>
+        <p id="query-help" style={{ margin: `${space.xs} 0 ${space.lg}`, color: color.textMuted }}>
           {STR.search.queryCounter(trimmed.length, QUERY_MAX_LENGTH, QUERY_MIN_LENGTH)}
         </p>
 
-        <label htmlFor="category" style={{ display: "block", fontWeight: 600 }}>
+        <label htmlFor="category" style={{ display: "block", fontWeight: font.weight.strong }}>
           {STR.search.categoryLabel}
         </label>
         <select
@@ -199,7 +200,7 @@ export default function SearchPage() {
           value={category}
           onChange={(event) => handleCategoryChange(event.target.value)}
           disabled={loadingCategories}
-          style={{ marginTop: "0.5rem", padding: "0.4rem" }}
+          style={{ marginTop: space.sm, padding: "0.4rem" }}
         >
           <option value="">{STR.search.anyCategory}</option>
           {/*
@@ -219,18 +220,18 @@ export default function SearchPage() {
 
         {/* Os dois estados que faltavam na tela de busca (issue #28): carregando e vazio. */}
         {loadingCategories ? (
-          <div style={{ marginTop: "0.5rem" }}>
+          <div style={{ marginTop: space.sm }}>
             <LoadingState label={STR.states.loading.categories} />
           </div>
         ) : null}
         {!loadingCategories && categoriesFailure === null && categories.length === 0 ? (
-          <div style={{ marginTop: "0.5rem" }}>
+          <div style={{ marginTop: space.sm }}>
             <EmptyState message={STR.states.empty.noCategories} />
           </div>
         ) : null}
 
         {submitFailure ? (
-          <div style={{ marginTop: "1rem" }}>
+          <div style={{ marginTop: space.lg }}>
             <ErrorState
               message={submitFailure.message}
               code={submitFailure.code}

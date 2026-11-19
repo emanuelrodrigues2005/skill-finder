@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { STR } from "../ui/strings";
+import { color, font, space } from "../ui/tokens";
 
 /**
  * Valor copiável (permalink, `request_id`) com feedback anunciado (`aria-live`).
@@ -59,10 +60,10 @@ export function CopyText({ label, value }: CopyTextProps) {
   }
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
       {clipboard ? (
         <>
-          <code style={{ fontSize: "0.85rem", wordBreak: "break-all" }}>
+          <code style={{ fontSize: font.size.compact, wordBreak: "break-all" }}>
             {label}: {value}
           </code>
           <button type="button" onClick={handleCopy}>
@@ -70,8 +71,8 @@ export function CopyText({ label, value }: CopyTextProps) {
           </button>
         </>
       ) : (
-        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", width: "100%" }}>
-          <span style={{ fontSize: "0.85rem" }}>{label}:</span>
+        <label style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%" }}>
+          <span style={{ fontSize: font.size.compact }}>{label}:</span>
           <input
             readOnly
             value={value}
@@ -80,7 +81,7 @@ export function CopyText({ label, value }: CopyTextProps) {
             aria-label={label}
             onFocus={(event) => event.currentTarget.select()}
             onClick={(event) => event.currentTarget.select()}
-            style={{ flex: 1, fontFamily: "monospace", fontSize: "0.85rem", padding: "0.25rem" }}
+            style={{ flex: 1, fontFamily: font.family.mono, fontSize: font.size.compact, padding: space.xs }}
           />
         </label>
       )}
@@ -88,7 +89,7 @@ export function CopyText({ label, value }: CopyTextProps) {
         A região existe desde o primeiro render, vazia: um leitor de tela precisa observar a
         região *antes* da mutação. Inserida junto com o texto, ela geralmente não é anunciada.
       */}
-      <span role="status" aria-live="polite" style={{ fontSize: "0.85rem", color: "#475569" }}>
+      <span role="status" aria-live="polite" style={{ fontSize: font.size.compact, color: color.textMuted }}>
         {announcementText(announcement)}
       </span>
     </div>

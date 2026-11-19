@@ -1,6 +1,7 @@
 /** Estados reutilizáveis: loading, empty e error (com `code` e `request_id`). */
 
 import { STR } from "../ui/strings";
+import { color, font, radius, space } from "../ui/tokens";
 import { CopyText } from "./CopyText";
 
 interface LoadingStateProps {
@@ -9,7 +10,7 @@ interface LoadingStateProps {
 
 export function LoadingState({ label = STR.states.loading.default }: LoadingStateProps) {
   return (
-    <p role="status" aria-live="polite" style={{ color: "#475569" }}>
+    <p role="status" aria-live="polite" style={{ color: color.textMuted }}>
       {label}
     </p>
   );
@@ -22,9 +23,12 @@ interface EmptyStateProps {
 
 export function EmptyState({ message = STR.states.empty.default, hint }: EmptyStateProps) {
   return (
-    <div role="status" style={{ border: "1px dashed #cbd5e1", padding: "1rem", borderRadius: 8 }}>
+    <div
+      role="status"
+      style={{ border: `1px dashed ${color.borderDashed}`, padding: space.lg, borderRadius: radius.md }}
+    >
       <p style={{ margin: 0 }}>{message}</p>
-      {hint ? <p style={{ margin: "0.5rem 0 0", color: "#475569" }}>{hint}</p> : null}
+      {hint ? <p style={{ margin: `${space.sm} 0 0`, color: color.textMuted }}>{hint}</p> : null}
     </div>
   );
 }
@@ -42,21 +46,24 @@ interface ErrorStateProps {
 
 export function ErrorState({ message, requestId, code = null, onRetry }: ErrorStateProps) {
   return (
-    <div role="alert" style={{ border: "1px solid #f87171", padding: "1rem", borderRadius: 8 }}>
-      <p style={{ margin: 0, fontWeight: 600 }}>{STR.states.error.title}</p>
-      <p style={{ margin: "0.5rem 0 0" }}>{message}</p>
+    <div
+      role="alert"
+      style={{ border: `1px solid ${color.danger}`, padding: space.lg, borderRadius: radius.md }}
+    >
+      <p style={{ margin: 0, fontWeight: font.weight.strong }}>{STR.states.error.title}</p>
+      <p style={{ margin: `${space.sm} 0 0` }}>{message}</p>
       {code === null ? null : (
-        <p style={{ margin: "0.5rem 0 0", fontSize: "0.85rem", color: "#475569" }}>
+        <p style={{ margin: `${space.sm} 0 0`, fontSize: font.size.compact, color: color.textMuted }}>
           {STR.common.codeLabel} <code>{code}</code>
         </p>
       )}
       {requestId ? (
-        <div style={{ marginTop: "0.5rem" }}>
+        <div style={{ marginTop: space.sm }}>
           <CopyText label={STR.common.requestIdLabel} value={requestId} />
         </div>
       ) : null}
       {onRetry ? (
-        <button type="button" onClick={onRetry} style={{ marginTop: "0.75rem" }}>
+        <button type="button" onClick={onRetry} style={{ marginTop: space.md }}>
           {STR.states.error.retry}
         </button>
       ) : null}
