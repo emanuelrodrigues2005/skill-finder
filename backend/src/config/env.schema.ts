@@ -67,6 +67,12 @@ const baseEnvSchema = z.object({
   SKILL_SOURCE_KIND: z.enum(['html', 'fixture']).default('fixture'),
   SKILL_SOURCE_BASE_URL: z.string().min(1).optional(),
   SKILL_SOURCE_RPS: z.coerce.number().positive().default(1),
+  //
+  // Enriquecimento ao vivo: quando a busca local nao devolve nada, enumera o
+  // sitemap, filtra as chaves pelo slug e ingere ate N delas. Desligado por padrao
+  // porque custa requisicoes contra a fonte e segundos na resposta.
+  LIVE_ENRICH_ENABLED: booleanFromEnv.default(false),
+  LIVE_ENRICH_MAX_KEYS: z.coerce.number().int().positive().default(12),
 
   // --- deterministic ranking weights (the LLM never orders anything) ---
   RANK_W_STARS: z.coerce.number().min(0).default(0.5),
@@ -170,6 +176,8 @@ export const envSchema = baseEnvSchema
     skillSourceKind: value.SKILL_SOURCE_KIND,
     skillSourceBaseUrl: value.SKILL_SOURCE_BASE_URL,
     skillSourceRps: value.SKILL_SOURCE_RPS,
+    liveEnrichEnabled: value.LIVE_ENRICH_ENABLED,
+    liveEnrichMaxKeys: value.LIVE_ENRICH_MAX_KEYS,
     rankWStars: value.RANK_W_STARS,
     rankWVulns: value.RANK_W_VULNS,
     rankWInstalls: value.RANK_W_INSTALLS,

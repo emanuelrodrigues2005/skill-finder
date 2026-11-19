@@ -71,6 +71,7 @@ import type {
   StoredSearchStatus,
 } from './search-store.port';
 import { storedSearchJson } from './search-store.port';
+import { LIVE_ENRICHER, type LiveEnricher } from './live-enricher.port';
 import { SEARCH_CATALOG, SEARCH_STORE } from './search.tokens';
 
 /** Entrada de `POST /api/v1/search` já validada pelo DTO (§5.2). */
@@ -137,6 +138,9 @@ export class SearchService {
     @Inject(EXPLAIN_PORT) private readonly explain: ExplainParser,
     // Opcional de propósito: a métrica é observabilidade, não requisito da busca.
     @Optional() private readonly metrics?: MetricsService,
+    // Enriquecimento ao vivo: só entra quando a busca local volta vazia. Opcional
+    // porque um teste do caminho normal não deve montar rede nem Postgres.
+    @Optional() @Inject(LIVE_ENRICHER) private readonly live?: LiveEnricher,
   ) {}
 
   /**
@@ -180,7 +184,7 @@ export class SearchService {
     const ageMs = Math.max(0, now.getTime() - snapshot.getTime());
     const degradation = resolveDegradation(parsed.status, ageMs > SOURCE_STALE_AFTER_MS);
 
-    const candidates = await this.catalog.search({
+    let candidates = await this.catalog.search({
       query: input.query,
       // Issue #40: o `search_doc` é indexado em inglês, então o `tsquery` recebe os
       // termos em inglês da intenção. Sem eles (provedor `disabled`, intenção
@@ -191,6 +195,25 @@ export class SearchService {
       category: input.category,
       limit: Math.max(input.limit, CANDIDATE_POOL_SIZE),
     });
+
+    // Catálogo local insuficiente: enriquece ao vivo e tenta de novo. Só quando a
+    // lista voltou VAZIA — enriquecer com resultado na mão gastaria requisições
+    // contra a fonte sem mudar o que a pessoa vê.
+    if (candidates.length === 0 && this.live !== undefined && this.live.enabled) {
+      const gravadas = await this.live.enrich({
+        keywords: searchKeywords(parsed),
+        limit: this.config.env.liveEnrichMaxKeys,
+      });
+      if (gravadas > 0) {
+        // Mesma entrada, catálogo novo: o FTS agora encontra as linhas gravadas.
+        candidates = await this.catalog.search({
+          query: input.query,
+          keywords: searchKeywords(parsed),
+          category: input.category,
+          limit: Math.max(input.limit, CANDIDATE_POOL_SIZE),
+        });
+      }
+    }
     const { results, recommendation, warnings, explainStatus } = await this.rankAndExplain(
       input.query,
       candidates,

@@ -15,6 +15,10 @@
  */
 import { type DynamicModule, Module } from '@nestjs/common';
 
+import { createSource } from '../catalog/catalog.module';
+import { CatalogLiveEnricher } from '../catalog/live-enricher.service';
+import { PrismaCatalogRepository } from '../catalog/prisma-catalog.repository';
+import type { SkillSource } from '../catalog/skill-source';
 import { MetricsModule } from '../common/metrics/metrics.module';
 import { AppConfigService } from '../config/config.module';
 import type { Env } from '../config/env.schema';
@@ -34,6 +38,7 @@ import { PrismaSearchCatalogRepository } from './prisma-search-catalog.repositor
 import { PrismaSearchStoreRepository } from './prisma-search-store.repository';
 import { SearchController } from './search.controller';
 import { SearchThrottlerGuard } from './search-throttler.guard';
+import { LIVE_ENRICHER, type LiveEnricher } from './live-enricher.port';
 import { SEARCH_CATALOG, SEARCH_STORE } from './search.tokens';
 import type { SearchCatalog } from './search-catalog.port';
 import type { SearchStore } from './search-store.port';
@@ -45,6 +50,10 @@ import { SkillsController } from './skills.controller';
 export interface SearchModulePorts {
   readonly catalog?: SearchCatalog;
   readonly store?: SearchStore;
+  /** Fonte já construída para o enriquecimento ao vivo (duplo de teste). */
+  readonly source?: SkillSource;
+  /** Enriquecimento pronto (duplo de teste); vence a fiação real. */
+  readonly liveEnricher?: LiveEnricher;
 }
 
 @Module({})
@@ -78,6 +87,22 @@ export class SearchModule {
           inject: [PrismaService],
           useFactory: (prisma: PrismaService): SearchStore =>
             ports.store ?? new PrismaSearchStoreRepository(prisma),
+        },
+        {
+          provide: LIVE_ENRICHER,
+          inject: [PrismaService, AppConfigService],
+          useFactory: (prisma: PrismaService, config: AppConfigService): LiveEnricher =>
+            ports.liveEnricher ??
+            new CatalogLiveEnricher(
+              ports.source ??
+                createSource({
+                  adapter: config.env.skillSourceKind,
+                  baseUrl: config.env.skillSourceBaseUrl,
+                  rps: config.env.skillSourceRps,
+                }),
+              new PrismaCatalogRepository(prisma),
+              config,
+            ),
         },
         {
           provide: INTENT_PARSER,
