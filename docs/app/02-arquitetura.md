@@ -62,7 +62,7 @@ flowchart LR
   NG -->|"/api/v1/*"| API
   API -->|"SQL 5432"| PG
   ING -->|"upsert do catalogo"| PG
-  ING -->|"list_categories / fetch_catalog"| SRC
+  ING -->|"list_categories / listKeys / fetchSkills"| SRC
   API -->|"le candidatos do cache"| PG
   API -->|"extract_intent + explain"| LLM
   SRC -->|"HTTPS json ou HTML"| SK
@@ -75,7 +75,7 @@ flowchart LR
 
 | Seam | Contrato | O que permite trocar sem retrabalho |
 | --- | --- | --- |
-| `SkillSource` | `list_categories()`, `fetch_skills(keys)`, `fetch_document(key)`, `fetch_catalog(page)` (`@deprecated`, sai na #46) | JSON público → scraping → fixture de teste, por variável de ambiente |
+| `SkillSource` | `list_categories()`, `listKeys()` (enumeração da fonte), `fetch_skills(keys)`, `fetch_document(key)` | JSON público → scraping → fixture de teste, por variável de ambiente |
 | `LLMProvider` | `extract_intent()`, `explain()` | opencode → qualquer provedor OpenAI-compatible → `NullProvider` |
 | UI ↔ API | `openapi.yaml` gerado pelos decorators do `@nestjs/swagger` (`scripts/generate-openapi.ts`) | Reescrever a SPA sem tocar no backend |
 | API ↔ Banco | migrations Prisma (`prisma migrate`) | Trocar Postgres gerenciado (Opção 2 de `docs/01` §4.3) sem alterar código de domínio |
@@ -449,13 +449,15 @@ O response marca `llm.status ∈ {ok, cached, repaired, invalid_ids, low_confide
 ```text
 SkillSource
   listCategories()                   -> Promise<CategoryRecord[]>
-  fetchSkills(keys: source_key[])    -> Promise<SkillRecord[]>         // só as conhecidas, na ordem pedida; chave faltante não lança
-  fetchDocument(sourceKey)           -> Promise<DocumentRecord | null> // SKILL.md, opcional
-  fetchCatalog(page: number)         -> Promise<Page<SkillRecord>>     // @deprecated: sai na #46
-  capabilities                       -> {supports_documents, supports_categories, pagination_style}
+  listKeys()                         -> Promise<source_key[]>             // enumeração da fonte: bootstrap + descoberta contínua
+  fetchSkills(keys: source_key[])    -> Promise<SkillRecord[]>            // só as conhecidas, na ordem pedida; chave faltante não lança
+  fetchDocument(sourceKey)           -> Promise<DocumentRecord | null>    // SKILL.md, opcional
+  capabilities                       -> {supports_documents, supports_categories}
 ```
 
-**A chave é a unidade de aquisição, não a página** (#44). O rodízio (§7.3) escolhe até 720 `source_key` por ciclo e pede exatamente essas: `fetchSkills(keys)` é a chamada dele. O skills.sh não publica listagem paginada — só sitemap e página de detalhe —, então paginar o catálogo inteiro era a unidade errada. Contrato: devolve **só** as chaves conhecidas, na ordem em que foram pedidas, com a repetida aparecendo uma vez; chave desconhecida é omitida (ausência, não erro) e **nunca lança** por causa dela, porque uma chave que sumiu da fonte não pode derrubar o ciclo. `fetchCatalog(page)` fica por compatibilidade, marcado `@deprecated`, até a #46 reescrever a ingestão; nenhum código novo deve chamá-lo.
+**A chave é a unidade de aquisição, não a página** (#44, #46). O rodízio (§7.3) escolhe até 720 `source_key` por ciclo e pede exatamente essas: `fetchSkills(keys)` é a chamada dele. O skills.sh não publica listagem paginada — só sitemap e página de detalhe —, então paginar o catálogo inteiro era a unidade errada; **a fonte não pagina** e não há `pagination_style` nem `fetchCatalog`: ambos saíram na #46 (o adaptador `html` recusava `fetchCatalog`, e habilitar `SKILL_SOURCE_KIND=html` antes disso fechava todo run como `failed`). Contrato de `fetchSkills`: devolve **só** as chaves conhecidas, na ordem em que foram pedidas, com a repetida aparecendo uma vez; chave desconhecida é omitida (ausência, não erro) e **nunca lança** por causa dela, porque uma chave que sumiu da fonte não pode derrubar o ciclo.
+
+`listKeys()` existe porque **o universo do rodízio é o conjunto de chaves da fonte, não o conjunto de linhas do banco** (F1 do parecer da #46). Ela é chamada em dois momentos: no **bootstrap** de um catálogo vazio (sem linha nenhuma, o rodízio devolve listas vazias e não começaria) e na **descoberta contínua**, que agora é **todo ciclo** — a cota de descoberta (`720 − hot`, no máximo 360 slots) é reservada **antes** do cold, então sobra slot para descobrir mesmo com o catálogo muito maior que o ciclo. A regra anterior ("não enumerar quando o rodízio já preencheu o ciclo") foi **revogada**: era ela que deixava a descoberta faminta e travava o catálogo nas primeiras 720 linhas. Ela devolve **chaves**, nunca registros — quem busca detalhe é `fetchSkills(keys)`, passando pelo limitador de 1 req/s. A enumeração é memoizada por instância do adaptador (o `html` guarda o `Set` do sitemap após a primeira leitura), então o custo por ciclo é a comparação com o banco (`selectUnseenKeys`), não um `sitemap.xml` novo por ciclo.
 
 `SkillRecord` já é o formato interno (não o formato do site): `source_key`, `name`, `summary`, `category_slug`, `stars`, `installs`, `vulnerability_count`, `security_status`, `repo_url`, `skill_md_url`, `raw`. **Toda a normalização vive no adaptador** — é o único lugar que conhece o formato do skills.sh.
 
@@ -468,7 +470,7 @@ SkillSource
 | Robustez | Alta (contrato explícito); quebra só com mudança de API | Baixa/média: quebra a cada mudança de layout | Total |
 | Esforço | Baixo | Médio-alto (seletores + testes de parser com HTML salvo) | Baixo |
 | Falha típica | Campo renomeado → `items_seen=0` | Seletor muda → `items_seen=0` ou `stars=null` | Nenhuma |
-| Detecção | `ingest_run.items_seen == 0` ou `items_upserted/items_seen < 0,5` → run `partial` + alerta | Idem, mais `skills_total` caindo > 20% | — |
+| Detecção | `ingest_run.items_seen == 0` ou `items_upserted/items_requested < 0,5` → run `partial` + alerta | Idem, mais `skills_total` caindo > 20% | — |
 
 **Escolha por configuração:** `SKILL_SOURCE_KIND` (`json` | `html` | `fixture`). O adaptador é escolhido uma vez no boot; a interface é a mesma, então o resto do sistema ignora qual está ativo. **Decisão adiada consciente:** a descoberta do dono decide o padrão; até lá o padrão de desenvolvimento é `fixture` e o de produção é declarado como `[a confirmar]`.
 
@@ -477,10 +479,45 @@ SkillSource
 ### 7.3 Ingestão: quando e como
 
 - **Quando:** no boot da API (se o catálogo estiver vazio ou com mais de 6 h) e a cada **6 h** por job `@nestjs/schedule`; execução manual via `POST /api/v1/admin/ingest`; uma única ingestão por vez garantida por `UNIQUE (status) WHERE status='running'` em `ingest_run` (lock no banco, sem dependência extra).
-- **Como (idempotente, upsert por `source_key`):**
-  1. cria `ingest_run(status='running')`; 2. itera páginas com `SKILL_SOURCE_RPS` (default 1 req/s) e timeout de 10 s por requisição, retry 2× com backoff exponencial; teto de 200 páginas; 3. `UPSERT` em `skill` (`last_seen_at=now()`, `raw` atualizado, `search_doc = to_tsvector('english', name || ' ' || summary)`); 4. grava `skill_metric_snapshot` para as skills cujo valor mudou; 5. marca `is_active=false` o que não foi visto **nesta** execução, mas só se a execução terminou `ok` e `items_seen ≥ 80%` do total ativo — evita zerar o catálogo por uma resposta parcial; 6. atualiza `category`; 7. fecha o run com `status` e contadores.
-- **Falha no meio:** o run fica `failed`/`partial`, o catálogo anterior permanece válido e `is_active` **não** é tocado. A resposta passa a informar `data.age_seconds` real.
-- **Custo de rede:** 4 ciclos/dia × ~N páginas; com 10³ skills e página de 50, são ~20 requisições por ciclo — ordens de grandeza abaixo de qualquer rate limit razoável, e nada no caminho do usuário.
+- **Como (rodízio, idempotente, upsert por `source_key`)** — uma execução **gira uma fatia**, não varre o catálogo. Números ratificados em `03-plano-app.md` §F2.10 (D3):
+
+| Número | O que fixa |
+| --- | --- |
+| **720** / ciclo | `source_key` pedidas por execução: a 1 req/s (`SKILL_SOURCE_RPS=1`), ~12 min por ciclo, **~3% de *duty cycle*** |
+| **6 h** | intervalo entre ciclos (4 por dia, ~2.880 requisições/dia); o que é *hot* é revisitado no ciclo seguinte |
+| **hot ≤ 360** slots | o que apareceu em `search_request.result_ids` dos últimos **7 d**, da requisição mais recente para a mais antiga: é a demanda real e vem primeiro |
+| **inéditas ≤ 720 − hot** | chaves que a fonte publica e o catálogo não tem como linha **ativa** (`source_key` que `selectUnseenKeys` não encontra): ocupam a cota de descoberta **antes** do cold, em ordem de `source_key COLLATE "C"` — nunca famintas enquanto existirem (F1 do parecer da #46) |
+| **cold 7–14 d** | o resto das ativas, mais antigas primeiro; **TTL 14 d** é a validade da entrada, e vencida gira antes |
+| **desativação 28 d** | skill não vista em 28 d vira `is_active = false`. **Nunca** "não vista neste ciclo" |
+| **`source_stale` 12 h** | snapshot acima de 12 h marca `degraded=true` (§7.4); com ciclos de 6 h sobra uma execução perdida de folga |
+
+  Passos:
+  1. fecha run órfão (`started_at < agora − 2 h` → `failed`/`STALE_RUN`) e monta o ciclo **nesta prioridade** (`planCycle`, função pura): **hot** (`selectRotationKeys`, até 360 slots, requisição mais recente primeiro) → **inéditas** (`listKeys()` menos o que `selectUnseenKeys` confirma que já é linha ativa, em ordem de `source_key COLLATE "C"`, ocupando a cota de descoberta que sobra do hot) → **cold** (o resto das ativas, vencidas primeiro, as mais antigas antes), tudo cortado em **720 chaves distintas**. A seleção recebe `now` **por parâmetro**; não lê relógio. `listKeys()` é chamado **sempre que existe cota de descoberta** — e, com hot ≤ 360 num ciclo de 720, ela sempre existe: é assim que o catálogo deixa de travar nas primeiras 720 linhas. Só há um caso sem enumeração: `hot ∪ cold` vazio **com** catálogo ativo (seletor quebrado), que fecha `items_requested = 0` / `EMPTY_CATALOG`;
+  2. abre `ingest_run(status='running')` com `items_requested` = **tamanho do ciclo** (e `started_at` = `now` do ciclo). Falha ao montar o ciclo (sitemap fora do ar) abre e fecha o run como `failed`/`SOURCE_FETCH_FAILED` com `items_requested = 0` — a falha não pode ficar sem rastro em `ingest_run`;
+  3. pede **exatamente essas chaves** a `fetchSkills(keys)`, a `SKILL_SOURCE_RPS` (default 1 req/s) e timeout de 10 s por requisição: uma chave que falha é ausência daquela chave, não falha do run;
+  4. `UPSERT` em `skill` (`last_seen_at = started_at`, `is_active = true`, `raw` atualizado, `search_doc = to_tsvector('english', name || ' ' || summary)`);
+  5. grava `skill_metric_snapshot` para as skills cujo valor mudou;
+  6. **expurgo por idade:** `is_active = false` para quem não é visto desde `started_at − 28 d`. É caminho **separado** da cobertura do ciclo: com 720 slots para 20.000 skills, não ver uma skill num ciclo é o normal, e desativá-la apagaria o catálogo em quatro ciclos;
+  7. atualiza `category`; 8. fecha o run com `status` e contadores.
+- **Status do run** (`running -> ok | partial | failed`), com `E = items_requested`:
+
+| Condição | Status | `error_code` |
+| --- | --- | --- |
+| a fonte lança antes de entregar / o repositório lança | `failed` | `SOURCE_FETCH_FAILED` / `REPOSITORY_FAILED` |
+| nenhuma chave no ciclo (`items_requested = 0`) | `partial` | `EMPTY_CATALOG` |
+| `items_requested > 0` e `items_seen = 0` (a fonte respondeu vazio, sem erro) | `partial` | `LOW_CYCLE_COVERAGE` |
+| o ciclo viu **< 80%** de `E` (guarda de 80%) | `partial` | `LOW_CYCLE_COVERAGE` |
+| gravou **< 50%** de `E` | `partial` | `LOW_UPSERT_RATIO` |
+| caso contrário | `ok` | — |
+
+  `EMPTY_CATALOG` é sobre o **ciclo** sem chave (`E = 0`), nunca sobre a fonte muda: pedir 720 e receber zero é cobertura zero do ciclo. A guarda de 80% mede **`items_seen` contra `items_requested`**, não contra o total de ativos: um ciclo que cobre 720 de 20.000 (3,6%) é o rodízio funcionando. Ela decide o **status**; o expurgo por idade (passo 6) roda mesmo em `partial`, mas **só** com `status ≠ failed` **e** `items_seen > 0` — fonte que devolve zero não pode auto-desativar o catálogo.
+- **Falha no meio:** o run fica `failed`/`partial`, o catálogo anterior permanece válido e `is_active` **não** é tocado por cobertura. A resposta passa a informar `data.age_seconds` real.
+- **Custo de rede:** 4 ciclos/dia × 720 requisições = **~2.880 req/dia**, ~3% de *duty cycle* a 1 req/s — ordens de grandeza abaixo de qualquer rate limit razoável, e nada no caminho do usuário.
+- **Primeiro ciclo:** com o catálogo vazio o rodízio não tem o que selecionar; a fonte enumera as chaves (`listKeys()`, o `sitemap.xml`) e o ciclo pede até 720 delas. Sem esse caminho, `SKILL_SOURCE_KIND=html` num banco novo ficaria vazio para sempre.
+- **Descoberta contínua (prioridade hot → inéditas → cold):** a cota de descoberta é reservada **antes** do cold, então a fonte é lida (`listKeys()`) em **todo** ciclo, não só no catálogo vazio. O hot — demanda real — tem prioridade e nunca é cortado; as inéditas vêm em seguida, em ordem de `source_key COLLATE "C"`, e **nunca são famintas enquanto existirem**; o cold preenche o que sobrar. A aritmética, a 4 ciclos/dia:
+  - **backfill** (catálogo novo, hot saturado em 360): **360 hot + 360 inéditas por ciclo** = 1.440 inéditas/dia → 20.000 em **~14 dias**;
+  - **depois do backfill** (inéditas esgotadas): **360 hot + 360 cold** por ciclo = 1.440 cold/dia → passada completa em **7–14 dias** (14 no pior caso com hot saturado; sem hot, o ciclo inteiro — 720/ciclo, 2.880/dia — gira o cold e a passada cai para **~7 dias**), dentro da janela da D3;
+  - **bootstrap** (catálogo vazio): `countActiveSkills() = 0`, todas as chaves enumeradas são inéditas e o ciclo pede até **720** delas.
 
 ### 7.4 Cache e fallback
 
@@ -627,7 +664,7 @@ Instrumentação na primeira versão (não depois): sem isso, C7 (5%) vira traba
 ### ADR-003 — `SkillSource` com adaptadores `json`/`html`/`fixture` selecionados por configuração
 
 **Contexto.** Não se sabe se o skills.sh expõe API JSON, e o dono fará a descoberta. O código não pode ficar refém dessa resposta, e o CI não pode depender de rede.
-**Decisão.** Uma interface (`list_categories`, `fetch_catalog`, `fetch_document`) e três implementações; `SKILL_SOURCE_KIND` escolhe. Normalização no adaptador; o domínio só conhece `SkillRecord`. `fixture` é o modo de teste/CI e a rede de segurança da demo.
+**Decisão.** Uma interface (`list_categories`, `listKeys`, `fetchSkills`, `fetchDocument`) e três implementações; `SKILL_SOURCE_KIND` escolhe. Normalização no adaptador; o domínio só conhece `SkillRecord`. `fixture` é o modo de teste/CI e a rede de segurança da demo.
 **Alternativas.** Escrever direto contra uma API assumida: descartada (retrabalho garantido). Scraping como único caminho: descartada (frágil e possivelmente bloqueado por termos de uso `[a confirmar]`).
 **Consequências.** Um contrato a manter e um adaptador a escrever quando a descoberta chegar. Testes de parser com HTML salvo. Se o site for renderizado no cliente, `html` não serve sem Playwright — bloqueio registrado, não improvisado.
 

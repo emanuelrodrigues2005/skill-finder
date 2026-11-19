@@ -34,18 +34,27 @@ import {
   INGEST_ERROR_CODES,
   type CatalogRepository,
   type IngestRunFinish,
+  type RotationBands,
   type RotationCandidate,
   type RotationParams,
 } from './catalog-repository';
 import type { SkillRecord } from './skill-source';
 
-export type { RotationCandidate, RotationParams } from './catalog-repository';
+export type { RotationBands, RotationCandidate, RotationParams } from './catalog-repository';
 
 /**
  * Linhas por statement: `search_doc` acrescenta parâmetros e o teto do Postgres
  * é de 65 535 por query. 500 linhas deixam folga larga.
  */
 const UPSERT_CHUNK_SIZE = 500;
+
+/**
+ * Chaves por statement em `selectUnseenKeys`: um `IN` de uma coluna aguenta
+ * muito mais que o do upsert, mas a lista vem do `sitemap.xml` inteiro (~20.000)
+ * e o teto de parâmetros do Postgres é 65 535 — 5.000 por lote deixa margem para
+ * um catálogo bem maior que o ratificado.
+ */
+const UNSEEN_CHUNK_SIZE = 5_000;
 
 /**
  * Janela do hot set, em dias (F2.10 / D3). Separada de `coldMinDays` de
@@ -124,7 +133,9 @@ export class PrismaCatalogRepository implements CatalogRepository {
   }
 
   /**
-   * As chaves do ciclo de rodízio (F2.10 / D3): hot set primeiro, cold depois.
+   * As chaves do ciclo de rodízio (F2.10 / D3), **por banda**: hot primeiro,
+   * cold depois — a prioridade entre as duas é de `planCycle` (`ingest.ts`),
+   * porque a cota de descoberta é reservada no meio (F1 do parecer da #46).
    *
    * Duas consultas, ambas ancoradas em `params.now` — nada de `now()` do banco,
    * senão a mesma chamada devolveria outra lista a cada segundo:
@@ -138,9 +149,10 @@ export class PrismaCatalogRepository implements CatalogRepository {
    *    escolhidas: "cold = o resto" é sobre o conjunto quente inteiro.
    *
    * O cold usa o índice `(is_active, last_seen_at)` (migration da #45), que é o
-   * que impede um `seq scan` de 20.000 linhas a cada 6 h.
+   * que impede um `seq scan` de 20.000 linhas a cada 6 h — o `LIMIT` continua
+   * sendo o do ciclo: o que não couber volta no ciclo seguinte, na mesma ordem.
    */
-  async selectRotationKeys(params: RotationParams): Promise<string[]> {
+  async selectRotationKeys(params: RotationParams): Promise<RotationBands> {
     const hotSince = daysBefore(params.now, HOT_WINDOW_DAYS);
     const cycleSlots = Math.max(0, params.cycleSlots);
     const hotLimit = Math.max(0, Math.min(params.hotSlots, cycleSlots));
@@ -185,10 +197,40 @@ export class PrismaCatalogRepository implements CatalogRepository {
              LIMIT ${coldCapacity}
           `;
 
-    return mergeRotationKeys(params, {
+    return orderRotationBands(params, {
       hot: hotRows.map(toHotCandidate),
       cold: coldRows.map(toColdCandidate),
     });
+  }
+
+  /**
+   * As **inéditas** do ciclo: das chaves que a fonte enumerou, as que não são
+   * linha ativa do catálogo (F1 do parecer da #46).
+   *
+   * Uma consulta por lote, com `is_active = true`: linha inativa **conta como
+   * inédita** de propósito — ela saiu do rodízio pelo TTL de 28 dias e é
+   * reaparecendo na fonte que volta a ficar ativa. A ordem de entrada é a da
+   * fonte; quem ordena é `planCycle` (`COLLATE "C"` em TS), para a regra ser
+   * provada sem banco.
+   */
+  async selectUnseenKeys(candidates: readonly string[]): Promise<string[]> {
+    const unique = [...new Set(candidates)];
+    if (unique.length === 0) {
+      return [];
+    }
+    const active = new Set<string>();
+    for (const batch of chunk(unique, UNSEEN_CHUNK_SIZE)) {
+      const rows = await this.prisma.$queryRaw<Array<{ source_key: string }>>`
+        SELECT source_key
+          FROM "skill"
+         WHERE is_active = true
+           AND source_key IN (${Prisma.join(batch)})
+      `;
+      for (const row of rows) {
+        active.add(row.source_key);
+      }
+    }
+    return unique.filter((key) => !active.has(key));
   }
 
   /**
@@ -213,16 +255,13 @@ export class PrismaCatalogRepository implements CatalogRepository {
     return unique.length;
   }
 
-  async deactivateSkillsNotSeenSince(seenAt: Date): Promise<number> {
-    return this.deactivateSkillsStaleBefore(seenAt);
-  }
-
   /**
-   * Expurgo por TTL: desativa o que não é visto desde `cutoff` (28 dias, D3).
+   * Expurgo por TTL — **o único caminho de desativação** desde a #46:
+   * `is_active = false` para o que não é visto desde `cutoff` (28 dias, D3),
+   * numa passada por `last_seen_at`, nunca por lista de ids.
    *
-   * Mesma statement da desativação por run — uma passada por `last_seen_at`,
-   * nunca por lista de ids —, mas com o corte vindo de fora: o expurgo roda
-   * fora da ingestão, então não empresta o relógio de nenhum run.
+   * O corte vem de fora (o chamador calcula `startedAt - 28 d`): o expurgo não
+   * empresta o relógio de nenhum run, e a statement não usa `now()`.
    */
   async deactivateSkillsStaleBefore(cutoff: Date): Promise<number> {
     return this.prisma.$executeRaw`
@@ -254,7 +293,7 @@ export interface RotationPool {
 }
 
 /**
- * Funde hot e cold nos `cycleSlots` do ciclo. **Pura e determinística**: mesma
+ * Ordena e corta as duas bandas do rodízio. **Pura e determinística**: mesma
  * entrada ⇒ mesma saída, sem relógio e sem `Math.random` (o `now` vem em
  * `params`).
  *
@@ -263,37 +302,44 @@ export interface RotationPool {
  * e aqui, para a regra ser provada sem banco. As duas cópias precisam andar
  * juntas — o spec unitário é o que as mantém honestas.
  *
- * Ordem final:
+ * Ordem dentro de cada banda:
  * 1. **hot**, pela requisição mais recente; empate resolvido por `sourceKey`
  *    crescente (comparação de code units, a mesma do `COLLATE "C"` do SQL).
  * 2. **cold**, as vencidas (fora do TTL de `coldMaxDays`) primeiro, depois as
  *    frias (`coldMinDays`), e dentro de cada grupo as mais antigas; empate por
  *    `sourceKey` crescente.
  *
- * Chave que aparece nos dois conjuntos conta **uma vez**, na posição do hot —
- * é o "sem repetir chave entre hot e cold" da issue.
+ * Os cortes: hot em `hotSlots`, cold no que resta do ciclo depois do hot.
+ * Chave que aparece nos dois conjuntos conta **uma vez**, na banda do hot — é o
+ * "sem repetir chave entre hot e cold" da issue — e não consome slot do cold.
+ *
+ * A fusão (com a cota de descoberta no meio) é de `planCycle`, em `ingest.ts`:
+ * aqui as bandas saem **separadas**, que é o que permite reservar a descoberta
+ * antes do cold.
  */
-export function mergeRotationKeys(params: RotationParams, pool: RotationPool): string[] {
+export function orderRotationBands(params: RotationParams, pool: RotationPool): RotationBands {
   const cycleSlots = Math.max(0, params.cycleSlots);
   const hotSlots = Math.max(0, Math.min(params.hotSlots, cycleSlots));
   const coldSince = daysBefore(params.now, params.coldMinDays);
   const expiredSince = daysBefore(params.now, params.coldMaxDays);
 
-  const keys: string[] = [];
   const chosen = new Set<string>();
 
-  const hot = [...pool.hot].sort((left, right) => {
+  const hot: string[] = [];
+  const byRecency = [...pool.hot].sort((left, right) => {
     const byRequest = time(right.requestedAt) - time(left.requestedAt);
     return byRequest !== 0 ? byRequest : compareKeys(left.sourceKey, right.sourceKey);
   });
-  for (const candidate of hot) {
-    if (keys.length >= hotSlots) {
+  for (const candidate of byRecency) {
+    if (hot.length >= hotSlots) {
       break;
     }
-    pushUnique(keys, chosen, candidate.sourceKey);
+    pushUnique(hot, chosen, candidate.sourceKey);
   }
 
-  const cold = [...pool.cold].sort((left, right) => {
+  const cold: string[] = [];
+  const coldCapacity = cycleSlots - hot.length;
+  const byStaleness = [...pool.cold].sort((left, right) => {
     const byBand = coldBand(left, coldSince) - coldBand(right, coldSince);
     if (byBand !== 0) {
       return byBand;
@@ -305,14 +351,14 @@ export function mergeRotationKeys(params: RotationParams, pool: RotationPool): s
     const byAge = left.lastSeenAt.getTime() - right.lastSeenAt.getTime();
     return byAge !== 0 ? byAge : compareKeys(left.sourceKey, right.sourceKey);
   });
-  for (const candidate of cold) {
-    if (keys.length >= cycleSlots) {
+  for (const candidate of byStaleness) {
+    if (cold.length >= coldCapacity) {
       break;
     }
-    pushUnique(keys, chosen, candidate.sourceKey);
+    pushUnique(cold, chosen, candidate.sourceKey);
   }
 
-  return keys;
+  return { hot, cold };
 }
 
 /** `0` para quem cruzou o corte, `1` para quem ainda está dentro dele. */

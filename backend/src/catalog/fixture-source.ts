@@ -19,19 +19,14 @@
  * `fetchSkills(keys)` (#44) é o caminho do rodízio: normaliza a amostra uma vez
  * num índice `source_key -> SkillRecord` e responde só o que foi pedido. Chave
  * desconhecida é omitida e não vira exceção (contrato em `skill-source.ts`).
- * `fetchCatalog` fica como compatibilidade até a #46, sobre a mesma leitura
- * memoizada.
+ * `listKeys()` (#46) devolve as 25 chaves da amostra — é o bootstrap do catálogo
+ * vazio. Não há listagem paginada: a aquisição é sempre por chave.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { normaliseSkill, type RawSkill } from './normalise';
-import type {
-  CatalogPage,
-  SkillRecord,
-  SkillSource,
-  SkillSourceCapabilities,
-} from './skill-source';
+import type { SkillRecord, SkillSource, SkillSourceCapabilities } from './skill-source';
 
 /** Caminho padrão, relativo ao diretório de trabalho do backend. */
 export const DEFAULT_FIXTURE_PATH = join('test', 'fixtures', 'catalog-sample.json');
@@ -45,8 +40,6 @@ const CAPABILITIES: SkillSourceCapabilities = {
   supports_categories: false,
   supports_documents: false,
 };
-
-const FIRST_PAGE = 1;
 
 /** Cria um adaptador independente sobre a fixture congelada. */
 export function createFixtureSource(options: FixtureSourceOptions = {}): SkillSource {
@@ -100,13 +93,9 @@ export function createFixtureSource(options: FixtureSourceOptions = {}): SkillSo
       }
       return Promise.resolve(records);
     },
-    fetchCatalog: (page: number): Promise<CatalogPage> => {
-      if (page !== FIRST_PAGE) {
-        return Promise.resolve({ items: [], page, has_more: false });
-      }
-      const items = rawSkills().map(normaliseSkill);
-      return Promise.resolve({ items, page, has_more: false });
-    },
+    // Enumeração das chaves da amostra: o bootstrap do catálogo vazio. A
+    // normalização não é feita aqui — quem busca o detalhe é `fetchSkills(keys)`.
+    listKeys: (): Promise<string[]> => Promise.resolve([...skillsByKey().keys()]),
     fetchDocument: () => Promise.resolve(null),
   };
 }

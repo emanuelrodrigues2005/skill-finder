@@ -21,13 +21,11 @@ export const INGEST_ERROR_CODES = {
   staleRun: 'STALE_RUN',
   /** A fonte lançou antes de entregar qualquer item. */
   sourceFetchFailed: 'SOURCE_FETCH_FAILED',
-  /** A fonte respondeu, mas sem nenhum item — catálogo preservado. */
+  /** Nenhuma chave no ciclo — nada a girar, catálogo preservado. */
   emptyCatalog: 'EMPTY_CATALOG',
-  /** Uma página falhou depois de outras terem entregado itens. */
-  pageFetchFailed: 'PAGE_FETCH_FAILED',
-  /** Teto de 200 páginas atingido antes de esgotar a fonte (§7.3). */
-  pageLimitReached: 'PAGE_LIMIT_REACHED',
-  /** Menos de 50% do que foi lido chegou ao banco (falha parcial de escrita). */
+  /** O ciclo viu menos de 80% das chaves que pediu (guarda do §7.3). */
+  lowCycleCoverage: 'LOW_CYCLE_COVERAGE',
+  /** Menos de 50% do ciclo pedido chegou ao banco (falha parcial de escrita). */
   lowUpsertRatio: 'LOW_UPSERT_RATIO',
   /** O repositório lançou (upsert/contagem); o run é fechado como `failed`. */
   repositoryFailed: 'REPOSITORY_FAILED',
@@ -43,16 +41,21 @@ export interface IngestRunRow {
   started_at: Date;
   finished_at: Date | null;
   status: IngestRunStatus;
-  /** Chaves distintas lidas da fonte (não itens de página). */
+  /**
+   * Chaves distintas lidas da fonte (não itens de página). Medido **contra
+   * `items_requested`**, nunca contra o total de ativos: 720 de 20.000 é o
+   * rodízio funcionando (§7.3).
+   */
   items_seen: number | null;
   /** Linhas de `skill` gravadas: chaves distintas, nunca itens da página. */
   items_upserted: number | null;
   items_deactivated: number | null;
   /**
-   * Slots que o ciclo de rodízio pediu (`selectRotationKeys`). É a unidade do
-   * rodízio: `items_seen` conta o que a fonte entregou, `items_requested` conta
-   * o que o ciclo pediu para girar — os dois números só são comparáveis quando
-   * uma página devolve exatamente as chaves pedidas.
+   * Slots do ciclo: as chaves do rodízio (`selectRotationKeys`) mais as
+   * inéditas que a fonte enumerou (`planCycle`). É a unidade do rodízio:
+   * `items_seen` conta o que a fonte entregou, `items_requested` conta o que o
+   * ciclo pediu para girar — e é contra este número que a guarda de 80% e a
+   * razão de upsert são medidas.
    */
   items_requested: number | null;
   error_code: string | null;
@@ -93,6 +96,26 @@ export interface RotationParams {
   readonly cycleSlots: number;
 }
 
+/**
+ * As duas bandas do rodízio, **separadas**: quem decide a prioridade entre elas
+ * é `planCycle` (`ingest.ts`), não o repositório.
+ *
+ * A separação existe porque a cota de descoberta é reservada **entre** hot e
+ * cold (F1 do parecer da #46): com as bandas fundidas numa lista só, a ingestão
+ * não teria como saber onde o hot termina — e as inéditas que a fonte enumera
+ * ficariam para trás sempre que o rodízio ocupasse o ciclo, que é o caso de todo
+ * banco com mais de 720 linhas.
+ */
+export interface RotationBands {
+  /** Hot set, já ordenado (requisição mais recente primeiro) e cortado em `hotSlots`. */
+  readonly hot: readonly string[];
+  /**
+   * Cold set, já ordenado (vencidas primeiro, depois as mais antigas) e cortado
+   * no que ainda cabe no ciclo depois do hot. **Não** inclui chave do hot.
+   */
+  readonly cold: readonly string[];
+}
+
 /** Linha candidata ao rodízio, já sem id: o rodízio fala `source_key`. */
 export interface RotationCandidate {
   readonly sourceKey: string;
@@ -123,18 +146,39 @@ export interface CatalogRepository {
   /** Fecha o run com status, contadores e erro. */
   finishRun(id: number, patch: IngestRunFinish): Promise<void>;
 
-  /** Skills com `is_active = true` — base da guarda de 80% antes do upsert. */
+  /**
+   * Skills com `is_active = true`: **gatilho** do bootstrap (catálogo vazio ×
+   * seletor quebrado) e diagnóstico. Não é mais a base da guarda de 80% — ela
+   * mede `items_seen` contra `items_requested`, não contra o catálogo inteiro
+   * (720 de 20.000 é rodízio, não falha; §7.3).
+   */
   countActiveSkills(): Promise<number>;
 
   /**
-   * As chaves do ciclo de rodízio: hot set primeiro (últimos 7 dias de
-   * `search_request.result_ids`, até `hotSlots`), depois o cold set (o resto,
-   * vencidas primeiro e das mais antigas para as mais novas).
+   * As chaves do ciclo de rodízio, **por banda**: hot set primeiro (últimos 7
+   * dias de `search_request.result_ids`, até `hotSlots`), cold set depois (o
+   * resto das ativas, vencidas primeiro e das mais antigas para as mais novas).
    *
-   * Devolve **no máximo `cycleSlots`** `source_key` distintas, sem repetir
-   * chave entre hot e cold. Determinística para o mesmo `now` e o mesmo banco.
+   * Devolve `source_key` distintas, sem repetir chave entre hot e cold. Cada
+   * banda vem cortada no seu orçamento (hot em `hotSlots`, cold no que sobra do
+   * ciclo); a prioridade final é de `planCycle`. Determinística para o mesmo
+   * `now` e o mesmo banco.
    */
-  selectRotationKeys(params: RotationParams): Promise<string[]>;
+  selectRotationKeys(params: RotationParams): Promise<RotationBands>;
+
+  /**
+   * Das chaves que a **fonte** enumera, as que o catálogo não tem como linha
+   * **ativa** — as **inéditas** do ciclo (F1 do parecer da #46).
+   *
+   * É o complemento exato de `selectRotationKeys` no conjunto de chaves da
+   * fonte: `planCycle` reserva a cota de descoberta entre hot e cold, e sem esta
+   * resposta o "que sobra" seria adivinhação — a chave que só não voltou porque
+   * o cold foi cortado pareceria inédita e a descoberta giraria em falso.
+   *
+   * Linha **inativa** conta como inédita de propósito: ela saiu do rodízio por
+   * TTL de 28 dias, e é reaparecendo na fonte que ela volta a `is_active = true`.
+   */
+  selectUnseenKeys(candidates: readonly string[]): Promise<string[]>;
 
   /**
    * `INSERT ... ON CONFLICT (source_key) DO UPDATE`: regrava a linha, marca
@@ -150,16 +194,15 @@ export interface CatalogRepository {
    */
   upsertSkills(skills: SkillRecord[], seenAt: Date): Promise<number>;
 
-  /** `is_active = false` para quem não foi visto desde `seenAt`. */
-  deactivateSkillsNotSeenSince(seenAt: Date): Promise<number>;
-
   /**
    * `is_active = false` para quem não é visto desde `cutoff` — o expurgo por
-   * TTL (28 dias), que roda **fora** da ingestão e por isso não empresta o
-   * relógio de um run.
+   * TTL (28 dias, §7.3), **o único caminho de desativação** desde a #46. Não
+   * existe "desativar o que este ciclo não viu": com 720 slots para 20.000
+   * skills isso apagaria o catálogo em quatro ciclos.
    *
-   * É a mesma statement de `deactivateSkillsNotSeenSince`; o nome próprio é o
-   * que separa as duas razões de desativar (fim de um run × TTL vencido).
+   * O corte vem de fora: o expurgo roda fora da ingestão/pelo relógio do run,
+   * mas com uma data escolhida por quem chama (nunca `now()` no meio da
+   * statement), e por isso é determinístico em teste.
    */
   deactivateSkillsStaleBefore(cutoff: Date): Promise<number>;
 }

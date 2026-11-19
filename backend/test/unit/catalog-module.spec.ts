@@ -27,7 +27,7 @@ import type { PrismaClient } from '@prisma/client';
 import { CATALOG_ADAPTER, CATALOG_REPOSITORY, CATALOG_SOURCE, CatalogModule, type CatalogModuleOptions } from '@/catalog/catalog.module';
 import type { CatalogRepository } from '@/catalog/catalog-repository';
 import { PrismaCatalogRepository } from '@/catalog/prisma-catalog.repository';
-import type { CatalogPage, SkillRecord, SkillSource } from '@/catalog/skill-source';
+import type { SkillRecord, SkillSource } from '@/catalog/skill-source';
 
 /** Fonte injetada: o módulo tem de devolver **esta** referência. */
 function stubSource(): SkillSource & { calls: number[] } {
@@ -37,11 +37,11 @@ function stubSource(): SkillSource & { calls: number[] } {
     capabilities: { supports_categories: true, supports_documents: true },
     listCategories: () =>
       Promise.resolve([{ slug: 'backend', label_en: 'Backend', position: 1 }]),
-    // O módulo só repassa a fonte: construir não deve chamar nem chaves nem páginas.
+    // O módulo só repassa a fonte: construir não deve chamar chaves nem detalhe.
     fetchSkills: (): Promise<SkillRecord[]> => Promise.resolve([]),
-    fetchCatalog: (page: number): Promise<CatalogPage> => {
-      calls.push(page);
-      return Promise.resolve({ items: [], page, has_more: false });
+    listKeys: (): Promise<string[]> => {
+      calls.push(0);
+      return Promise.resolve([]);
     },
     fetchDocument: () => Promise.resolve(null),
   };
@@ -57,8 +57,8 @@ function stubRepository(): CatalogRepository & { marker: string } {
     finishRun: fail,
     countActiveSkills: fail,
     selectRotationKeys: fail,
+    selectUnseenKeys: fail,
     upsertSkills: fail,
-    deactivateSkillsNotSeenSince: fail,
     deactivateSkillsStaleBefore: fail,
   };
 }
@@ -104,19 +104,20 @@ describe('CatalogModule.forRoot — fonte', () => {
     expect(injected).toBe(source);
 
     // E é ela quem responde às chamadas do módulo.
-    await injected.fetchCatalog(1);
-    expect(source.calls).toEqual([1]);
+    await injected.listKeys();
+    expect(source.calls).toEqual([0]);
   });
 
   it('falls back to the frozen fixture sample when no source is injected', async () => {
     const moduleRef = await build({ repository: stubRepository() });
 
     const source = moduleRef.get<SkillSource>(CATALOG_SOURCE);
-    const page = await source.fetchCatalog(1);
+    const keys = await source.listKeys();
+    const items = await source.fetchSkills(keys);
 
     // A fixture congelada tem 25 skills e a fonte não publica categorias/documentos.
-    expect(page.items).toHaveLength(25);
-    expect(page.has_more).toBe(false);
+    expect(keys).toHaveLength(25);
+    expect(items).toHaveLength(25);
     expect(source.capabilities).toEqual({ supports_categories: false, supports_documents: false });
     expect(await source.listCategories()).toEqual([]);
     expect(await source.fetchDocument('vercel-labs/skills/find-skills')).toBeNull();
@@ -135,11 +136,12 @@ describe('CatalogModule.forRoot — fonte', () => {
 
     try {
       const moduleRef = await build({ fixturePath: path, repository: stubRepository() });
-      const page = await moduleRef.get<SkillSource>(CATALOG_SOURCE).fetchCatalog(1);
+      const source = moduleRef.get<SkillSource>(CATALOG_SOURCE);
+      const items = await source.fetchSkills(await source.listKeys());
 
-      expect(page.items).toHaveLength(1);
-      expect(page.items[0]?.source_key).toBe('acme/toolbox/only-one');
-      expect(page.items[0]?.name).toBe('only-one');
+      expect(items).toHaveLength(1);
+      expect(items[0]?.source_key).toBe('acme/toolbox/only-one');
+      expect(items[0]?.name).toBe('only-one');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

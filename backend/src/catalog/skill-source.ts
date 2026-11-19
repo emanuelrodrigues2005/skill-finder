@@ -53,20 +53,19 @@ export interface DocumentRecord {
   readonly skill_md_excerpt: string | null;
 }
 
-/** Página de listagem; `has_more` decide se o orquestrador pede a próxima. */
-export interface CatalogPage {
-  readonly items: SkillRecord[];
-  readonly page: number;
-  readonly has_more: boolean;
-}
-
 /** O que a fonte sabe entregar — lido antes de qualquer chamada, nunca inferido. */
 export interface SkillSourceCapabilities {
   readonly supports_categories: boolean;
   readonly supports_documents: boolean;
 }
 
-/** Porta da fonte externa (skills.sh ou fixture). */
+/**
+ * Porta da fonte externa (skills.sh ou fixture).
+ *
+ * **A fonte não pagina** (#46): não existe listagem paginada, não há
+ * `pagination_style` e a aquisição é sempre por chave. O que há é a enumeração
+ * de chaves (`listKeys`) e o detalhe por chave (`fetchSkills`).
+ */
 export interface SkillSource {
   readonly capabilities: SkillSourceCapabilities;
   listCategories(): Promise<CategoryRecord[]>;
@@ -83,11 +82,16 @@ export interface SkillSource {
    */
   fetchSkills(keys: readonly string[]): Promise<SkillRecord[]>;
   /**
-   * Página da listagem do catálogo.
+   * As chaves que a fonte conhece, para o **primeiro** ciclo (§7.3): com o
+   * catálogo vazio não há linha para o rodízio selecionar, e sem enumeração o
+   * rodízio nunca começaria. É a única leitura que não vem de `source_key`
+   * conhecido — por isso ela não entrega registros, só chaves: quem busca o
+   * detalhe continua sendo `fetchSkills(keys)`, respeitando o limitador.
    *
-   * @deprecated a fonte não tem listagem paginada; sai na #46, junto com a
-   * reescrita da ingestão, que passa a pedir chaves por `fetchSkills(keys)`.
+   * Enumeração, não paginação: o adaptador `html` devolve as chaves do
+   * `sitemap.xml`, e o chamador corta no teto do ciclo (`CYCLE_SLOTS`). Pode
+   * lançar — sitemap fora do ar é falha do run, não "catálogo vazio".
    */
-  fetchCatalog(page: number): Promise<CatalogPage>;
+  listKeys(): Promise<string[]>;
   fetchDocument(sourceKey: string): Promise<DocumentRecord | null>;
 }

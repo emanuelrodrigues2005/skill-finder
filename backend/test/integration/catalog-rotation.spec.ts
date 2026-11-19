@@ -123,11 +123,13 @@ describe('rotation over real Postgres (#45, rotation)', () => {
     await seedSearch([alpha], 8 * 24);
     await seedSearch([charlie, bravo], 30);
 
-    const keys = await repository.selectRotationKeys(params({ cycleSlots: 3 }));
+    const bands = await repository.selectRotationKeys(params({ cycleSlots: 3 }));
 
-    expect(keys[0]).toBe('acme/toolbox/bravo');
+    expect(bands.hot[0]).toBe('acme/toolbox/bravo');
     // A mesma chave em duas buscas conta uma vez.
-    expect(keys.filter((key) => key === 'acme/toolbox/bravo')).toHaveLength(1);
+    expect(bands.hot.filter((key) => key === 'acme/toolbox/bravo')).toHaveLength(1);
+    // `alpha` não está no hot (busca fora da janela): entra pelo cold.
+    expect(bands.cold).toEqual(['acme/toolbox/alpha']);
   });
 
   it('keeps the hot ordering by recency and the source_key tiebreak', async () => {
@@ -139,11 +141,11 @@ describe('rotation over real Postgres (#45, rotation)', () => {
     await seedSearch([newer], 1);
     await seedSearch([tied], 5 * 24);
 
-    const keys = await repository.selectRotationKeys(params({ cycleSlots: 3 }));
+    const bands = await repository.selectRotationKeys(params({ cycleSlots: 3 }));
 
     // `newer` é o mais recente; `older` e `tied` empataram em 5 dias, e aí quem
     // decide é `source_key ASC` ("acme/toolbox/older" < "acme/toolbox/tied").
-    expect(keys.slice(0, 3)).toEqual([
+    expect(bands.hot.slice(0, 3)).toEqual([
       'acme/toolbox/newer',
       'acme/toolbox/older',
       'acme/toolbox/tied',
@@ -156,16 +158,17 @@ describe('rotation over real Postgres (#45, rotation)', () => {
     await seedSkill({ key: 'acme/toolbox/older', seenDaysAgo: 12 });
     await seedSkill({ key: 'acme/toolbox/expired-2', seenDaysAgo: 17 });
 
-    const keys = await repository.selectRotationKeys(params({ hotSlots: 0, cycleSlots: 4 }));
+    const bands = await repository.selectRotationKeys(params({ hotSlots: 0, cycleSlots: 4 }));
 
     // Vencidas (mais de 14 dias) primeiro, e dentro do grupo/do resto, a mais
     // antiga primeiro.
-    expect(keys).toEqual([
+    expect(bands.cold).toEqual([
       'acme/toolbox/expired',
       'acme/toolbox/expired-2',
       'acme/toolbox/older',
       'acme/toolbox/recent',
     ]);
+    expect(bands.hot).toEqual([]);
   });
 
   it('cuts the cycle at cycleSlots and gives the hot set its hotSlots', async () => {
@@ -179,11 +182,13 @@ describe('rotation over real Postgres (#45, rotation)', () => {
       await seedSkill({ key: `acme/toolbox/${key}`, seenDaysAgo: 9 + index });
     }
 
-    const keys = await repository.selectRotationKeys(params({ hotSlots: 2, cycleSlots: 4 }));
+    const bands = await repository.selectRotationKeys(params({ hotSlots: 2, cycleSlots: 4 }));
 
-    expect(keys).toHaveLength(4);
-    expect(new Set(keys).size).toBe(4);
-    expect(keys.slice(0, 2)).toEqual(['acme/toolbox/hot-a', 'acme/toolbox/hot-b']);
+    // Cada banda tem seu teto: hot em `hotSlots`, cold no que sobra do ciclo
+    // (as mais antigas primeiro: cold-c tem 11 dias, cold-b tem 10).
+    expect(bands.hot).toEqual(['acme/toolbox/hot-a', 'acme/toolbox/hot-b']);
+    expect(bands.cold).toEqual(['acme/toolbox/cold-c', 'acme/toolbox/cold-b']);
+    expect(new Set([...bands.hot, ...bands.cold]).size).toBe(4);
   });
 
   it('never repeats a key between hot and cold', async () => {
@@ -191,11 +196,13 @@ describe('rotation over real Postgres (#45, rotation)', () => {
     await seedSearch([both], 1);
     await seedSkill({ key: 'acme/toolbox/cold', seenDaysAgo: 10 });
 
-    const keys = await repository.selectRotationKeys(params({ hotSlots: 1, cycleSlots: 5 }));
+    const bands = await repository.selectRotationKeys(params({ hotSlots: 1, cycleSlots: 5 }));
 
-    expect(keys.filter((key) => key === 'acme/toolbox/both')).toHaveLength(1);
-    expect(keys[0]).toBe('acme/toolbox/both');
-    expect(keys).toContain('acme/toolbox/cold');
+    expect(bands.hot).toEqual(['acme/toolbox/both']);
+    // A chave que está no hot pool inteiro não volta no cold (o `NOT EXISTS` é
+    // sobre o pool, não só sobre as escolhidas).
+    expect(bands.cold).not.toContain('acme/toolbox/both');
+    expect(bands.cold).toContain('acme/toolbox/cold');
   });
 
   it('ignores inactive skills on both sides', async () => {
@@ -207,13 +214,34 @@ describe('rotation over real Postgres (#45, rotation)', () => {
     await seedSearch([inactive], 1);
     await seedSkill({ key: 'acme/toolbox/active', seenDaysAgo: 20 });
 
-    const keys = await repository.selectRotationKeys(params());
+    const bands = await repository.selectRotationKeys(params());
 
-    expect(keys).toEqual(['acme/toolbox/active']);
+    expect(bands).toEqual({ hot: [], cold: ['acme/toolbox/active'] });
   });
 
-  it('answers an empty list for an empty catalog', async () => {
-    expect(await repository.selectRotationKeys(params())).toEqual([]);
+  it('answers empty bands for an empty catalog', async () => {
+    expect(await repository.selectRotationKeys(params())).toEqual({ hot: [], cold: [] });
+  });
+
+  /**
+   * F1 do parecer: a descoberta precisa do complemento **exato** do conjunto
+   * ativo. Linha inativa conta como inédita — é reaparecendo na fonte que ela
+   * volta a `is_active = true` —, e chave nunca vista também.
+   */
+  it('answers the enumerated keys that are not active rows', async () => {
+    await seedSkill({ key: 'acme/toolbox/ativa', seenDaysAgo: 1 });
+    await seedSkill({ key: 'acme/toolbox/inativa', seenDaysAgo: 40, isActive: false });
+
+    const unseen = await repository.selectUnseenKeys([
+      'acme/toolbox/nunca-vista',
+      'acme/toolbox/ativa',
+      'acme/toolbox/inativa',
+      // Repetida e fora de ordem: a resposta preserva a ordem da fonte, sem repetir.
+      'acme/toolbox/nunca-vista',
+    ]);
+
+    expect(unseen).toEqual(['acme/toolbox/nunca-vista', 'acme/toolbox/inativa']);
+    expect(await repository.selectUnseenKeys([])).toEqual([]);
   });
 
   it('deactivates only what was not seen since the cutoff', async () => {
