@@ -15,6 +15,23 @@ import type { SkillRecord } from './skill-source';
 /** Valores possíveis de `ingest_run.status` (`enum IngestStatus`). */
 export type IngestRunStatus = 'running' | 'ok' | 'partial' | 'failed';
 
+/**
+ * Outro processo já tem um run `running` — o índice parcial
+ * `UNIQUE (status) WHERE status = 'running'` de `ingest_run` (§7.3) recusou o
+ * `INSERT`.
+ *
+ * Existe para a rota de admin (#49) responder **409** em vez de 500: a trava do
+ * processo (`IngestService`) cobre a concorrência dentro de uma réplica, e esta
+ * é a trava entre processos (`make seed` rodando enquanto a API está no ar). Um
+ * erro de driver em prosa não é classificável; este é.
+ */
+export class IngestRunInProgressError extends Error {
+  constructor() {
+    super('ingest_run already has a running row (UNIQUE (status) WHERE status = \'running\')');
+    this.name = 'IngestRunInProgressError';
+  }
+}
+
 /** Códigos estáveis gravados em `ingest_run.error_code`. */
 export const INGEST_ERROR_CODES = {
   /** Run `running` de outra execução, mais velho que 2 h (§7.3). */
@@ -205,4 +222,22 @@ export interface CatalogRepository {
    * statement), e por isso é determinístico em teste.
    */
   deactivateSkillsStaleBefore(cutoff: Date): Promise<number>;
+}
+
+/**
+ * Leitura do histórico de `ingest_run` (`GET /api/v1/admin/ingest/runs`, #49).
+ *
+ * Porta **separada** de `CatalogRepository` de propósito: a ingestão só escreve
+ * (abre/fecha run, faz upsert, expurga) e recebe essa porta por injeção; quem
+ * lista o histórico é a rota de admin, e um duplo de teste da ingestão não deve
+ * ser obrigado a implementar paginação.
+ *
+ * `PrismaCatalogRepository` implementa as duas.
+ */
+export interface IngestRunLog {
+  /** Runs mais recentes primeiro (`started_at DESC, id DESC`). */
+  listRuns(limit: number, offset: number): Promise<IngestRunRow[]>;
+
+  /** Total de runs, para o bloco `pagination` de §5.6. */
+  countRuns(): Promise<number>;
 }

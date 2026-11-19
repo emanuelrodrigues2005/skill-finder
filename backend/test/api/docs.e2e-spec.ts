@@ -64,17 +64,25 @@ const EXPECTED_PATHS = [
 
 /**
  * Variáveis exigidas por `ENV=prod` em `config/env.schema.ts` (`DATABASE_URL`,
- * `IP_HASH_SALT`, e `LLM_ENABLED=false` para dispensar `LLM_API_KEY`). Senha
- * explícita que **não** é a default de dev (`skillsdev`), que o schema recusa.
+ * `IP_HASH_SALT`, `ADMIN_TOKEN` e `LLM_ENABLED=false` para dispensar
+ * `LLM_API_KEY`). Senha explícita que **não** é a default de dev (`skillsdev`),
+ * que o schema recusa.
  */
 const PROD_ENV = {
   ENV: 'prod',
   DATABASE_URL: 'postgresql://skills:prod-only-password@127.0.0.1:5432/skills',
   IP_HASH_SALT: 'prod-test-salt',
+  ADMIN_TOKEN: 'prod-test-admin-token-com-32-chars-ok',
   LLM_ENABLED: 'false',
 } as const;
 
-const RESTORED_ENV_KEYS = ['ENV', 'DATABASE_URL', 'IP_HASH_SALT', 'LLM_ENABLED'] as const;
+const RESTORED_ENV_KEYS = [
+  'ENV',
+  'DATABASE_URL',
+  'IP_HASH_SALT',
+  'ADMIN_TOKEN',
+  'LLM_ENABLED',
+] as const;
 
 /**
  * Subir o `AppModule` no ts-jest custa caro na primeira vez (o grafo inteiro
@@ -167,6 +175,27 @@ describe('api docs wiring (e2e)', () => {
     const paths = Object.keys(response.body.paths as Record<string, unknown>).sort();
     expect(paths).toEqual([...EXPECTED_PATHS]);
     expect(paths).toHaveLength(10);
+  });
+
+  it('documents the admin ingest body, so the route is usable from /docs (#49)', async () => {
+    // Criterion da #49: a rota de execução da ingestão aparece em `/docs` — a UI
+    // lê este mesmo `/docs-json`. Até a #49 o POST era contract-only e sem corpo
+    // documentado; sem o `requestBody`, a UI não teria como mostrar as chaves do
+    // refresh sob demanda (e o `x-internal` continua marcando a superfície).
+    const response = await request(app.getHttpServer()).get('/docs-json').expect(200);
+
+    const operation = response.body.paths['/api/v1/admin/ingest'].post;
+    expect(operation['x-internal']).toBe(true);
+    expect(operation.requestBody.content['application/json'].schema.$ref).toBe(
+      '#/components/schemas/IngestRequest',
+    );
+    expect(operation.responses['202'].content['application/json'].schema.$ref).toBe(
+      '#/components/schemas/IngestOutcomeResponse',
+    );
+    // Os dois erros de borda da rota estão no documento.
+    expect(Object.keys(operation.responses).sort()).toEqual(
+      expect.arrayContaining(['202', '401', '409', '422', '500']),
+    );
   });
 
   it('keeps /docs out of production', async () => {

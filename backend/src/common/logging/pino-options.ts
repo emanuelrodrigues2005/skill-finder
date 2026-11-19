@@ -31,6 +31,11 @@ export const REDACT_PATHS: string[] = [
   'api_key',
   'token',
   'llmApiKey',
+    // #49: o token da rota de ingestao. O header ja era redigido; a CHAVE do
+    // objeto de config nao era - o primeiro `logger.info({ config })` futuro
+    // imprimiria o token em claro enquanto os outros segredos sairiam
+    // `[REDACTED]` (achado do parecer de seguranca).
+    'adminToken',
   'databaseUrl',
   'ipHashSalt',
   'postgres.password',
@@ -44,6 +49,7 @@ export const REDACT_PATHS: string[] = [
   '*.config.headers.authorization',
   '*.headers.authorization',
   '*.llmApiKey',
+  '*.adminToken',
   '*.databaseUrl',
   '*.ipHashSalt',
   '*.postgres.password',

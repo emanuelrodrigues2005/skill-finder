@@ -75,7 +75,15 @@ export class CatalogModule {
   }
 }
 
-function createSource(options: CatalogModuleOptions): SkillSource {
+/**
+ * Constrói a fonte a partir das opções (o adaptador vem da configuração).
+ *
+ * Exportada porque o grafo de runtime do admin (#49) precisa resolvê-la **por
+ * injeção** — `AppConfigService` só existe em runtime, e `forRoot` recebe opções
+ * já prontas. Mantê-la aqui é o que impede um segundo `switch` de adaptador
+ * espalhado pelo código.
+ */
+export function createSource(options: CatalogModuleOptions): SkillSource {
   if (options.source !== undefined) {
     return options.source;
   }

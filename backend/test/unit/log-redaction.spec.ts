@@ -150,11 +150,13 @@ describe('log redaction (§8.5)', () => {
         llmApiKey: 'sk-root-must-not-leak',
         databaseUrl: 'postgresql://u:senha-must-not-leak@postgres:5432/skills',
         ipHashSalt: 'sal-must-not-leak',
+          adminToken: 'admin-token-must-not-leak',
         postgres: { password: 'senha-aninhada-must-not-leak' },
         config: {
           llmApiKey: 'sk-nested-must-not-leak',
           databaseUrl: 'postgresql://u:senha-nested-must-not-leak@postgres:5432/skills',
           ipHashSalt: 'sal-nested-must-not-leak',
+            adminToken: 'admin-token-nested-must-not-leak',
           postgres: { password: 'senha-nested-must-not-leak' },
         },
       },

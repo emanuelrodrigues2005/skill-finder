@@ -512,8 +512,9 @@ paths:
       tags: *a2
   /api/v1/admin/ingest:
     post:
-      description: Requires the `X-Admin-Token` header. Answers 409 while another run
-        is in progress (§5.1).
+      description: Runs the ingestion for `source_keys` (1–20) and answers the run
+        outcome. Requires the `X-Admin-Token` header. Answers 409 while another
+        run is in progress (§5.1, §7.3).
       operationId: AdminIngestController_start
       parameters:
         - name: X-Admin-Token
@@ -522,13 +523,19 @@ paths:
           required: true
           schema:
             type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestRequest"
       responses:
         "202":
-          description: Ingestion accepted.
+          description: The run finished; the body is its outcome.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IngestStartedResponse"
+                $ref: "#/components/schemas/IngestOutcomeResponse"
         "401":
           description: Missing or invalid `X-Admin-Token`.
           content:
@@ -561,6 +568,23 @@ paths:
                             type: string
                             enum:
                               - CONFLICT
+        "422":
+          description: Request failed validation; the offending paths travel in
+            `error.details.fields`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - VALIDATION_ERROR
         "500":
           description: Unclassified internal error. Never exposes a stack trace.
           content:
@@ -579,7 +603,7 @@ paths:
                               - INTERNAL
       security: &a3
         - adminToken: []
-      summary: Trigger a manual catalog ingestion
+      summary: Refresh an explicit set of catalog keys
       tags: &a4
         - admin
       x-internal: true
@@ -587,7 +611,7 @@ paths:
     get:
       description: Requires the `X-Admin-Token` header; paginated by
         `page`/`page_size` (§5.6).
-      operationId: AdminIngestController_runs
+      operationId: AdminIngestController_list
       parameters:
         - name: page_size
           required: false
@@ -634,6 +658,23 @@ paths:
                             type: string
                             enum:
                               - UNAUTHORIZED
+        "422":
+          description: Request failed validation; the offending paths travel in
+            `error.details.fields`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - type: object
+                    properties:
+                      error:
+                        type: object
+                        properties:
+                          code:
+                            type: string
+                            enum:
+                              - VALIDATION_ERROR
         "500":
           description: Unclassified internal error. Never exposes a stack trace.
           content:
@@ -1325,28 +1366,82 @@ components:
       required:
         - request_id
         - data
-    IngestStartedResponse:
+    IngestRequest:
+      type: object
+      properties:
+        source_keys:
+          minItems: 1
+          maxItems: 20
+          example:
+            - acme/toolbox/find-skills
+          description: Source keys to refresh (1–20). Each one is `owner/repo/slug`; a key
+            the source no longer publishes is omitted, not an error.
+          type: array
+          items:
+            type: string
+      required:
+        - source_keys
+    IngestOutcomeResponse:
       type: object
       properties:
         request_id:
           type: string
           description: Request id echo (`X-Request-Id`).
-        run_id:
-          type: string
-          description: Id of the run that was accepted.
         status:
           type: string
           enum:
-            - running
             - ok
             - partial
             - failed
-          example: running
-          description: State of the new run.
+          example: ok
+          description: "Run state: `ok` ingested the whole cycle, `partial` kept part of
+            it out (see `error_code`), `failed` wrote nothing."
+        items_requested:
+          type: integer
+          minimum: 0
+          description: Keys the run asked the source for — the cycle size, not the catalog
+            size.
+        items_seen:
+          type: integer
+          minimum: 0
+          description: Distinct keys the source returned.
+        items_upserted:
+          type: integer
+          minimum: 0
+          description: Distinct skill rows written.
+        items_deactivated:
+          type: integer
+          minimum: 0
+          description: Rows deactivated by the 28-day TTL during this run.
+        error_code:
+          type: string
+          nullable: true
+          description: Stable code when the run was not `ok` (`SOURCE_FETCH_FAILED`,
+            `REPOSITORY_FAILED`, `EMPTY_CATALOG`, `LOW_CYCLE_COVERAGE`,
+            `LOW_UPSERT_RATIO`).
+        error_detail:
+          type: string
+          nullable: true
+          description: Short diagnostic detail, no secrets.
+        started_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC.
+        finished_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC.
       required:
         - request_id
-        - run_id
         - status
+        - items_requested
+        - items_seen
+        - items_upserted
+        - items_deactivated
+        - error_code
+        - error_detail
+        - started_at
+        - finished_at
     IngestRun:
       type: object
       properties:

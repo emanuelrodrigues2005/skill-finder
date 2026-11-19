@@ -21,6 +21,12 @@
  * O relógio também é injetado — `startedAt` é parâmetro e toda janela sai dele,
  * nunca de `new Date()` lido no meio da decisão.
  *
+ * **Refresh sob demanda (#49):** com `keys` explícitas o ciclo não é montado —
+ * o pedido do operador é o ciclo —, e o resto (run, coleta, upsert, expurgo por
+ * idade, tabela de status) é idêntico. É o caminho que
+ * `POST /api/v1/admin/ingest` usa com a API no ar; sem ele, o único chamador da
+ * ingestão era o `scripts/seed.ts`.
+ *
  * Tabela ratificada (transições `running -> ok | partial | failed`), com
  * `E = items_requested` (o tamanho do ciclo) e `S = items_seen`:
  *
@@ -119,6 +125,19 @@ export interface IngestOptions {
    * teste possa fixar `finished_at` também.
    */
   readonly now?: () => Date;
+  /**
+   * Chaves explícitas do **refresh sob demanda** (`POST /api/v1/admin/ingest`,
+   * #49). Ausente, o ciclo é o do rodízio (`selectCycleKeys`).
+   *
+   * Com as chaves dadas, a execução é a mesma — abre run, pede **exatamente**
+   * essas chaves (`fetchSkills`), faz upsert, expurga por idade e fecha com a
+   * tabela ratificada —, e `items_requested` é o número de chaves distintas do
+   * pedido. O que muda é de onde o ciclo vem: nada de `listKeys()` nem de
+   * `selectRotationKeys`, então o operador não gira o rodízio nem gasta a cota
+   * de descoberta para refrescar 20 skills. A rota limita o pedido a 20 chaves
+   * (`IngestRequest`) justamente para o request continuar curto.
+   */
+  readonly keys?: readonly string[];
 }
 
 /** Resultado da execução — eco do que foi gravado em `ingest_run`. */
@@ -157,10 +176,14 @@ export async function ingest(options: IngestOptions): Promise<IngestRunOutcome> 
   //    ar) — e ela tem de deixar rastro: run `failed`/`SOURCE_FETCH_FAILED`
   //    com `items_requested: 0` (F3 do parecer da #46). Se quem lançar for o
   //    repositório, o `startRun` abaixo falha também e o erro sobe: aí não há
-  //    linha para fechar.
+  //    linha para fechar. Com `keys` explícitas (#49) não há ciclo a montar:
+  //    o pedido do operador **é** o ciclo, e a fonte não é enumerada.
   let keys: string[];
   try {
-    keys = await selectCycleKeys(source, repository, startedAt);
+    keys =
+      options.keys === undefined
+        ? await selectCycleKeys(source, repository, startedAt)
+        : uniqueKeys(options.keys);
   } catch (error) {
     const detail = describeError(error);
       // Banco fora do ar e sitemap fora do ar nao sao a mesma falha: a marca diz

@@ -417,7 +417,7 @@ perdida sem acender a faixa de degradação.
 | 1 | Busca em português devolve resultado | `curl -sS -XPOST localhost:8000/api/v1/search -H 'content-type: application/json' -d '{"query":"revisar pull request de Python procurando falha de segurança"}' \| jq '.results \| length'` → ≥ 1 |
 | 2 | `explain` no contrato, sem enum novo | `grep -c explain_status openapi.yaml` → ≥ 1; `explain_status` referencia `LlmStatus` e é `null` quando não tentado |
 | 3 | A explicação não muda a ordem | mesma consulta com `LLM_ENABLED=true` e `false` → mesmos `results[].skill_id`, na mesma ordem |
-| 4 | Ingestão por rodízio | `POST /api/v1/admin/ingest` e `GET /api/v1/admin/ingest/runs` → `items_seen` ≈ **720**, não o catálogo inteiro |
+| 4 | Ingestão por rodízio | `GET /api/v1/admin/ingest/runs` → `items_requested` do ciclo ≤ **720**, e `POST /api/v1/admin/ingest` com 1–20 `source_keys` devolve `items_seen` = chaves pedidas (#49) — nunca o total de skills, que é `countActiveSkills` |
 | 5 | Frescor honesto | snapshot com > 12 h → `degraded=true`, `degraded_reason="source_stale"`; com 6 h → não degrada por frescor |
 | 6 | Interface em pt-BR | as três telas com rótulos, erros e vazios em pt-BR (`AGENTS.md`, regra 6); texto do catálogo segue em inglês |
 

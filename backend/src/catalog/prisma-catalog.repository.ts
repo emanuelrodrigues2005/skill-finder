@@ -32,8 +32,12 @@ import { Prisma } from '@prisma/client';
 
 import {
   INGEST_ERROR_CODES,
+  IngestRunInProgressError,
   type CatalogRepository,
   type IngestRunFinish,
+  type IngestRunLog,
+  type IngestRunRow,
+  type IngestRunStatus,
   type RotationBands,
   type RotationCandidate,
   type RotationParams,
@@ -67,7 +71,7 @@ const HOT_WINDOW_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Repositório de produção: toda a escrita passa por statement explícita. */
-export class PrismaCatalogRepository implements CatalogRepository {
+export class PrismaCatalogRepository implements CatalogRepository, IngestRunLog {
   constructor(private readonly prisma: PrismaClient) {}
 
   /**
@@ -88,6 +92,16 @@ export class PrismaCatalogRepository implements CatalogRepository {
     `;
   }
 
+  /**
+   * Abre o run `running`. **O `ON CONFLICT DO NOTHING` é o lock da ingestão**
+   * (§7.3): o índice parcial `UNIQUE (status) WHERE status = 'running'` da
+   * migration da #45 aceita um único run vivo, e um segundo `INSERT` conflita —
+   * a statement devolve zero linhas em vez de estourar em prosa de driver.
+   *
+   * É o que torna a concorrência entre **processos** honesta (`make seed`
+   * enquanto a API está no ar): a rota de admin traduz
+   * `IngestRunInProgressError` em `409` (#49) e nunca devolve `NaN` como id.
+   */
   async startRun(run: {
     adapter: string;
     started_at: Date;
@@ -101,13 +115,44 @@ export class PrismaCatalogRepository implements CatalogRepository {
         'running'::"IngestStatus",
         ${run.items_requested ?? null}
       )
+      ON CONFLICT DO NOTHING
       RETURNING id
     `;
     const row = rows[0];
     if (row === undefined) {
-      throw new Error('INSERT em ingest_run não devolveu id');
+      throw new IngestRunInProgressError();
     }
     return Number(row.id);
+  }
+
+  /** Os runs mais recentes primeiro — o histórico de `GET /admin/ingest/runs` (#49). */
+  async listRuns(limit: number, offset: number): Promise<IngestRunRow[]> {
+    const rows = await this.prisma.$queryRaw<IngestRunRunRow[]>`
+      SELECT id,
+             adapter,
+             started_at,
+             finished_at,
+             status,
+             items_seen,
+             items_upserted,
+             items_deactivated,
+             items_requested,
+             error_code,
+             error_detail
+        FROM "ingest_run"
+       ORDER BY started_at DESC, id DESC
+       LIMIT ${limit} OFFSET ${offset}
+    `;
+    return rows.map(toIngestRunRow);
+  }
+
+  /** Total de runs, para o bloco `pagination` de §5.6. */
+  async countRuns(): Promise<number> {
+    const rows = await this.prisma.$queryRaw<Array<{ total: bigint }>>`
+      SELECT count(*)::bigint AS total FROM "ingest_run"
+    `;
+    const row = rows[0];
+    return row === undefined ? 0 : Number(row.total);
   }
 
   async finishRun(id: number, patch: IngestRunFinish): Promise<void> {
@@ -284,6 +329,38 @@ interface HotRow {
 interface ColdRow {
   readonly source_key: string;
   readonly last_seen_at: Date;
+}
+
+/** Linha de `ingest_run` como o `$queryRaw` a devolve (`bigserial` chega `bigint`). */
+interface IngestRunRunRow {
+  readonly id: bigint;
+  readonly adapter: string;
+  readonly started_at: Date;
+  readonly finished_at: Date | null;
+  readonly status: string;
+  readonly items_seen: number | null;
+  readonly items_upserted: number | null;
+  readonly items_deactivated: number | null;
+  readonly items_requested: number | null;
+  readonly error_code: string | null;
+  readonly error_detail: string | null;
+}
+
+/** `bigint` -> `number`: JSON não tem `bigint`, e `items_*` são contadores. */
+function toIngestRunRow(row: IngestRunRunRow): IngestRunRow {
+  return {
+    id: Number(row.id),
+    adapter: row.adapter,
+    started_at: row.started_at,
+    finished_at: row.finished_at,
+    status: row.status as IngestRunStatus,
+    items_seen: row.items_seen,
+    items_upserted: row.items_upserted,
+    items_deactivated: row.items_deactivated,
+    items_requested: row.items_requested,
+    error_code: row.error_code,
+    error_detail: row.error_detail,
+  };
 }
 
 /** Os dois conjuntos já lidos do banco: o único dado que a fusão precisa. */

@@ -81,6 +81,17 @@ const baseEnvSchema = z.object({
   SEARCH_LOG_STORE_TEXT: booleanFromEnv.default(false),
   IP_HASH_SALT: z.string().min(1).optional(),
 
+  // --- admin ingestion (#49) ---
+  // Token do header `X-Admin-Token` de `POST /admin/ingest` (§5.1, §8.1): é o
+  // único endpoint que **escreve** no catálogo, então a rota falha fechada —
+  // sem token configurado ela responde 401, nunca fica aberta. Em dev é
+  // opcional (quem opera local define no `.env`); em prod o boot recusa.
+  // `.min(32)`: a rota nao tem rate limit de tentativas, entao um token de
+  // dicionario seria brute-forcavel online - a comparacao tempo-constante
+  // protege contra oraculo de BYTES, nao contra espaco de busca pequeno.
+  // Gere com `openssl rand -hex 32`.
+  ADMIN_TOKEN: z.string().min(32).optional(),
+
   // --- compose-only (docker-compose derives DATABASE_URL from these) ---
   POSTGRES_USER: z.string().min(1).optional(),
   POSTGRES_PASSWORD: z.string().optional(),
@@ -123,6 +134,12 @@ export const envSchema = baseEnvSchema
     if (!value.IP_HASH_SALT) {
       missing.push('IP_HASH_SALT');
     }
+    // #49: sem `ADMIN_TOKEN` a rota de ingestão responderia 401 para sempre (o
+    // guard falha fechado) — em prod isso é uma API que não pode mais popular o
+    // catálogo. Recusar no boot é melhor do que descobrir no primeiro run.
+    if (!value.ADMIN_TOKEN) {
+      missing.push('ADMIN_TOKEN');
+    }
     for (const key of missing) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -160,6 +177,7 @@ export const envSchema = baseEnvSchema
     rateLimitSearchPerDay: value.RATE_LIMIT_SEARCH_PER_DAY,
     searchLogStoreText: value.SEARCH_LOG_STORE_TEXT,
     ipHashSalt: value.IP_HASH_SALT,
+    adminToken: value.ADMIN_TOKEN,
     postgres: {
       user: value.POSTGRES_USER,
       password: value.POSTGRES_PASSWORD,

@@ -3,6 +3,7 @@ import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 
+import { AdminModule } from './admin/admin.module';
 import { ERROR_CODES } from './common/errors/error-codes';
 import { ApiError, HttpExceptionFilter } from './common/errors/http-exception.filter';
 import { pinoHttpOptions } from './common/logging/pino-options';
@@ -22,10 +23,12 @@ const DAY_MS = 24 * 60 * 60_000;
     PrismaModule,
     MetricsModule,
     HealthModule,
-    // Os cinco endpoints públicos de §5.1 (F2.6). As duas rotas de admin
-    // continuam fora do runtime (D-E): elas entram no documento pelo
-    // `ContractAdminModule`, que só o gerador importa.
+    // Os cinco endpoints públicos de §5.1 (F2.6).
     SearchModule.forRoot(),
+    // As duas rotas `x-internal` de §5.1 (#49): execução da ingestão com o
+    // serviço no ar. Só o `AdminTokenGuard` as abre, e em prod o boot recusa
+    // sem `ADMIN_TOKEN`.
+    AdminModule,
     LoggerModule.forRootAsync({
       imports: [AppConfigModule],
       inject: [AppConfigService],

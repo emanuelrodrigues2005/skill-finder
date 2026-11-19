@@ -63,9 +63,11 @@ const STATUS_TABLE: Record<string, ExpectedStatuses> = {
   'GET /api/v1/categories': { success: [200], errors: [500, 503] },
   'GET /api/v1/skills': { success: [200], errors: [400, 422, 500] },
   'GET /api/v1/skills/{skill_id}': { success: [200], errors: [404, 500] },
-  'POST /api/v1/admin/ingest': { success: [202], errors: [401, 409, 500] },
+  // #49: a rota agora tem corpo (`source_keys`, 1–20) e roda de verdade — 422
+  // entra na tabela junto de 401 (token) e 409 (run em andamento).
+  'POST /api/v1/admin/ingest': { success: [202], errors: [401, 409, 422, 500] },
   // Numa listagem nao existe "ingestao em curso": o 409 e so do POST (§5.1).
-  'GET /api/v1/admin/ingest/runs': { success: [200], errors: [401, 500] },
+  'GET /api/v1/admin/ingest/runs': { success: [200], errors: [401, 422, 500] },
   'GET /healthz': { success: [200], errors: [500] },
   'GET /readyz': { success: [200], errors: [500, 503] },
   'GET /metrics': { success: [200], errors: [500] },

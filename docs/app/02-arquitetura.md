@@ -133,6 +133,7 @@ As escolhas de `docs/01` §6.1/§6.2 estão **mantidas**, exceto o backend, alte
 | `RATE_LIMIT_SEARCH_PER_MIN` / `_PER_DAY` | limites por cliente (default `10` / `60`) | `.env` |
 | `SEARCH_LOG_STORE_TEXT` | guardar o texto da consulta no histórico (default `false`) | `.env` |
 | `IP_HASH_SALT` | sal para pseudonimizar IP no rate limit | **Infisical** |
+| `ADMIN_TOKEN` | token do header `X-Admin-Token` da ingestao manual (#49); **obrigatorio em prod**, sem ele o boot recusa | **Infisical** |
 | `DATABASE_URL` | conexão Postgres | **Infisical** |
 
 ---
@@ -188,10 +189,20 @@ Base: `/api/v1` (atrás do nginx, mesma origem da SPA). JSON em `snake_case`. Da
 | `GET` | `/healthz` | Liveness (sem dependências) | — | `200` | — |
 | `GET` | `/readyz` | Readiness (verifica Postgres e frescor do catálogo) | — | `200` | `503` |
 | `GET` | `/metrics` | Métricas Prometheus | interno | `200` | — |
-| `POST` | `/admin/ingest` | Dispara ingestão manual | `X-Admin-Token` | `202` | `401`, `409` |
-| `GET` | `/admin/ingest/runs` | Últimas execuções de ingestão | `X-Admin-Token` | `200` | `401` |
+| `POST` | `/admin/ingest` | Dispara ingestão manual de até 20 `source_keys` (#49) | `X-Admin-Token` | `202` | `401`, `409`, `422` |
+| `GET` | `/admin/ingest/runs` | Últimas execuções de ingestão | `X-Admin-Token` | `200` | `401`, `422` |
 
 `X-Admin-Token` é segredo de servidor (Infisical), usado apenas pelo operador/smoke test; nunca no bundle do frontend.
+Em prod o boot recusa sem `ADMIN_TOKEN`; em dev, sem ele a rota responde `401` (**falha fechada**, nunca aberta).
+
+`POST /api/v1/admin/ingest` recebe `{"source_keys": ["owner/repo/slug", …]}` — **1 a 20 chaves**, validado
+pelo `ValidationPipe` (21 chaves e corpo sem `source_keys` são `422 VALIDATION_ERROR` com
+`error.details.fields`) — e executa a ingestão **só para essas chaves**, sem girar o rodízio nem gastar a
+cota de descoberta (#49). A resposta `202` carrega o resultado do run (`status`, `items_requested`,
+`items_seen`, `items_upserted`, `items_deactivated`, `error_code`, `error_detail`, `started_at`,
+`finished_at`): a execução é **síncrona e limitada ao pedido**, então `items_seen` é o tamanho do ciclo —
+nunca o tamanho do catálogo, que é `countActiveSkills`. Segunda execução simultânea recebe
+`409 CONFLICT`.
 
 ### 5.2 `POST /api/v1/search` — request
 
@@ -478,7 +489,7 @@ SkillSource
 
 ### 7.3 Ingestão: quando e como
 
-- **Quando:** no boot da API (se o catálogo estiver vazio ou com mais de 6 h) e a cada **6 h** por job `@nestjs/schedule`; execução manual via `POST /api/v1/admin/ingest`; uma única ingestão por vez garantida por `UNIQUE (status) WHERE status='running'` em `ingest_run` (lock no banco, sem dependência extra).
+- **Quando:** no boot da API (se o catálogo estiver vazio ou com mais de 6 h) e a cada **6 h** por job `@nestjs/schedule`; execução manual via `POST /api/v1/admin/ingest` (**#49**: com 1–20 `source_keys` explícitas, síncrona e para as chaves pedidas — o ciclo de 720 é do agendador, não da rota); uma única ingestão por vez garantida pela trava do processo (`IngestService`) **e** por `UNIQUE (status) WHERE status='running'` em `ingest_run` (lock no banco, sem dependência extra) — a segunda execução recebe `409 CONFLICT`.
 - **Como (rodízio, idempotente, upsert por `source_key`)** — uma execução **gira uma fatia**, não varre o catálogo. Números ratificados em `03-plano-app.md` §F2.10 (D3):
 
 | Número | O que fixa |
@@ -594,7 +605,7 @@ Barreiras, em ordem de execução:
 | Por cliente (`sha256(salt:ip)`) | 10 buscas/min e 60/dia | Contador de hits por janela (`@nestjs/throttler`), em memória | `429 RATE_LIMITED` + `Retry-After` |
 | Global de chamadas à LLM | 500/dia (`LLM_DAILY_CALL_BUDGET`) | Contador no processo + `llm_cache` | Degrada para template, `llm.status="unavailable"` |
 | Chamadas ao skills.sh | 1 req/s, 4 ciclos/dia, só no ingestor | `SKILL_SOURCE_RPS` + agendador | `ingest_run` `partial`, sem impacto no usuário |
-| `POST /admin/ingest` | 1 por 5 min | Lock em `ingest_run` | `409` |
+| `POST /admin/ingest` | 1 execução por vez, 1–20 chaves por request (#49) | Trava no processo (`IngestService`) + índice parcial `UNIQUE (status) WHERE status='running'` | `409 CONFLICT` |
 
 O rate limit é **de custo**, não de segurança de dados: sem ele, um único script consome o orçamento de tokens do dono.
 
@@ -725,7 +736,7 @@ Instrumentação na primeira versão (não depois): sem isso, C7 (5%) vira traba
 | R1 / C1 — app com frontend, backend e persistência | SPA + NestJS + Postgres com catálogo, histórico e cache | URL pública, 3 telas, migrations |
 | R5 / C5 — testes em camadas | Unitário (ranking, adaptadores com fixtures), integração (Postgres real, ingestão idempotente), contrato (`openapi.yaml`), teste do provedor de LLM com *fake* | `backend/test/`, cobertura do `ranking` e do `search` |
 | R6 / C7 — métricas, logs, dashboard | §9, nomes fechados desde a v1 | `/metrics`, Loki, 4 painéis |
-| R4 / C6 — segredos | `LLM_API_KEY`, `DATABASE_URL`, `IP_HASH_SALT` no Infisical; nada no bundle | `gitleaks`, `.env` 600 |
+| R4 / C6 — segredos | `LLM_API_KEY`, `DATABASE_URL`, `IP_HASH_SALT`, `ADMIN_TOKEN` no Infisical; nada no bundle | `gitleaks`, `.env` 600 |
 | R8 / C2 — serviços AWS integrados | ECR (imagem), S3 (`tfstate` + backup), EC2, CloudWatch mínimo — sem exceção à Opção 1 | `terraform state list` |
 | Custo/complexidade de `docs/01` §5.3 | Nenhum serviço extra (sem Redis, sem fila, sem vector DB) | `compose.yaml` com 4 serviços de app |
 
