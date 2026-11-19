@@ -2,7 +2,8 @@
 # integration-one.sh — roda UM spec de integracao e mostra a mensagem de erro crua.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT="$ROOT/.integration-one.log"
+OUT="$ROOT/.logs/integration-one.log"
+mkdir -p "$(dirname "$OUT")"
 : > "$OUT"
 cd "$ROOT/backend"
 

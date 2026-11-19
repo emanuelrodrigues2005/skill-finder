@@ -3,7 +3,8 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ESCOPO="${1:-}"
-OUT="$ROOT/.verify-$ESCOPO.log"
+OUT="$ROOT/.logs/verify-${ESCOPO:-all}.log"
+mkdir -p "$(dirname "$OUT")"
 : > "$OUT"
 cd "$ROOT"
 if [ -n "$ESCOPO" ]; then

@@ -8,7 +8,8 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SPEC="${1:?informe o caminho do spec}"
-OUT="$ROOT/.jest-one.log"
+OUT="$ROOT/.logs/jest-one.log"
+mkdir -p "$(dirname "$OUT")"
 DEST="$HOME/cloud-verify/backend"
 
 # Guarda: o destino tem de existir como diretorio e terminar em /cloud-verify/backend.

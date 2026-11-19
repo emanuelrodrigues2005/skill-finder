@@ -6,7 +6,8 @@
 # indices GIN, CHECKs, lock de ingest_run) e apensado depois pelo orquestrador.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT="$ROOT/.gen-migration.log"
+OUT="$ROOT/.logs/gen-migration.log"
+mkdir -p "$(dirname "$OUT")"
 export DATABASE_URL='postgresql://skills:migrate@127.0.0.1:5432/skills?schema=public'
 : > "$OUT"
 

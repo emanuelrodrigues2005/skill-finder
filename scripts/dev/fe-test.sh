@@ -4,7 +4,8 @@
 # longos e mutila padroes com pipe/caracteres especiais).
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT="$ROOT/.fe-test.log"
+OUT="$ROOT/.logs/fe-test.log"
+mkdir -p "$(dirname "$OUT")"
 : > "$OUT"
 
 cd "$ROOT/frontend"

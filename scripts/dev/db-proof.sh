@@ -5,7 +5,8 @@
 # derruba o container.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT="$ROOT/.db-proof.log"
+OUT="$ROOT/.logs/db-proof.log"
+mkdir -p "$(dirname "$OUT")"
 export DATABASE_URL='postgresql://skills:migrate@127.0.0.1:5432/skills?schema=public'
 PSQL() { docker exec sf-migrate psql -U skills -d skills -tAc "$1" 2>&1; }
 : > "$OUT"

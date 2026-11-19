@@ -3,7 +3,8 @@
 # O frontend roda no checkout, nao no espelho ext4.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT="$ROOT/.fe-check.log"
+OUT="$ROOT/.logs/fe-check.log"
+mkdir -p "$(dirname "$OUT")"
 : > "$OUT"
 
 cd "$ROOT"

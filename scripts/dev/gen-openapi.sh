@@ -7,7 +7,8 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MIRROR="$HOME/cloud-verify"
-OUT="$ROOT/.gen.log"
+OUT="$ROOT/.logs/gen.log"
+mkdir -p "$(dirname "$OUT")"
 : > "$OUT"
 
 rsync -a --delete --exclude node_modules --exclude dist --exclude coverage --exclude '*.log' \

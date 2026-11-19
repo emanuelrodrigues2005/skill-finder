@@ -7,7 +7,8 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT/backend"
-OUT="$ROOT/.bench.log"
+OUT="$ROOT/.logs/bench.log"
+mkdir -p "$(dirname "$OUT")"
 : > "$OUT"
 
 {

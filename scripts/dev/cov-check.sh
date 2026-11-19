@@ -4,7 +4,8 @@
 # nos testes: 545 verdes ainda podem falhar se um diretorio cair abaixo de 80%.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT="$ROOT/.cov-check.log"
+OUT="$ROOT/.logs/cov-check.log"
+mkdir -p "$(dirname "$OUT")"
 : > "$OUT"
 DEST="$HOME/cloud-verify/backend"
 
