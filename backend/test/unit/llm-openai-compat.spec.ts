@@ -27,7 +27,7 @@ import axios from 'axios';
 import nock from 'nock';
 
 import type { ExplainCandidate, ExplainRequest } from '@/llm/explain-parser';
-import { OpenAICompatParser } from '@/llm/openai-compat';
+import { sessionIdFor, OpenAICompatParser } from '@/llm/openai-compat';
 import type { OpenAiCompatOptions } from '@/llm/openai-compat';
 import type { Intent } from '@/contract/dto/search-response.dto';
 
@@ -153,6 +153,34 @@ describe('openai-compatible client (docs/app/02-arquitetura.md 6.3 e 8.3)', () =
 
     // Regra 4: a chave vive no cliente HTTP, nunca no resultado.
     expect(JSON.stringify(result)).not.toContain(API_KEY);
+  });
+
+  it('sends the session header that the Go plan requires', async () => {
+    // O gateway responde `400 MissingSessionID` sem este header — verificado
+    // contra o servidor. Sem ele, uma chave valida vira `unavailable` e o
+    // sintoma na tela parece "nao conectou".
+    let sessao: string | undefined;
+    const scope = nock(ORIGIN)
+      .matchHeader('x-opencode-session', (valor: string) => {
+        sessao = valor;
+        return /^ses_[0-9a-f]{32}$/u.test(valor);
+      })
+      .post(CHAT_PATH)
+      .once()
+      .reply(200, completion(VALID_CONTENT));
+
+    const result = await parser().parse(QUERY, CATEGORIES);
+
+    expect(scope.isDone()).toBe(true);
+    expect(result.status).toBe('ok');
+    expect(sessao).toMatch(/^ses_[0-9a-f]{32}$/u);
+  });
+
+  it('derives a stable session from the query, ignoring case and spacing', () => {
+    // Estavel = a mesma pergunta reaproveita a sessao (roteamento e cache de
+    // prompt do gateway). A normalizacao e a mesma da chave do cache.
+    expect(sessionIdFor('review python')).toBe(sessionIdFor('  Review   PYTHON  '));
+    expect(sessionIdFor('review python')).not.toBe(sessionIdFor('review rust'));
   });
 
   it('is intercepted by nock at all', async () => {

@@ -57,6 +57,7 @@ import {
   InMemoryIntentCache,
   INTENT_CACHE_MAX_ENTRIES,
   intentCacheKey,
+  sha256Hex,
   type IntentCache,
 } from './intent-cache';
 import { lexicalIntent, parseIntentPayload } from './intent-schema';
@@ -89,6 +90,24 @@ const MAX_BACKOFF_MS = 2_000;
  * seria menor que a latencia tipica do provedor e o retry so gastaria o
  * orcamento que ja acabou.
  */
+
+/** Identificacao do cliente: o plano Go pede que o chamador se apresente. */
+const USER_AGENT = 'skill-finder/1.0 (+https://github.com/emanuelrodrigues2005/skill-finder)';
+
+/**
+ * Id de sessao do gateway (`x-opencode-session`), **obrigatorio no plano Go**.
+ *
+ * Derivado da consulta normalizada para ser estavel: a mesma pergunta reaproveita
+ * a sessao (roteamento e cache de prompt do gateway) sem precisar carregar um id
+ * pelo servico inteiro. O prefixo `ses_` e o formato que o servidor espera —
+ * validado contra `POST /chat/completions` sem header, que responde
+ * `400 MissingSessionID`.
+ */
+export function sessionIdFor(query: string): string {
+  const normalizada = query.trim().replace(/\s+/g, ' ').toLowerCase();
+  return `ses_${sha256Hex(normalizada).slice(0, 32)}`;
+}
+
 const MIN_ATTEMPT_MS = 250;
 
 /**
@@ -254,7 +273,7 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
     } as const;
 
     try {
-      const data = await this.postWithRetry(body, timeoutMs, deadlineAtMs);
+      const data = await this.postWithRetry(body, timeoutMs, deadlineAtMs, query);
       return this.toResult(data, query, categories);
     } catch (error) {
       // Só o motivo, nunca a mensagem: um 401 pode citá-la com a chave dentro.
@@ -356,7 +375,7 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
       response_format: { type: 'json_object' },
     } as const;
 
-    const data = await this.postWithRetry(body, timeoutMs, deadlineAtMs);
+    const data = await this.postWithRetry(body, timeoutMs, deadlineAtMs, request.query);
     const content = firstContent(data);
     if (content === null) {
       return { kind: 'rejected', reason: 'invalid_json' };
@@ -391,6 +410,7 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
     body: unknown,
     timeoutMs: number,
     deadlineAtMs?: number,
+    sessionQuery?: string,
   ): Promise<CompletionBody> {
     let retries = 0;
     for (;;) {
@@ -406,7 +426,7 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
       const attemptTimeout = Math.min(timeoutMs, budgetLeft);
       try {
         const response = await this.http.post<CompletionBody>('/chat/completions', body, {
-          headers: this.requestHeaders(),
+          headers: this.requestHeaders(sessionQuery),
           // O orcamento manda: o timeout configurado e o teto, o restante e o real.
           timeout: attemptTimeout,
         });
@@ -421,10 +441,36 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
     }
   }
 
-  private requestHeaders(): Record<string, string> {
-    return this.options.apiKey === undefined
-      ? {}
-      : { authorization: `Bearer ${this.options.apiKey}` };
+  /**
+   * Headers de toda chamada ao provedor.
+   *
+   * `x-opencode-session` NAO e opcional no plano Go: o gateway responde
+   * `400 MissingSessionID` sem ele — verificado contra o proprio servidor
+   * (`POST /chat/completions` sem header devolve exatamente esse erro). Sem a
+   * sessao, uma chave valida produz `unavailable`, que na tela parece "nao
+   * conectou".
+   *
+   * O id e derivado da consulta normalizada: a mesma pergunta reaproveita a
+   * mesma sessao (roteamento e cache de prompt do gateway), sem precisar
+   * carregar um id pelo servico inteiro.
+   *
+   * `user-agent` identifica o cliente: o Go pede que o chamador se apresente em
+   * vez de usar o nome de uma biblioteca HTTP generica.
+   */
+  private requestHeaders(sessionQuery?: string): Record<string, string> {
+    const headers: Record<string, string> = { 'user-agent': USER_AGENT };
+    if (this.options.apiKey !== undefined) {
+      headers.authorization = `Bearer ${this.options.apiKey}`;
+    }
+    if (sessionQuery !== undefined) {
+      headers['x-opencode-session'] = sessionIdFor(sessionQuery);
+    }
+    return headers;
+  }
+
+  /** Sessao estavel por consulta: mesma pergunta, mesmo `ses_`. */
+  private sessionFor(query: string): string {
+    return sessionIdFor(query);
   }
 
   private toResult(
