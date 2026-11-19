@@ -198,19 +198,8 @@ describe('PrismaCatalogRepository — contagem e desativação', () => {
     const { prisma, repo } = repository();
     prisma.queryRows = [];
 
-    // `undefined` na guarda de 80% viraria `NaN` na comparação: o piso é `0`.
+    // `undefined` na conta viraria `NaN` em qualquer razão: o piso é `0`.
     expect(await repo.countActiveSkills()).toBe(0);
-  });
-
-  it('deactivates what was not seen since the cutoff', async () => {
-    const { prisma, repo } = repository();
-
-    await repo.deactivateSkillsNotSeenSince(SEEN_AT);
-
-    const [call] = prisma.calls;
-    expect(call?.sql).toContain('SET is_active = false');
-    expect(call?.sql).toContain('last_seen_at <');
-    expect(call?.values).toEqual([SEEN_AT]);
   });
 
   it('runs the TTL sweep against an external cutoff', async () => {

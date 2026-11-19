@@ -149,8 +149,8 @@ function stubRepository(): CatalogRepository {
     finishRun: fail,
     countActiveSkills: fail,
     selectRotationKeys: fail,
+    selectUnseenKeys: fail,
     upsertSkills: fail,
-    deactivateSkillsNotSeenSince: fail,
     deactivateSkillsStaleBefore: fail,
   };
 }
@@ -320,8 +320,32 @@ describe('fetchSkills — detail', () => {
     expect(trap.isDone()).toBe(false);
   });
 
-  it('fetchCatalog é o método depreciado: recusa e aponta o caminho novo', async () => {
-    await expect(source().fetchCatalog(1)).rejects.toThrow(/fetchSkills/);
+  /**
+   * Issue #46 — `listKeys()` é a enumeração do sitemap, o bootstrap do catálogo
+   * vazio. Ela devolve **chaves**, não registros: nenhuma página de detalhe é
+   * buscada aqui, porque quem busca é `fetchSkills(keys)`, passando pelo
+   * limitador.
+   */
+  it('listKeys enumera o sitemap sem buscar página de detalhe', async () => {
+    sitemapIndex();
+    sitemapShard();
+    const trap = nock(BASE).get(`/${FIRST}`).reply(200, minimalPage({ title: 'find-skills' }));
+
+    const keys = await source().listKeys();
+
+    // As 4 chaves do shard da amostra, na ordem do sitemap.
+    expect(keys).toEqual([FIRST, SECOND, THIRD, FOURTH]);
+    expect(trap.isDone()).toBe(false);
+  });
+
+  it('listKeys repassa a falha do sitemap: fora do ar não é catálogo vazio', async () => {
+    nock(BASE).get('/sitemap.xml').reply(503, 'indisponível');
+
+    await expect(source().listKeys()).rejects.toThrow();
+  });
+
+  it('não expõe mais a listagem paginada: fetchCatalog saiu na #46', () => {
+    expect('fetchCatalog' in source()).toBe(false);
   });
 });
 
