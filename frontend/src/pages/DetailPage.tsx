@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError, describeApiError, getSkill } from "../api";
 import { CopyText } from "../components/CopyText";
@@ -100,6 +100,14 @@ function NotFoundState({ requestId }: { requestId: string | null }) {
 
 export default function DetailPage() {
   const { id } = useParams<{ id: string }>();
+
+  // A busca que trouxe o usuario ate aqui. Vem no `?search=` do link da skill
+  // (`/skills/<id>?search=<request_id>`), entao sobrevive a reload e a link
+  // compartilhado — diferente de guardar em memoria, que sumia no "voltar" e
+  // deixava a tela de resultados vazia ("nenhuma busca ainda").
+  const [searchParams] = useSearchParams();
+  const searchId = (searchParams.get("search") ?? "").trim();
+  const backToResults = searchId === "" ? "/results" : `/results?search=${encodeURIComponent(searchId)}`;
   const skillId = (id ?? "").trim();
   const [state, setState] = useState<LoadState>({ status: "loading" });
 
@@ -165,70 +173,295 @@ export default function DetailPage() {
 
   return (
     <section>
-      <p style={{ marginTop: 0 }}>
-        <Link to="/results" style={{ color: color.link }}>
+      <p style={{ marginTop: 0, fontSize: font.size.compact }}>
+        <Link to={backToResults} style={{ color: color.link, textDecoration: "none" }}>
           {STR.detail.backToResults}
         </Link>
       </p>
-      <h2 style={{ fontSize: font.size.heading, margin: `0 0 ${space.sm}` }}>{skill.name}</h2>
-      <p style={{ marginTop: 0 }}>{show(skill.summary)}</p>
 
       {/*
-        A data de referência do dado (`data_snapshot`) vem do snapshot do catálogo — a mesma
-        fonte de `data.catalog_snapshot` na busca. Sem snapshot o contrato manda `null` e é
-        `n/a`, nunca uma data inventada (regra 3).
-        O contrato entrega RFC 3339 completo; a tela mostra só a data, porque a pergunta do
-        usuário é "de quando é este dado", não o instante exato da ingestão.
+        Ficha de medida: título e resumo à esquerda, dados à direita em tabela de duas colunas
+        separadas por fio. Em tela estreita o `flexWrap` empilha sem media query — o projeto não
+        tem folha de estilo e um breakpoint inline não existe.
       */}
-      <dl
+      <div style={{ display: "flex", gap: space.xl, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div style={{ flex: "1 1 24rem", minWidth: "18rem" }}>
+          <h2
+            style={{
+              fontSize: font.size.display,
+              fontWeight: font.weight.black,
+              letterSpacing: font.tracking.tight,
+              lineHeight: font.leading.tight,
+              margin: `0 0 ${space.sm}`,
+            }}
+          >
+            {skill.name}
+          </h2>
+          <p style={{ margin: 0, color: color.textBody, fontSize: font.size.lead, maxWidth: "42rem" }}>
+            {show(skill.summary)}
+          </p>
+        </div>
+
+        <dl
+          style={{
+            flex: "0 1 20rem",
+            minWidth: "16rem",
+            margin: 0,
+            borderTop: `1px solid ${color.hairline}`,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `${space.xs} 0`,
+              borderBottom: `1px solid ${color.hairline}`,
+            }}
+          >
+            <dt style={{ margin: 0, color: color.textMuted, fontSize: font.size.compact }}>
+              {STR.detail.fields.category}
+            </dt>
+            <dd
+              style={{
+                margin: 0,
+                fontFamily: font.family.mono,
+                fontVariantNumeric: "tabular-nums",
+                fontSize: font.size.compact,
+                color: color.textBody,
+                textAlign: "right",
+              }}
+            >
+              {show(skill.category)}
+            </dd>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `${space.xs} 0`,
+              borderBottom: `1px solid ${color.hairline}`,
+            }}
+          >
+            <dt style={{ margin: 0, color: color.textMuted, fontSize: font.size.compact }}>
+              {STR.detail.fields.stars}
+            </dt>
+            <dd
+              style={{
+                margin: 0,
+                fontFamily: font.family.mono,
+                fontVariantNumeric: "tabular-nums",
+                fontSize: font.size.compact,
+                color: color.textBody,
+                textAlign: "right",
+              }}
+            >
+              {show(skill.stars)}
+            </dd>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `${space.xs} 0`,
+              borderBottom: `1px solid ${color.hairline}`,
+            }}
+          >
+            <dt style={{ margin: 0, color: color.textMuted, fontSize: font.size.compact }}>
+              {STR.detail.fields.installs}
+            </dt>
+            <dd
+              style={{
+                margin: 0,
+                fontFamily: font.family.mono,
+                fontVariantNumeric: "tabular-nums",
+                fontSize: font.size.compact,
+                color: color.textBody,
+                textAlign: "right",
+              }}
+            >
+              {show(skill.installs)}
+            </dd>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `${space.xs} 0`,
+              borderBottom: `1px solid ${color.hairline}`,
+            }}
+          >
+            <dt style={{ margin: 0, color: color.textMuted, fontSize: font.size.compact }}>
+              {STR.detail.fields.vulnerabilities}
+            </dt>
+            <dd
+              style={{
+                margin: 0,
+                fontFamily: font.family.mono,
+                fontVariantNumeric: "tabular-nums",
+                fontSize: font.size.compact,
+                color: color.textBody,
+                textAlign: "right",
+              }}
+            >
+              {show(skill.vulnerability_count)}
+            </dd>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `${space.xs} 0`,
+              borderBottom: `1px solid ${color.hairline}`,
+            }}
+          >
+            <dt style={{ margin: 0, color: color.textMuted, fontSize: font.size.compact }}>
+              {STR.detail.fields.security}
+            </dt>
+            <dd
+              style={{
+                margin: 0,
+                fontFamily: font.family.mono,
+                fontVariantNumeric: "tabular-nums",
+                fontSize: font.size.compact,
+                color: color.textBody,
+                textAlign: "right",
+              }}
+            >
+              {show(skill.security_status)}
+            </dd>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `${space.xs} 0`,
+              borderBottom: `1px solid ${color.hairline}`,
+            }}
+          >
+            <dt style={{ margin: 0, color: color.textMuted, fontSize: font.size.compact }}>
+              {STR.detail.fields.skillMd}
+            </dt>
+            <dd
+              style={{
+                margin: 0,
+                fontFamily: font.family.mono,
+                fontVariantNumeric: "tabular-nums",
+                fontSize: font.size.compact,
+                color: color.textBody,
+                textAlign: "right",
+              }}
+            >
+              {skill.skill_md_present ? STR.detail.present : NA}
+            </dd>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `${space.xs} 0`,
+              borderBottom: `1px solid ${color.hairline}`,
+            }}
+          >
+            <dt style={{ margin: 0, color: color.textMuted, fontSize: font.size.compact }}>
+              {STR.detail.fields.snapshotDate}
+            </dt>
+            <dd
+              style={{
+                margin: 0,
+                fontFamily: font.family.mono,
+                fontVariantNumeric: "tabular-nums",
+                fontSize: font.size.compact,
+                color: color.textBody,
+                textAlign: "right",
+              }}
+              title={skill.data_snapshot ?? undefined}
+            >
+              {showDate(skill.data_snapshot)}
+            </dd>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `${space.xs} 0`,
+              borderBottom: `1px solid ${color.hairline}`,
+            }}
+          >
+            <dt style={{ margin: 0, color: color.textMuted, fontSize: font.size.compact }}>
+              {STR.detail.fields.source}
+            </dt>
+            <dd style={{ margin: 0, fontSize: font.size.compact, textAlign: "right" }}>
+              <ExternalValue value={skill.source_url} />
+            </dd>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: space.md,
+              padding: `${space.xs} 0`,
+              borderBottom: `1px solid ${color.hairline}`,
+            }}
+          >
+            <dt style={{ margin: 0, color: color.textMuted, fontSize: font.size.compact }}>
+              {STR.detail.fields.repository}
+            </dt>
+            <dd style={{ margin: 0, fontSize: font.size.compact, textAlign: "right" }}>
+              <ExternalValue value={skill.repo_url} />
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <h3
         style={{
-          display: "grid",
-          gridTemplateColumns: "max-content 1fr",
-          gap: `${space.xs} ${space.lg}`,
-          margin: `${space.lg} 0`,
-          fontSize: font.size.lead,
+          fontSize: font.size.title,
+          fontWeight: font.weight.strong,
+          margin: `${space.xl} 0 ${space.sm}`,
         }}
       >
-        <dt style={{ fontWeight: font.weight.strong }}>{STR.detail.fields.category}</dt>
-        <dd style={{ margin: 0 }}>{show(skill.category)}</dd>
-        <dt style={{ fontWeight: font.weight.strong }}>{STR.detail.fields.stars}</dt>
-        <dd style={{ margin: 0 }}>{show(skill.stars)}</dd>
-        <dt style={{ fontWeight: font.weight.strong }}>{STR.detail.fields.installs}</dt>
-        <dd style={{ margin: 0 }}>{show(skill.installs)}</dd>
-        <dt style={{ fontWeight: font.weight.strong }}>{STR.detail.fields.vulnerabilities}</dt>
-        <dd style={{ margin: 0 }}>{show(skill.vulnerability_count)}</dd>
-        <dt style={{ fontWeight: font.weight.strong }}>{STR.detail.fields.security}</dt>
-        <dd style={{ margin: 0 }}>{show(skill.security_status)}</dd>
-        <dt style={{ fontWeight: font.weight.strong }}>{STR.detail.fields.source}</dt>
-        <dd style={{ margin: 0 }}>
-          <ExternalValue value={skill.source_url} />
-        </dd>
-        <dt style={{ fontWeight: font.weight.strong }}>{STR.detail.fields.repository}</dt>
-        <dd style={{ margin: 0 }}>
-          <ExternalValue value={skill.repo_url} />
-        </dd>
-        <dt style={{ fontWeight: font.weight.strong }}>{STR.detail.fields.skillMd}</dt>
-        <dd style={{ margin: 0 }}>{skill.skill_md_present ? STR.detail.present : NA}</dd>
-        <dt style={{ fontWeight: font.weight.strong }}>{STR.detail.fields.snapshotDate}</dt>
-        <dd style={{ margin: 0 }} title={skill.data_snapshot ?? undefined}>{showDate(skill.data_snapshot)}</dd>
-      </dl>
-
-      <h3 style={{ fontSize: font.size.title }}>{STR.detail.skillMdSection}</h3>
+        {STR.detail.skillMdSection}
+      </h3>
       {hasExcerpt ? (
-        <div style={{ border: `1px solid ${color.border}`, borderRadius: radius.md, padding: space.md }}>
+        <div
+          style={{
+            border: `1px solid ${color.hairline}`,
+            borderLeft: `3px solid ${color.hairline}`,
+            borderRadius: radius.none,
+            padding: space.lg,
+            background: color.surface,
+          }}
+        >
           {/*
-            Texto puro, não markdown: `openapi.yaml:1221-1227` define `skill_md_excerpt` como
-            "Plain text … no raw markdown … Render escaped; never as HTML or markdown". O JSX já
-            escapa o valor, então sintaxe de markdown e tag HTML aparecem como caracteres — nada
-            é interpretado e nenhum `href` sai daqui.
+            Texto puro, não markdown: `openapi.yaml` define `skill_md_excerpt` como "Plain text …
+            no raw markdown … Render escaped; never as HTML or markdown". O JSX já escapa o valor,
+            então sintaxe de markdown e tag HTML aparecem como caracteres — nada é interpretado e
+            nenhum `href` sai daqui.
           */}
-          <p style={{ margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{excerpt}</p>
+          <p
+            style={{
+              margin: 0,
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              maxWidth: "68ch",
+              color: color.textBody,
+              fontSize: font.size.compact,
+              lineHeight: font.leading.body,
+            }}
+          >
+            {excerpt}
+          </p>
         </div>
       ) : (
-        <EmptyState
-          message={STR.detail.noDescription}
-          hint={STR.detail.skillMdHint(NA)}
-        />
+        <EmptyState message={STR.detail.noDescription} hint={STR.detail.skillMdHint(NA)} />
       )}
     </section>
   );

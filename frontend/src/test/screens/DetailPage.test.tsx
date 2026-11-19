@@ -38,6 +38,26 @@ function renderDetail(entry: InitialEntry = SKILL_PATH): void {
 }
 
 describe("DetailPage", () => {
+  it("keeps the search id on the way back, so the results are not lost", async () => {
+    // O bug relatado: clicar na skill recomendada e depois em "voltar" caia em
+    // `/results` sem `?search=`, a tela nao sabia qual busca mostrar e exibia
+    // "nenhuma busca ainda" - parecia que o resultado tinha sido apagado.
+    const SCOPE = "req_" + "0".repeat(26);
+    renderRoutes(ROUTES, SKILL_PATH + "?search=" + SCOPE);
+
+    const voltar = await screen.findByRole("link", { name: /voltar/i });
+
+    expect(voltar).toHaveAttribute("href", "/results?search=" + SCOPE);
+  });
+
+  it("falls back to plain /results when the page was opened without a search", async () => {
+    renderRoutes(ROUTES, SKILL_PATH);
+
+    const voltar = await screen.findByRole("link", { name: /voltar/i });
+
+    expect(voltar).toHaveAttribute("href", "/results");
+  });
+
   it("renders n/a for absent fields and a safe external link", async () => {
     renderDetail();
 

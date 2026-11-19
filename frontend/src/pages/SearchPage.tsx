@@ -5,7 +5,7 @@ import { ApiError, describeApiError, getCategories, searchSkills } from "../api"
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import { QUERY_MAX_LENGTH, QUERY_MIN_LENGTH, type Category } from "../types";
 import { STR } from "../ui/strings";
-import { color, font, space } from "../ui/tokens";
+import { color, font, radius, space } from "../ui/tokens";
 
 /**
  * Rascunho da busca: sobrevive a voltar da tela de resultados e a um reload (US-09 AC2).
@@ -155,7 +155,17 @@ export default function SearchPage() {
 
   return (
     <section>
-      <h2 style={{ fontSize: font.size.heading }}>{STR.search.heading}</h2>
+      <h2
+        style={{
+          fontSize: font.size.heading,
+          fontWeight: font.weight.strong,
+          letterSpacing: font.tracking.tight,
+          lineHeight: font.leading.tight,
+          margin: `0 0 ${space.lg}`,
+        }}
+      >
+        {STR.search.heading}
+      </h2>
 
       {/* Aviso de categorias: irmão do formulário, porque o formulário sempre renderiza. */}
       {categoriesFailure ? (
@@ -171,61 +181,154 @@ export default function SearchPage() {
         </div>
       ) : null}
 
-      <form onSubmit={handleSubmit}>
-        <label htmlFor="query" style={{ display: "block", fontWeight: font.weight.strong }}>
+      {/*
+        A folha de medida: a consulta é o instrumento da tela, então ela ocupa a superfície
+        branca com a borda de 1 px, e o rótulo acima é mono — o mesmo vocabulário do número do
+        score na lista de resultados. Nada de caixa alta no rótulo: é o padrão que a gente
+        evita de propósito.
+      */}
+      <form
+        onSubmit={handleSubmit}
+        style={{
+          background: color.surface,
+          border: `1px solid ${color.border}`,
+          borderRadius: radius.sm,
+          padding: space.xl,
+        }}
+      >
+        <label
+          htmlFor="query"
+          style={{
+            display: "block",
+            fontFamily: font.family.mono,
+            fontSize: font.size.meta,
+            color: color.textMuted,
+            marginBottom: space.xs,
+          }}
+        >
           {STR.search.queryLabel}
         </label>
         <textarea
           id="query"
           name="query"
-          rows={5}
+          rows={3}
           value={query}
           onChange={(event) => handleQueryChange(event.target.value)}
           maxLength={QUERY_MAX_LENGTH}
           aria-invalid={query !== "" && !isValid}
           aria-describedby="query-help"
-          style={{ width: "100%", marginTop: space.sm, padding: space.sm, boxSizing: "border-box" }}
+          style={{
+            display: "block",
+            width: "100%",
+            boxSizing: "border-box",
+            padding: `${space.sm} ${space.md}`,
+            border: `1px solid ${color.hairline}`,
+            borderRadius: radius.sm,
+            background: color.surface,
+            color: color.text,
+            fontFamily: "inherit",
+            fontSize: font.size.lead,
+            lineHeight: font.leading.snug,
+            resize: "vertical",
+          }}
         />
         {/* O contador conta o texto aparado, que é o que o servidor julga. */}
-        <p id="query-help" style={{ margin: `${space.xs} 0 ${space.lg}`, color: color.textMuted }}>
+        <p
+          id="query-help"
+          style={{
+            margin: `${space.xs} 0 ${space.lg}`,
+            fontFamily: font.family.mono,
+            fontVariantNumeric: "tabular-nums",
+            fontSize: font.size.meta,
+            color: color.textMuted,
+          }}
+        >
           {STR.search.queryCounter(trimmed.length, QUERY_MAX_LENGTH, QUERY_MIN_LENGTH)}
         </p>
 
-        <label htmlFor="category" style={{ display: "block", fontWeight: font.weight.strong }}>
-          {STR.search.categoryLabel}
-        </label>
-        <select
-          id="category"
-          name="category"
-          value={category}
-          onChange={(event) => handleCategoryChange(event.target.value)}
-          disabled={loadingCategories}
-          style={{ marginTop: space.sm, padding: "0.4rem" }}
+        <div
+          style={{
+            display: "flex",
+            gap: space.md,
+            alignItems: "end",
+            flexWrap: "wrap",
+          }}
         >
-          <option value="">{STR.search.anyCategory}</option>
-          {/*
-            Ilha aceita e comentada: `label_en` NÃO é traduzido. O rótulo de categoria vem do
-            catálogo do skills.sh — é dado de terceiro, mostrado como publicado (AGENTS.md,
-            regra 6). Traduzi-lo aqui inventaria um rótulo que a fonte não tem, e o `value` é o
-            `slug` do contrato, que a busca envia de volta.
-          */}
-          {categories.map((item) => (
-            <option key={item.slug} value={item.slug}>
-              {item.label_en}
-            </option>
-          ))}
-          {/* Rascunho restaurado de uma categoria que a lista de agora não trouxe. */}
-          {category !== "" && !categoryInList ? <option value={category}>{category}</option> : null}
-        </select>
+          <div style={{ flex: "1 1 16rem", minWidth: "12rem" }}>
+            <label
+              htmlFor="category"
+              style={{
+                display: "block",
+                fontFamily: font.family.mono,
+                fontSize: font.size.meta,
+                color: color.textMuted,
+                marginBottom: space.xs,
+              }}
+            >
+              {STR.search.categoryLabel}
+            </label>
+            <select
+              id="category"
+              name="category"
+              value={category}
+              onChange={(event) => handleCategoryChange(event.target.value)}
+              disabled={loadingCategories}
+              style={{
+                width: "100%",
+                padding: `${space.sm} ${space.md}`,
+                border: `1px solid ${color.hairline}`,
+                borderRadius: radius.sm,
+                background: color.surface,
+                color: color.text,
+                fontFamily: "inherit",
+                fontSize: font.size.body,
+              }}
+            >
+              <option value="">{STR.search.anyCategory}</option>
+              {/*
+                Ilha aceita e comentada: `label_en` NÃO é traduzido. O rótulo de categoria vem do
+                catálogo do skills.sh — é dado de terceiro, mostrado como publicado (AGENTS.md,
+                regra 6). Traduzi-lo aqui inventaria um rótulo que a fonte não tem, e o `value` é o
+                `slug` do contrato, que a busca envia de volta.
+              */}
+              {categories.map((item) => (
+                <option key={item.slug} value={item.slug}>
+                  {item.label_en}
+                </option>
+              ))}
+              {/* Rascunho restaurado de uma categoria que a lista de agora não trouxe. */}
+              {category !== "" && !categoryInList ? <option value={category}>{category}</option> : null}
+            </select>
+          </div>
+
+          <button
+            type="submit"
+            disabled={!isValid || submitting}
+            style={{
+              padding: `${space.sm} ${space.xl}`,
+              border: `1px solid ${color.link}`,
+              borderRadius: radius.sm,
+              background: color.link,
+              color: color.onLink,
+              fontFamily: "inherit",
+              fontSize: font.size.body,
+              fontWeight: font.weight.strong,
+              cursor: isValid && !submitting ? "pointer" : "not-allowed",
+              opacity: isValid && !submitting ? 1 : 0.55,
+            }}
+          >
+            {submitting ? STR.search.submitting : STR.search.submit}
+          </button>
+        </div>
 
         {/* Os dois estados que faltavam na tela de busca (issue #28): carregando e vazio. */}
         {loadingCategories ? (
-          <div style={{ marginTop: space.sm }}>
+          <div style={{ marginTop: space.md }}>
             <LoadingState label={STR.states.loading.categories} />
           </div>
         ) : null}
         {!loadingCategories && categoriesFailure === null && categories.length === 0 ? (
-          <div style={{ marginTop: space.sm }}>
+          <div style={{ marginTop: space.md }}>
             <EmptyState message={STR.states.empty.noCategories} />
           </div>
         ) : null}
@@ -239,12 +342,6 @@ export default function SearchPage() {
             />
           </div>
         ) : null}
-
-        <div style={{ marginTop: "1.25rem" }}>
-          <button type="submit" disabled={!isValid || submitting}>
-            {submitting ? STR.search.submitting : STR.search.submit}
-          </button>
-        </div>
       </form>
     </section>
   );

@@ -181,6 +181,24 @@ function DegradedBanner({ data }: { data: SearchData }) {
  * `rank` e nome saem de `results`, então a igualdade com `results[0].skill.skill_id` fica
  * visível na tela. Quando o `skill_id` não está na lista, a tela diz isso em vez de sumir.
  */
+/** `?search=` da URL: o id da busca que a tela esta mostrando. */
+function useSearchId(): string {
+  const [params] = useSearchParams();
+  return (params.get("search") ?? "").trim();
+}
+
+/**
+ * Destino da tela de detalhe preservando a busca.
+ *
+ * Sem o `?search=`, o "voltar para os resultados" cai em `/results` sem id, a
+ * tela nao sabe qual busca mostrar e exibe o estado vazio ("nenhuma busca
+ * ainda") — o resultado gerado parecia ter sido apagado.
+ */
+function skillHref(skillId: string, searchId: string): string {
+  const suffix = searchId === "" ? "" : `?search=${encodeURIComponent(searchId)}`;
+  return `/skills/${encodeURIComponent(skillId)}${suffix}`;
+}
+
 function RecommendationPanel({
   recommendation,
   results,
@@ -188,6 +206,7 @@ function RecommendationPanel({
   recommendation: Recommendation;
   results: ResultItem[];
 }) {
+  const searchId = useSearchId();
   const cited = results.find((item) => item.skill.skill_id === recommendation.skill_id) ?? null;
   const topPick = results.length > 0 ? results[0] : null;
   const matchesTopPick = topPick !== null && topPick.skill.skill_id === recommendation.skill_id;
@@ -206,7 +225,7 @@ function RecommendationPanel({
         {STR.results.recommendation.heading}
       </h3>
       <p style={{ margin: "0.35rem 0 0", fontWeight: font.weight.strong }}>
-        <Link to={`/skills/${recommendation.skill_id}`} style={{ color: color.link }}>
+        <Link to={skillHref(recommendation.skill_id, searchId)} style={{ color: color.link }}>
           {cited === null ? recommendation.skill_id : cited.skill.name}
         </Link>
         {cited === null ? null : STR.results.recommendation.rankSuffix(cited.rank, results.length)}
@@ -270,24 +289,27 @@ function EmptyActions() {
 }
 
 function ResultCard({ item, isRecommended }: { item: ResultItem; isRecommended: boolean }) {
+  const searchId = useSearchId();
   const badge = evidenceBadge(item.evidence_completeness);
   const badgeTone =
     badge.tone === "complete"
       ? { border: color.success, background: color.successSurface, color: color.successText }
       : { border: color.warn, background: color.warnSurface, color: color.warnText };
+  // A barra e a posição no ranking, não uma decoração: o `score` é o que ordena a lista e o
+  // comprimento é a razão dele contra o máximo (1). O número ao lado carrega a verdade; a barra
+  // é `aria-hidden` para o leitor de tela não anunciar uma medida sem unidade.
+  const barra = Math.max(0, Math.min(1, item.score)) * 100;
   return (
     <li
       style={{
-        border: `1px solid ${color.border}`,
-        borderRadius: radius.md,
-        padding: space.md,
-        marginBottom: space.md,
+        borderTop: `1px solid ${color.hairline}`,
+        padding: `${space.md} 0`,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: space.sm }}>
-        <h3 style={{ margin: 0, fontSize: font.size.title }}>
+      <div>
+        <h3 style={{ margin: 0, fontSize: font.size.title, lineHeight: font.leading.snug }}>
           <Link
-            to={`/skills/${item.skill.skill_id}`}
+            to={skillHref(item.skill.skill_id, searchId)}
             style={{ color: color.link, fontWeight: font.weight.strong, textDecoration: "none" }}
           >
             {item.rank}. {item.skill.name}
@@ -297,59 +319,102 @@ function ResultCard({ item, isRecommended }: { item: ResultItem; isRecommended: 
               style={{
                 marginLeft: space.sm,
                 border: `1px solid ${color.link}`,
-                borderRadius: radius.pill,
-                padding: "0.05rem 0.45rem",
+                borderRadius: radius.sm,
+                padding: "0.05rem 0.4rem",
                 fontSize: font.size.caption,
+                fontWeight: font.weight.strong,
                 color: color.link,
                 verticalAlign: "middle",
+                whiteSpace: "nowrap",
               }}
             >
               {STR.results.card.recommendedBadge}
             </span>
           ) : null}
         </h3>
-        <span
-          style={{ fontVariantNumeric: "tabular-nums", color: color.textSubtle, fontSize: font.size.compact }}
-        >
-          {STR.results.card.score(decimals(item.score, 4))}
-        </span>
-      </div>
 
-      <ul style={{ margin: `${space.sm} 0 0`, paddingLeft: "1.1rem", color: color.textBody }}>
-        {reasonsFor(item).map((reason, index) => (
-          <li key={`${item.rank}-reason-${index}`} style={{ fontSize: font.size.body }}>
-            {reason}
-          </li>
-        ))}
-      </ul>
-
-      <Meta item={item} />
-
-      {item.flags.length > 0 ? (
-        <p style={{ margin: "0.35rem 0 0", fontSize: font.size.small, color: color.flagText }}>
-          {STR.results.card.flags(item.flags.join(", "))}
-        </p>
-      ) : null}
-
-      <p style={{ margin: `${space.sm} 0 0` }}>
-        <span
+        {/* Medida: barra + número. `gap` separa sem usar o "·" de template. */}
+        <div
           style={{
-            display: "inline-block",
-            border: `1px solid ${badgeTone.border}`,
-            background: badgeTone.background,
-            color: badgeTone.color,
-            borderRadius: radius.pill,
-            padding: `0.05rem ${space.sm}`,
-            fontSize: font.size.meta,
-            fontWeight: font.weight.strong,
+            display: "flex",
+            alignItems: "center",
+            gap: space.sm,
+            margin: `${space.sm} 0 0`,
           }}
         >
-          {badge.label}
-        </span>
-        <span style={{ marginLeft: space.sm, fontSize: font.size.meta, color: color.textMuted }}>
-          {badge.detail}
-        </span>
-      </p>
+          <span
+            aria-hidden="true"
+            style={{
+              flex: "0 0 auto",
+              width: "9rem",
+              height: 6,
+              background: color.wash,
+              borderRadius: radius.none,
+              overflow: "hidden",
+            }}
+          >
+            <span
+              style={{
+                display: "block",
+                width: `${barra}%`,
+                height: "100%",
+                background: isRecommended ? color.link : color.border,
+              }}
+            />
+          </span>
+          <span
+            style={{
+              fontFamily: font.family.mono,
+              fontVariantNumeric: "tabular-nums",
+              fontSize: font.size.compact,
+              color: color.textSubtle,
+            }}
+          >
+            {STR.results.card.score(decimals(item.score, 4))}
+          </span>
+        </div>
+
+        <ul
+          style={{
+            margin: `${space.sm} 0 0`,
+            paddingLeft: "1.1rem",
+            color: color.textBody,
+            fontSize: font.size.body,
+          }}
+        >
+          {reasonsFor(item).map((reason, index) => (
+            <li key={`${item.rank}-reason-${index}`}>{reason}</li>
+          ))}
+        </ul>
+
+        <Meta item={item} />
+
+        {item.flags.length > 0 ? (
+          <p style={{ margin: `${space.xs} 0 0`, fontSize: font.size.small, color: color.flagText }}>
+            {STR.results.card.flags(item.flags.join(", "))}
+          </p>
+        ) : null}
+
+        <p style={{ margin: `${space.sm} 0 0` }}>
+          <span
+            style={{
+              display: "inline-block",
+              border: `1px solid ${badgeTone.border}`,
+              background: badgeTone.background,
+              color: badgeTone.color,
+              borderRadius: radius.sm,
+              padding: `0.05rem ${space.sm}`,
+              fontSize: font.size.meta,
+              fontWeight: font.weight.strong,
+            }}
+          >
+            {badge.label}
+          </span>
+          <span style={{ marginLeft: space.sm, fontSize: font.size.meta, color: color.textMuted }}>
+            {badge.detail}
+          </span>
+        </p>
+      </div>
     </li>
   );
 }
