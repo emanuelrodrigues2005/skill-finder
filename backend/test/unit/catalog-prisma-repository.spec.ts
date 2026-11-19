@@ -20,6 +20,7 @@
 import type { PrismaClient } from '@prisma/client';
 
 import type { IngestRunFinish } from '@/catalog/catalog-repository';
+import { IngestRunInProgressError } from '@/catalog/catalog-repository';
 import {
   PrismaCatalogRepository,
   buildUpsertStatement,
@@ -115,6 +116,9 @@ describe('PrismaCatalogRepository — runs', () => {
 
     const [call] = prisma.calls;
     expect(call?.sql).toContain('INSERT INTO "ingest_run"');
+    // O `ON CONFLICT DO NOTHING` é o lock entre processos: o índice parcial de
+    // `ingest_run` recusa um segundo run `running`, e o `RETURNING` fica vazio.
+    expect(call?.sql).toContain('ON CONFLICT DO NOTHING');
     // `items_requested` entra como `null` quando o run não é de rodízio: dado
     // ausente é NULL, nunca zero (#45).
     expect(call?.values).toEqual(['fixture', SEEN_AT, null]);
@@ -133,12 +137,16 @@ describe('PrismaCatalogRepository — runs', () => {
     expect(call?.values).toEqual(['fixture', SEEN_AT, 720]);
   });
 
-  it('throws instead of returning NaN when the insert comes back empty', async () => {
+  it('throws the lock error instead of returning NaN when the insert conflicts', async () => {
     const { prisma, repo } = repository();
     prisma.queryRows = [];
 
-    await expect(repo.startRun({ adapter: 'fixture', started_at: SEEN_AT })).rejects.toThrow(
-      'INSERT em ingest_run não devolveu id',
+    // `ON CONFLICT DO NOTHING RETURNING id` não devolve linha quando o índice
+    // parcial `UNIQUE (status) WHERE status='running'` já está tomado: é o lock
+    // entre processos da #49 (`make seed` em paralelo). O que a rota precisa é
+    // de um erro nomeado para virar 409 — nunca `NaN` como id de run.
+    await expect(repo.startRun({ adapter: 'fixture', started_at: SEEN_AT })).rejects.toBeInstanceOf(
+      IngestRunInProgressError,
     );
   });
 
@@ -280,5 +288,60 @@ describe('PrismaCatalogRepository — upsertSkills', () => {
     expect(captured?.values[11]).toEqual(SEEN_AT);
     // ...e `raw` ausente vai como JSON `null`, não como `undefined`.
     expect(captured?.values[13]).toBe('null');
+  });
+});
+
+describe('PrismaCatalogRepository — leitura dos runs (#49)', () => {
+  it('lists the latest runs, newest first, with limit and offset', async () => {
+    const { prisma, repo } = repository();
+    prisma.queryRows = [
+      {
+        id: 7n,
+        adapter: 'html',
+        started_at: SEEN_AT,
+        finished_at: SEEN_AT,
+        status: 'ok',
+        items_seen: 20,
+        items_upserted: 18,
+        items_deactivated: 1,
+        items_requested: 20,
+        error_code: null,
+        error_detail: null,
+      },
+    ];
+
+    const rows = await repo.listRuns(20, 0);
+
+    // `bigint` da coluna `bigserial` sai como `number` para a rota: JSON não tem
+    // `bigint`, e `String(id)` é o `run_id` do contrato.
+    expect(rows).toEqual([
+      {
+        id: 7,
+        adapter: 'html',
+        started_at: SEEN_AT,
+        finished_at: SEEN_AT,
+        status: 'ok',
+        items_seen: 20,
+        items_upserted: 18,
+        items_deactivated: 1,
+        items_requested: 20,
+        error_code: null,
+        error_detail: null,
+      },
+    ]);
+    const [call] = prisma.calls;
+    expect(call?.sql).toContain('FROM "ingest_run"');
+    expect(call?.sql).toContain('ORDER BY started_at DESC');
+    expect(call?.values).toEqual([20, 0]);
+  });
+
+  it('counts the runs and never returns undefined', async () => {
+    const { prisma, repo } = repository();
+
+    prisma.queryRows = [];
+    expect(await repo.countRuns()).toBe(0);
+
+    prisma.queryRows = [{ total: 12n }];
+    expect(await repo.countRuns()).toBe(12);
   });
 });
