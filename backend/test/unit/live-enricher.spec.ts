@@ -93,7 +93,7 @@ function fonte(chaves: readonly string[]): SkillSource {
       throw new Error('fetchSkills nao deveria ser chamado');
     },
     fetchDocument: () => Promise.resolve(null),
-  } as unknown as SkillSource;
+  };
 }
 
 const REPOSITORIO = {} as CatalogRepository;
@@ -120,10 +120,10 @@ describe('CatalogLiveEnricher — guardas', () => {
   });
 
   it('falha da fonte é engolida: a busca continua com o catálogo local', async () => {
-    const quebrada = {
+    const quebrada: SkillSource = {
       ...fonte([]),
       listKeys: (): Promise<string[]> => Promise.reject(new Error('sitemap fora do ar')),
-    } as unknown as SkillSource;
+    };
     const enricher = new CatalogLiveEnricher(quebrada, REPOSITORIO, config(true));
 
     await expect(enricher.enrich({ keywords: ['testing'] })).resolves.toBe(0);

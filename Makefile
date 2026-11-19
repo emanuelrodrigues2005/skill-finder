@@ -21,16 +21,17 @@ DB_TEST_URL ?= postgresql://skills:skills@127.0.0.1:$(DB_TEST_PORT)/skills_test
 .PHONY: bootstrap up down logs migrate seed test test-web test-integration test-all \
         test-coverage offline-check db-test-up db-test-down migrate-test \
         lint config help preflight lockfile openapi openapi-check \
-        port port/free dev/start dev/stop
+        port port/free dev/start dev/stop ingest
 
 help:
-	@echo "alvos: dev/start | dev/stop | port | port/free | bootstrap | up | down | logs | migrate | seed | test | test-web | lint | config | openapi | openapi-check"
+	@echo "alvos: dev/start | dev/stop | port | port/free | ingest | bootstrap | up | down | logs | migrate | seed | test | test-web | lint | config | openapi | openapi-check"
 	@echo "       test-integration | test-all | test-coverage | offline-check | db-test-up | db-test-down | migrate-test"
 	@echo "  bootstrap  gera pnpm-lock.yaml (exige Node 22 nativo no WSL e rede)"
 	@echo "  dev/start  checa as portas, libera o que e nosso e sobe tudo + seed (uso diario)"
 	@echo "  dev/stop   derruba o stack do profile $(PROFILE)"
 	@echo "  port       mostra o estado das portas do backend e do frontend"
 	@echo "  port/free  libera as portas que pertencem a este repositorio"
+	@echo "  ingest     um ciclo de rodizio REAL (720 chaves da fonte); e o que o cron chama a cada 6 h"
 	@echo "  up         sobe postgres + API + web no profile $(PROFILE)"
 	@echo "  test       unit + api (sem Docker; é o gate rápido)"
 	@echo "  test-web   roda a suíte do frontend (Vitest + Testing Library + MSW)"
@@ -132,6 +133,20 @@ seed: migrate
 	$(COMPOSE) --profile $(PROFILE) run --rm \
 	  -v "$(PWD)/backend/test/fixtures:/app/test/fixtures:ro" \
 	  $(API_SERVICE) pnpm seed
+
+# Um ciclo de ingestão **real** (`pnpm ingest`): a fonte vem de `SKILL_SOURCE_KIND`
+# e o rodízio escolhe 720 chaves. É o comando que o agendador do deploy chama a
+# cada 6 h — o `seed` acima é só a fixture de desenvolvimento e NÃO deve rodar em
+# produção (injetaria 25 skills de teste no catálogo).
+#
+# Sem `migrate` como pré-requisito ao contrário do `seed`: o cron roda contra um
+# banco que já foi migrado pelo deploy, e uma migration travada não pode impedir o
+# ciclo de rodar (ele falha alto e o log diz por quê).
+#
+# Exemplo de cron (host/EC2, ver `docs/app/05-ingestao-e-frescor.md`):
+#   0 */6 * * *  cd <repo> && make ingest >> /var/log/skill-finder-ingest.log 2>&1
+ingest:
+	$(COMPOSE) --profile $(PROFILE) run --rm $(API_SERVICE) pnpm ingest
 
 test: preflight
 	$(PNPM) test

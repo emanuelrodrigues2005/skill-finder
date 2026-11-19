@@ -24,7 +24,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "openapi:generate": "ts-node --project tsconfig.json scripts/generate-openapi.ts",
-      "seed": "ts-node --project tsconfig.json scripts/seed.ts"
+      "seed": "ts-node --project tsconfig.json scripts/seed.ts",
+      "ingest": "ts-node --project tsconfig.json scripts/ingest.ts"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.0",
