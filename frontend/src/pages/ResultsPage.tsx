@@ -559,9 +559,32 @@ export default function ResultsPage() {
 
   return (
     <section aria-labelledby="results-heading">
-      <h2 id="results-heading" style={{ fontSize: font.size.heading }}>
+      <h2
+        id="results-heading"
+        style={{
+          fontSize: font.size.heading,
+          fontWeight: font.weight.strong,
+          letterSpacing: font.tracking.tight,
+          lineHeight: font.leading.tight,
+          margin: `0 0 ${space.md}`,
+        }}
+      >
         {STR.results.heading}
       </h2>
+
+      {/*
+        Faixa de identificação da busca: o permalink e as duas linhas de contexto, isoladas por
+        fio em cima e embaixo. É o carimbo da folha — diz de que medição se trata antes de
+        qualquer resultado.
+      */}
+      <div
+        style={{
+          borderTop: `1px solid ${color.hairline}`,
+          borderBottom: `1px solid ${color.hairline}`,
+          padding: `${space.sm} 0`,
+          marginBottom: space.lg,
+        }}
+      >
 
       {/* Permalink estável: endereçado pelo `request_id`, a mesma resposta em aba nova ou ao
           compartilhar. O reload da mesma aba revalida com `GET /searches/{id}` e, se o histórico
@@ -577,15 +600,24 @@ export default function ResultsPage() {
           decimals(intent.confidence, 2),
         )}
       </p>
-      <p style={{ color: color.textMuted, margin: `0 0 ${space.md}`, fontSize: font.size.compact }}>
-        {STR.results.snapshotLine(
-          data.catalog_snapshot,
-          show(data.source),
-          llm.status,
-          llm.cached,
-          show(llm.model),
-        )}
-      </p>
+        <p
+          style={{
+            color: color.textMuted,
+            margin: 0,
+            fontFamily: font.family.mono,
+            fontVariantNumeric: "tabular-nums",
+            fontSize: font.size.meta,
+          }}
+        >
+          {STR.results.snapshotLine(
+            data.catalog_snapshot,
+            show(data.source),
+            llm.status,
+            llm.cached,
+            show(llm.model),
+          )}
+        </p>
+      </div>
 
       <DegradedBanner data={data} />
 
