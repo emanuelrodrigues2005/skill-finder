@@ -19,8 +19,17 @@ export const DEFAULT_SEARCH_LIMIT = 5;
  */
 export const CANDIDATE_POOL_SIZE = 50;
 
-/** Snapshot do catálogo mais velho que isto torna a resposta degradada (§7.4). */
-export const SOURCE_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
+/**
+ * Snapshot do catálogo mais velho que isto torna a resposta degradada (§7.4).
+ *
+ * O limiar segue o **ciclo do rodízio**, não a página: a ingestão vê 720 chaves a
+ * cada 6 h (issue #46) e o ciclo completo do cold leva 7–14 dias. Marcar o
+ * catálogo como velho a cada ciclo puniria o rodízio funcionando; **12 h** dá
+ * uma execução perdida de folga antes de avisar. Mede o frescor da última
+ * ingestão `ok` (`data.age_seconds`), nunca o tamanho do catálogo — `items_seen`
+ * vale ~720 e não diz quantas skills existem (D3).
+ */
+export const SOURCE_STALE_AFTER_MS = 12 * 60 * 60 * 1000;
 
 /** Retenção do histórico de busca (§4.2): depois disto o permalink expira em 410. */
 export const SEARCH_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;

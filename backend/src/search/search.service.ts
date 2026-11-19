@@ -34,7 +34,7 @@ import type {
   SearchResponse,
 } from '../contract/dto/search-response.dto';
 import type { ResultItem } from '../contract/dto/result-item.dto';
-import { resolveDegradation } from '../llm/degradation';
+import { resolveDegradation, type Degradation } from '../llm/degradation';
 import type {
   ExplainCandidate,
   ExplainParser,
@@ -228,6 +228,10 @@ export class SearchService {
     };
     const stored = await this.store.save(record);
 
+    // A metrica so conta DEPOIS de a resposta existir: incrementar antes
+    // marcaria como degradada uma request que virou 500 no meio.
+    this.observeStaleness(ageMs, degradation);
+
     return {
       request_id: stored.request_id,
       search_id: stored.search_id,
@@ -314,6 +318,10 @@ export class SearchService {
       // chamado numa leitura de permalink), e o texto volta do template.
       null,
     );
+
+    // O replay só conta quando a resposta está pronta: incrementar antes
+    // marcaria como degradada uma request que virou 500 no meio.
+    this.observeStaleness(ageMs, degradation);
 
     return {
       request_id: row.request_id,
@@ -648,6 +656,18 @@ export class SearchService {
   /** `llm_calls_total{status}` (D-F): o status é o do contrato, não um rótulo novo. */
   private observeLlmCall(status: LlmStatus): void {
     this.metrics?.observeLlmCall(status);
+  }
+
+  /**
+   * Métricas de staleness (§7.4, issue #48).
+   *
+   * As duas leem o mesmo `ageMs`/`degradation` que a resposta devolve, então
+   * `/metrics` e `data.age_seconds` não podem divergir. `degraded_reason=null`
+   * não incrementa contador: o que se mede é a degradação, não o volume.
+   */
+  private observeStaleness(ageMs: number, degradation: Degradation): void {
+    this.metrics?.observeCatalogSnapshotAge(Math.round(ageMs / 1000));
+    this.metrics?.observeDegradedResponse(degradation.degraded_reason);
   }
 
   /** Pesos do ranking vêm da configuração (§6.4), nunca da intenção. */

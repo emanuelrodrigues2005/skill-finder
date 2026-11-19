@@ -45,7 +45,7 @@ const SOURCES = import.meta.glob(
 );
 
 /** `#rgb` a `#rrggbbaa` — a mesma forma que o `grep` do critério de aceitação procura. */
-const LOOSE_HEX = /#[0-9a-fA-F]{3,6}/g;
+const LOOSE_HEX = /#[0-9a-fA-F]{3,8}/g;
 
 /** Cor de token: hex de 6 dígitos, minúsculo. `var(--token)` não passa aqui. */
 const TOKEN_HEX = /^#[0-9a-f]{6}$/;

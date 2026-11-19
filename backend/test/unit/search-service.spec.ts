@@ -46,7 +46,7 @@
  * VALIDATION_ERROR` com `details.reason === 'UNKNOWN_CATEGORY'` e `category` em
  * `details.fields`), D-C (template determinístico => warning
  * `explanation_from_template`), cache vazio => `503 SOURCE_UNAVAILABLE` com
- * `details.reason === 'cache_empty'` e **nada** persistido, snapshot > 6 h =>
+ * `details.reason === 'cache_empty'` e **nada** persistido, snapshot > 12 h =>
  * `source_stale` com precedência sobre o status da LLM, e o `request_id` da
  * resposta é **sempre cunhado pelo servidor** (C4), nunca o header recebido.
  */
@@ -67,6 +67,7 @@ import type { SearchCatalog, SearchCatalogInput } from '@/search/search-catalog.
 import type { SearchStore, StoredSearchInput, StoredSearchRow } from '@/search/search-store.port';
 import { SearchService } from '@/search/search.service';
 import { SEARCH_CATALOG, SEARCH_STORE } from '@/search/search.tokens';
+import { SOURCE_STALE_AFTER_MS } from '@/search/constants';
 
 const HOUR_MS = 60 * 60 * 1000;
 const CLIENT_IP = '203.0.113.7';
@@ -209,6 +210,10 @@ function appConfig(overrides: { storeText?: boolean } = {}): AppConfigService {
 const METRICS_STUB = {
   llmCallsTotal: { inc: (): void => undefined },
   observeLlmCall: (): void => undefined,
+  // Issue #48: o serviço também publica idade do snapshot e degradação por
+  // motivo; o efeito real (`/metrics`) é provado no `search.e2e-spec.ts`.
+  observeCatalogSnapshotAge: (): void => undefined,
+  observeDegradedResponse: (): void => undefined,
 };
 
 class OkIntentParser implements IntentParser {
@@ -560,7 +565,7 @@ describe('SearchService.search (F2.6)', () => {
       expect(response.llm.status).toBe('disabled');
       expect(response.data.degraded).toBe(true);
       expect(response.data.degraded_reason).toBe('llm_unavailable');
-      expect(response.data.age_seconds).toBeLessThan(6 * 3600);
+      expect(response.data.age_seconds).toBeLessThan(12 * 3600);
       expect(response.warnings).not.toContain('source_stale');
       expect(response.warnings).toContain('explanation_from_template');
     });
@@ -581,9 +586,9 @@ describe('SearchService.search (F2.6)', () => {
       expect(replay.warnings).not.toContain('source_stale');
     });
 
-    it('a 7-hour-old snapshot warns source_stale on both the search and the replay', async () => {
+    it('a 13-hour-old snapshot warns source_stale on both the search and the replay', async () => {
       const catalog = new CatalogStub();
-      catalog.snapshotAt = new Date(Date.now() - 7 * HOUR_MS);
+      catalog.snapshotAt = new Date(Date.now() - 13 * HOUR_MS);
       const harness = await build({ catalog, parser: new OkIntentParser() });
 
       const searched = await harness.service.search(SEARCH_INPUT);
@@ -592,6 +597,55 @@ describe('SearchService.search (F2.6)', () => {
       expect(searched.warnings).toContain('source_stale');
       expect(replay.warnings).toContain('source_stale');
       expect(replay.data.degraded_reason).toBe('source_stale');
+    });
+  });
+
+  /**
+   * Issue #48: o limiar segue o **ciclo do rodízio** (720 chaves a cada 6 h),
+   * não o tamanho da página. Em 12 h, um snapshot de 10 h ainda cobre o ciclo
+   * anterior; um de 13 h já perdeu uma execução — e é aí que a resposta precisa
+   * avisar. Os dois lados da borda ficam aqui, no mesmo lugar.
+   */
+  describe('stale threshold follows the ingest rotation (issue #48)', () => {
+    it('a 10-hour-old snapshot is still fresh: no degradation, no source_stale', async () => {
+      const catalog = new CatalogStub();
+      catalog.snapshotAt = new Date(Date.now() - 10 * HOUR_MS);
+      const harness = await build({ catalog, parser: new OkIntentParser() });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(response.data.age_seconds).toBeGreaterThanOrEqual(10 * 3600 - 60);
+      expect(response.data.degraded).toBe(false);
+      expect(response.data.degraded_reason).toBeNull();
+      expect(response.warnings).not.toContain('source_stale');
+    });
+
+    it('the boundary is strict: exactly SOURCE_STALE_AFTER_MS is still fresh', async () => {
+      // A doc promete "fresco <= 12 h" e o código usa `>`. Sem este caso,
+      // trocar `>` por `>=` num refactor mantém tudo verde e muda a semântica
+      // de um instante que está escrito (LOW do parecer da #48).
+      const naBorda = new CatalogStub();
+      naBorda.snapshotAt = new Date(Date.now() - SOURCE_STALE_AFTER_MS + 1_000);
+      const fresco = await build({ catalog: naBorda, parser: new OkIntentParser() });
+
+      const resposta = await fresco.service.search(SEARCH_INPUT);
+
+      expect(resposta.data.degraded).toBe(false);
+      expect(resposta.data.degraded_reason).toBeNull();
+      expect(resposta.warnings).not.toContain('source_stale');
+    });
+
+    it('a 13-hour-old snapshot degrades as source_stale', async () => {
+      const catalog = new CatalogStub();
+      catalog.snapshotAt = new Date(Date.now() - 13 * HOUR_MS);
+      const harness = await build({ catalog, parser: new OkIntentParser() });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(response.data.age_seconds).toBeGreaterThanOrEqual(13 * 3600 - 60);
+      expect(response.data.degraded).toBe(true);
+      expect(response.data.degraded_reason).toBe('source_stale');
+      expect(response.warnings).toContain('source_stale');
     });
   });
 
@@ -608,9 +662,9 @@ describe('SearchService.search (F2.6)', () => {
       expect(harness.store.saved).toHaveLength(0);
     });
 
-    it('a snapshot older than 6 hours degrades as source_stale, ahead of the LLM status', async () => {
+    it('a snapshot older than 12 hours degrades as source_stale, ahead of the LLM status', async () => {
       const catalog = new CatalogStub();
-      catalog.snapshotAt = new Date(Date.now() - 7 * HOUR_MS);
+      catalog.snapshotAt = new Date(Date.now() - 13 * HOUR_MS);
       const harness = await build({ catalog, parser: new OkIntentParser() });
 
       const response = await harness.service.search(SEARCH_INPUT);
@@ -620,7 +674,7 @@ describe('SearchService.search (F2.6)', () => {
       expect(response.llm.status).toBe('ok');
       expect(response.data.degraded).toBe(true);
       expect(response.data.degraded_reason).toBe('source_stale');
-      expect(response.data.age_seconds).toBeGreaterThanOrEqual(7 * 3600 - 60);
+      expect(response.data.age_seconds).toBeGreaterThanOrEqual(13 * 3600 - 60);
       expect(response.warnings).toContain('source_stale');
     });
 

@@ -400,7 +400,7 @@ válida; esta acrescenta o `explain` e muda o modelo de ingestão.
 | **2.880** req/dia | 720 × 4 — o teto diário de requisições contra o skills.sh |
 | **TTL 14 d** | validade da entrada de catálogo; *cold* entre 7 e 14 dias |
 | **desativação 28 d** | skill não vista em 28 dias vira `is_active = false` (nunca "não vista neste ciclo") |
-| **source_stale 12 h** | snapshot acima de 12 h marca `degraded=true` com `degraded_reason="source_stale"`; hoje `SOURCE_STALE_AFTER_MS` vale 6 h (`backend/src/search/constants.ts`), e a F2.10 leva a 12 h |
+| **source_stale 12 h** | snapshot acima de 12 h marca `degraded=true` com `degraded_reason="source_stale"`; a F2.10 levou `SOURCE_STALE_AFTER_MS` de 6 h para **12 h** (`backend/src/search/constants.ts`, issue #48): o limiar segue o ciclo do rodízio, não a página |
 | **`LLM_TOTAL_DEADLINE_MS` 7000** | teto de tempo **somado** das chamadas de LLM numa busca (intenção + explicação); estourado, o passo pendente cai no fallback e a resposta degrada |
 
 **Modelo de rodízio (D3).** Varredura completa não é o modelo: são **720 requisições a cada 6 h**,

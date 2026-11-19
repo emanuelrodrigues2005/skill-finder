@@ -523,14 +523,18 @@ SkillSource
 
 | Situação | Comportamento | Efeito visível |
 | --- | --- | --- |
-| Catálogo fresco (≤ 6 h) | Serve do Postgres | `data.source="cache"`, `degraded=false` |
-| Catálogo velho (> 6 h, ingestão falhando) | Serve mesmo assim | `degraded=true`, `degraded_reason="source_stale"`, `warnings[0]` explica; UI mostra faixa "catalog may be outdated" |
+| Catálogo fresco (≤ 12 h) | Serve do Postgres | `data.source="cache"`, `degraded=false` |
+| Catálogo velho (> 12 h, ingestão falhando) | Serve mesmo assim | `degraded=true`, `degraded_reason="source_stale"`, `warnings[0]` explica; UI mostra faixa "catalog may be outdated"; `search_degraded_total{reason="source_stale"}` conta a resposta |
 | skills.sh inacessível e **sem** catálogo | `503 SOURCE_UNAVAILABLE` | UI: "Data source unavailable, try again later" — **nunca** inventa resultado |
 | Provedor de LLM com timeout/erro | Ranking determinístico + explicação por template ("Top result for your request: 1.200 stars, 8.000 installs, no reported vulnerabilities") | `llm.status="unavailable"`, busca continua útil |
 | LLM devolve ids inválidos 2× | Mesmo fallback de template | `llm.status="invalid_ids"`, `flags:["explanation_fallback"]` |
 | Circuit breaker aberto (3 falhas em 60 s) | Pula a LLM por 60 s, sem tentar | `llm.status="unavailable"`, métrica `llm_fallback_total{reason="circuit_open"}` |
 
 Cache de resultado de busca: `search_hash = sha256(intent_normalizado + catalog_snapshot + limit)`; hit só dentro de 10 min — o suficiente para a demo repetida, sem mascarar mudança de catálogo.
+
+**Por que 12 h e não 6 h (issue #48):** o limiar acompanha o **ciclo do rodízio**, não a página. A ingestão vê 720 chaves a cada 6 h e o ciclo completo do cold leva **7–14 dias** (§7.3); marcar o catálogo como velho a cada ciclo puniria o rodízio funcionando. Em 12 h sobra **uma execução perdida de folga**: duas falhas seguidas (12 h sem `ok`) é sinal de que a ingestão parou, não de que a fatia daquele ciclo era pequena. `SOURCE_STALE_AFTER_MS` em `backend/src/search/constants.ts` é essa promessa; `data.age_seconds` mede o snapshot da última ingestão `ok`, nunca `ingest_run.items_seen` (que vale ~720 e não diz o tamanho do catálogo).
+
+Staleness também é métrica (§9.1): `catalog_snapshot_age_seconds` é a idade que a última busca ou replay viu, e `search_degraded_total{reason}` conta as respostas degradadas pelo motivo do contrato — nenhum label de alta cardinalidade (`search_id`, query) entra ali.
 
 ### 7.5 `SKILL.md`
 
@@ -611,6 +615,8 @@ Instrumentação na primeira versão (não depois): sem isso, C7 (5%) vira traba
 | `http_requests_total` | counter | `route`, `method`, `status` | Requisições (exigência §3.6 do edital) |
 | `http_request_duration_seconds` | histogram | `route`, `method` | p95 do endpoint — tempo de resposta |
 | `search_requests_total` | counter | `result` (`ok`,`empty`,`degraded`,`error`) | Volume e qualidade da busca |
+| `search_degraded_total` | counter | `reason` (`source_stale`,`llm_unavailable`) | Por que a resposta degradou — distingue catálogo velho de LLM fora do ar (#48) |
+| `catalog_snapshot_age_seconds` | gauge | — | Idade do snapshot vista pela última busca; envelhece junto com `data.age_seconds` e dispara `source_stale` acima de 12 h (#48) |
 | `search_stage_duration_seconds` | histogram | `stage` (`validate`,`intent`,`retrieve`,`rank`,`explain`,`total`) | Mostra onde o tempo vai (LLM vs banco) |
 | `search_results_count` | histogram | — | Distribuição de resultados por busca |
 | `llm_calls_total` | counter | `status` (`ok`,`timeout`,`http_error`,`invalid_json`,`invalid_ids`) | Saúde do provedor |

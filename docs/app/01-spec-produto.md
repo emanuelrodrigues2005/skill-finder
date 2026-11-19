@@ -125,7 +125,7 @@ Formato: `US-nn` · persona · história. Cada critério de aceitação (AC) é 
 **Como** usuário, **quero** saber quando a resposta veio pior do que o normal, **para** não confiar em dado velho ou em texto genérico.
 
 - **AC1** com o provedor de LLM indisponível (timeout, erro HTTP, orçamento estourado), a resposta é `200` com `llm.status = "unavailable"`, `degraded = true`, `degraded_reason = "llm_unavailable"` e explicações de template determinístico.
-- **AC2** com catálogo com mais de 6 h de idade, `degraded = true`, `degraded_reason = "source_stale"` e `data.age_seconds` correto; a UI mostra a faixa "Catalog may be outdated" com a idade em horas.
+- **AC2** com catálogo com mais de 12 h de idade (limiar da F2.10/D3), `degraded = true`, `degraded_reason = "source_stale"` e `data.age_seconds` correto; a UI mostra a faixa "Catalog may be outdated" com a idade em horas.
 - **AC3** sem catálogo nenhum e com o skills.sh inacessível, a resposta é `503` com `error.code = "SOURCE_UNAVAILABLE"` e a UI mostra "Data source unavailable — try again later"; a lista **não** é preenchida com dado inventado.
 - **AC4** em nenhum caso de degradação a tela mostra lista vazia sem explicação.
 
@@ -272,7 +272,7 @@ Números explícitos; cada um tem um jeito de medir.
 
 | Requisito | Alvo | Efeito |
 | --- | --- | --- |
-| Catálogo (estrelas, instalações, vulnerabilidades) | refresh a cada **6 h** | acima de 6 h → `degraded: true`, `source_stale` (US-08) |
+| Catálogo (estrelas, instalações, vulnerabilidades) | refresh a cada **6 h** | acima de 12 h → `degraded: true`, `source_stale` (US-08; limiar da F2.10/D3, alinhado ao ciclo do rodízio) |
 | Prontidão do serviço | `/readyz` reprova com catálogo acima de **24 h** | `503 NOT_READY` |
 | `SKILL.md` cacheado | **7 dias** | reduz chamadas ao GitHub/skills.sh |
 | Explicação da LLM em cache | **24 h**, chaveada por intenção + conjunto de candidatos + snapshot | corta custo de token |
