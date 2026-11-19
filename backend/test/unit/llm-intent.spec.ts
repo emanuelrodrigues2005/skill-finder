@@ -43,7 +43,7 @@ const VALID = {
 };
 
 /** O parser recebe o texto de `choices[0].message.content`, nao o objeto ja parseado. */
-function parse(payload: unknown): { intent: Intent; status: LlmStatus } {
+function parse(payload: unknown): { intent: Intent; status: LlmStatus; keywordsEn: readonly string[] } {
   const raw = typeof payload === 'string' ? payload : JSON.stringify(payload);
   return parseIntentPayload(raw, CONTEXT);
 }
@@ -198,5 +198,58 @@ describe('intent schema (docs/app/02-arquitetura.md 6.3)', () => {
 
     // `pt-BR` e um codigo valido de verdade, mas o contrato e de duas letras.
     expect(parse({ ...VALID, language: 'pt-BR' }).intent.language).toBe('other');
+  });
+
+  /**
+   * Issue #40: o `search_doc` do catalogo e indexado em ingles. A `Intent` do
+   * contrato **nao** muda — `keywords_en` e interno e sai ao lado dela, no
+   * resultado do passo —, e um payload sem ele continua `ok` (o recuperador cai
+   * na `keywords` da consulta em vez de derrubar a busca).
+   */
+  describe('english keywords for the FTS (issue #40)', () => {
+    it('carries keywords_en next to the intent, never inside it', () => {
+      const { intent, status, keywordsEn } = parse({
+        ...VALID,
+        keywords_en: ['pull request', 'security'],
+      });
+
+      expect(status).toBe('ok');
+      expect(keywordsEn).toEqual(['pull request', 'security']);
+      // O contrato publico fica intacto: sem `keywords_en` dentro da `Intent`.
+      expect(intent).not.toHaveProperty('keywords_en');
+      expect(Object.keys(intent).sort()).toEqual([
+        'category',
+        'confidence',
+        'filters',
+        'keywords',
+        'language',
+      ]);
+    });
+
+    it('falls back to the intent keywords when keywords_en is missing or empty', () => {
+      // Ausente: nao e mentira do modelo, a busca apenas usa `keywords`.
+      const absent = parse({ ...VALID, keywords: ['documentar', 'api'] });
+      expect(absent.status).toBe('ok');
+      expect(absent.keywordsEn).toEqual(['documentar', 'api']);
+
+      // Vazio: mesmo desfecho, mas o campo prometido veio em branco -> `repaired`.
+      const empty = parse({ ...VALID, keywords: ['documentar', 'api'], keywords_en: [] });
+      expect(empty.status).toBe('repaired');
+      expect(empty.keywordsEn).toEqual(['documentar', 'api']);
+    });
+
+    it('truncates keywords_en to eight terms', () => {
+      const keywordsEn = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
+      const { status, keywordsEn: parsed } = parse({ ...VALID, keywords_en: keywordsEn });
+
+      expect(status).toBe('repaired');
+      expect(parsed).toEqual(keywordsEn.slice(0, MAX_KEYWORDS));
+    });
+
+    it('drops blank terms from keywords_en instead of querying for them', () => {
+      const { keywordsEn } = parse({ ...VALID, keywords_en: ['  ', 'security', ''] });
+
+      expect(keywordsEn).toEqual(['security']);
+    });
   });
 });

@@ -68,6 +68,12 @@ describe('intent cache', () => {
     expect(first.status).toBe('ok');
     expect(second.status).toBe('cached');
     expect(second.intent).toEqual(first.intent);
+    // `keywordsEn` PRECISA sobreviver ao hit do cache. Sem isto o FTS da segunda
+    // busca idêntica volta a receber a consulta crua (em PT) contra um
+    // `search_doc` em inglês — o defeito da #40 reaparecendo em silêncio, porque
+    // `cached` não degrada e nenhum outro teste olha este campo.
+    expect(second.keywordsEn).toEqual(first.keywordsEn);
+    expect(second.keywordsEn?.length ?? 0).toBeGreaterThan(0);
     expect(scope.isDone()).toBe(true);
   });
 

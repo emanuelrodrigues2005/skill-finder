@@ -24,6 +24,7 @@ import type {
   SearchCatalogInput,
   SkillPage,
 } from './search-catalog.port';
+import { ftsTerms } from './search-catalog.port';
 import { plainSummary, skillMdExcerpt } from './skill-md';
 
 /** Colunas de `skill` que viram `SkillSummary`; o `id` fica `bigint` até a borda. */
@@ -70,19 +71,25 @@ export class PrismaSearchCatalogRepository implements SearchCatalog {
    * Candidatos por casamento textual (`search_doc`, GIN) com `ts_rank`; o nome da
    * skill entra como segunda chance porque a consulta do usuário costuma citar a
    * skill pelo nome.
+   *
+   * Duas línguas, dois parâmetros (issue #40): o `search_doc` é indexado com
+   * `to_tsvector('english', ...)`, então o `tsquery` e o `ts_rank` usam os termos
+   * **em inglês** que o passo de intenção entrega em `keywords`. Mandar a consulta
+   * crua em português para o `tsquery` era o que devolvia zero. A consulta crua
+   * continua no `ILIKE` do nome, onde o idioma do usuário é o que vale.
    */
   async search(input: SearchCatalogInput): Promise<readonly SkillSummary[]> {
-    const query = Prisma.sql`websearch_to_tsquery('english', ${input.query})`;
+    const tsQuery = Prisma.sql`websearch_to_tsquery('english', ${ftsTerms(input)})`;
     const rows = await this.prisma.$queryRaw<SkillRow[]>`
       SELECT ${SUMMARY_COLUMNS}
         FROM "skill" AS s
        WHERE s.is_active = true
          AND (${input.category}::text IS NULL OR s.category_slug = ${input.category})
          AND (
-               s.search_doc @@ ${query}
+               s.search_doc @@ ${tsQuery}
                OR s.name ILIKE '%' || ${input.query} || '%'
              )
-       ORDER BY ts_rank(s.search_doc, ${query}) DESC,
+       ORDER BY ts_rank(s.search_doc, ${tsQuery}) DESC,
                 s.installs DESC NULLS LAST,
                 s.stars DESC NULLS LAST,
                 s.id ASC

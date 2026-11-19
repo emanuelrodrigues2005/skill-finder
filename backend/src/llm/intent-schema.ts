@@ -8,6 +8,10 @@
  *   - `category` fora do catálogo do momento -> `null` + `repaired`;
  *   - `keywords` > {@link MAX_KEYWORDS} -> truncadas + `repaired`;
  *   - `keywords` vazias -> reconstruídas da própria consulta + `repaired`;
+ *   - `keywords_en` > {@link MAX_KEYWORDS} -> truncadas + `repaired`;
+ *   - `keywords_en` vazias -> caem nas `keywords` + `repaired` (issue #40: o FTS
+ *     do catálogo é inglês; sem termo em inglês a busca responde menos, nunca
+ *     deixa de responder);
  *   - `language` fora de `en`/`pt`/`other` -> `other` + `repaired`;
  *   - `confidence` < {@link MIN_CONFIDENCE} -> `low_confidence`.
  *
@@ -111,6 +115,24 @@ const STOPWORDS = new Set([
  * recuperador lexical honesto: nada é inventado quando a LLM falha. A saída
  * respeita {@link MAX_KEYWORDS} e nunca é vazia para consulta não vazia.
  */
+/**
+ * Normaliza um termo que veio do **modelo** antes de ele virar `tsquery`.
+ *
+ * `websearch_to_tsquery` interpreta sintaxe: `-x` vira `!x` (NOT), aspas viram
+ * frase e `or` vira `|`. Um termo hostil ou alucinado (`-python`, `"gateway`)
+ * portanto nao e injecao — o `tsquery` e valor, nao SQL — mas piora a consulta:
+ * `!python` impede o GIN de restringir (varredura de todo o catalogo) e uma
+ * aspa desemparelhada engole os termos seguintes, devolvendo zero em silencio.
+ *
+ * `lexicalKeywords` ja tokeniza e por isso nunca produz operador; aqui aplicamos
+ * a mesma regex ao que o modelo devolveu. O `-` que o usuario digitou na consulta
+ * continua valendo no caminho lexical — so a saida do modelo e normalizada.
+ */
+function sanitizeModelKeyword(keyword: string): string {
+  const runs = keyword.normalize('NFC').match(/[\p{L}\p{N}]+/gu) ?? [];
+  return runs.join(' ').slice(0, MAX_FIELD_CHARS);
+}
+
 export function lexicalKeywords(query: string, limit: number = MAX_KEYWORDS): string[] {
   const words =
     query
@@ -143,6 +165,10 @@ export function lexicalIntent(query: string): Intent {
 const payloadSchema = z.object({
   category: z.string().max(MAX_FIELD_CHARS).nullable().optional(),
   keywords: z.array(z.string().max(MAX_FIELD_CHARS)).optional(),
+  // Issue #40: termos em inglês para o `tsquery` do `search_doc`, que é indexado
+  // em inglês. É dica de recuperação, não contrato: sem ele a busca usa
+  // `keywords`, e por isso o campo é opcional aqui.
+  keywords_en: z.array(z.string().max(MAX_FIELD_CHARS)).optional(),
   filters: z.object({ exclude_with_vulnerabilities: z.boolean().optional() }).optional(),
   language: z.string().max(MAX_FIELD_CHARS).optional(),
   confidence: z.number().optional(),
@@ -181,12 +207,14 @@ function validate(raw: unknown): IntentPayload {
  * Valida o corpo do modelo e devolve a `Intent` já coerida com o `status` do passo.
  *
  * @param raw conteúdo de `choices[0].message.content` (cru ou cercado por ```` ```json ````).
+ * @returns a `Intent` do contrato, o `status` do passo e os `keywordsEn` — termos
+ *   em inglês para o FTS, que ficam fora da `Intent` (o contrato público não muda).
  * @throws IntentPayloadError quando o corpo não é JSON ou não bate com o schema.
  */
 export function parseIntentPayload(
   raw: unknown,
   context: IntentPayloadContext,
-): { intent: Intent; status: LlmStatus } {
+): { intent: Intent; status: LlmStatus; keywordsEn: string[] } {
   const payload = validate(parseJson(raw));
 
   let repaired = false;
@@ -205,7 +233,7 @@ export function parseIntentPayload(
 
   // Keywords: descarta vazias, trunca no teto e reconstrói da consulta se sobrar nada.
   let keywords = (payload.keywords ?? [])
-    .map((keyword) => keyword.trim())
+    .map((keyword) => sanitizeModelKeyword(keyword))
     .filter((keyword) => keyword.length > 0);
   if (keywords.length !== (payload.keywords?.length ?? 0)) {
     repaired = true;
@@ -217,6 +245,27 @@ export function parseIntentPayload(
   if (keywords.length === 0) {
     keywords = lexicalKeywords(context.query);
     repaired = true;
+  }
+
+  // Keywords em inglês (issue #40): o `search_doc` do catálogo é indexado com
+  // `to_tsvector('english', ...)`, então é esta lista que casa com ele. Mesmo
+  // teto e mesma limpeza das `keywords`; vazia (ou ausente) cai nas `keywords`
+  // da consulta — o idioma errado devolve menos, nunca derruba a busca.
+  let keywordsEn: string[] = [];
+  if (payload.keywords_en !== undefined) {
+    keywordsEn = payload.keywords_en
+      .map((keyword) => sanitizeModelKeyword(keyword))
+      .filter((keyword) => keyword.length > 0);
+    if (payload.keywords_en.length === 0 || keywordsEn.length !== payload.keywords_en.length) {
+      repaired = true;
+    }
+    if (keywordsEn.length > MAX_KEYWORDS) {
+      keywordsEn = keywordsEn.slice(0, MAX_KEYWORDS);
+      repaired = true;
+    }
+  }
+  if (keywordsEn.length === 0) {
+    keywordsEn = [...keywords];
   }
 
   // Confiança: fora de [0, 1] é limitada, não descartada.
@@ -261,5 +310,6 @@ export function parseIntentPayload(
       confidence,
     },
     status,
+    keywordsEn,
   };
 }

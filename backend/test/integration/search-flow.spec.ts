@@ -54,8 +54,8 @@ const FIXTURE_SIZE = 25;
 
 /**
  * Relógio injetado da ingestão. É **relativo** de propósito: a busca compara o
- * snapshot com `new Date()` (`SOURCE_STALE_AFTER_MS` = 6 h), então um instante
- * cravado no calendário passaria a valer `source_stale` seis horas depois de
+ * snapshot com `new Date()` (`SOURCE_STALE_AFTER_MS` = 12 h), então um instante
+ * cravado no calendário passaria a valer `source_stale` doze horas depois de
  * escrito — o teste apodreceria sozinho. Dez minutos atrás é fresco com folga e
  * não depende de espera.
  */

@@ -39,6 +39,13 @@ export interface ExplanationItem {
   readonly evidence_completeness: EvidenceCompleteness;
   /** Texto bruto com placeholders; ausente = template determinístico. */
   readonly template?: string;
+  /**
+   * `caveats` vindo do agente, **com placeholders**. Passa pelo mesmo resolvedor
+   * da explicacao: o degrau 5 do `explain-parser` preserva de proposito
+   * `{{skill:<id>}}`, e publicar o texto cru colocaria `{{...}}` na interface
+   * (achado HIGH do parecer da #42).
+   */
+  readonly caveatsTemplate?: string | null;
 }
 
 /** Resultado pronto para o `ResultItem` do contrato. */
@@ -74,18 +81,23 @@ function clamp01(value: number): number {
  *
  * Sem relógio, sem aleatoriedade e sem texto externo além do `name` — a mesma
  * entrada produz sempre a mesma frase, que é o que permite comparar execuções.
+ *
+ * O texto é **pt-BR** como o resto da interface (regra 6 do `AGENTS.md`): sem
+ * isto, a tela em português mostraria prosa em inglês. O `name` continua sendo
+ * dado da fonte e não é traduzido.
  */
 function defaultTemplate(item: ExplanationItem): string {
   const name = escapePlaceholderSyntax(item.skill.name);
   const breakdown = item.score_breakdown;
   const factors =
-    `stars ${percent(breakdown.stars)}, vulnerabilities ${percent(breakdown.vulnerabilities)}, ` +
-    `installs ${percent(breakdown.installs)}`;
+    `estrelas ${percent(breakdown.stars)}, vulnerabilidades ` +
+    `${percent(breakdown.vulnerabilities)}, instalações ${percent(breakdown.installs)}`;
 
   return breakdown.missing_fields > 0
-    ? `${name}: ${factors}. ${String(breakdown.missing_fields)} catalog field(s) are missing, ` +
-        `so the score uses neutral values and a ${percent(breakdown.penalty_factor)} penalty.`
-    : `${name}: ${factors}. Every scoring input came from the catalog snapshot.`;
+    ? `${name}: ${factors}. ${String(breakdown.missing_fields)} campo(s) do catálogo estão ` +
+        `ausentes, então o score usa valores neutros e uma penalidade de ` +
+        `${percent(breakdown.penalty_factor)}.`
+    : `${name}: ${factors}. Todos os dados do score vieram do snapshot do catálogo.`;
 }
 
 /**
@@ -100,8 +112,8 @@ function caveatsFor(item: ExplanationItem): string | null {
     return null;
   }
   const text =
-    `${String(missing)} catalog field(s) missing for this skill; the score uses neutral ` +
-    'values and the interface shows n/a instead of zero.';
+    `${String(missing)} campo(s) do catálogo ausente(s) para esta skill; o score usa valores ` +
+    'neutros e a interface mostra n/a em vez de zero.';
   return text.slice(0, MAX_CAVEATS_CHARS);
 }
 
@@ -187,10 +199,22 @@ export function explainItem(
   // interface: cai no template determinístico, ainda sinalizado como reparado.
   const body = text.length > 0 ? text : collapseSpaces(defaultTemplate(item));
 
+  // `caveats` do agente passa pelo mesmo resolvedor da explicacao: o degrau 5
+  // preserva `{{skill:<id>}}` de proposito, e publicar cru colocaria `{{...}}`
+  // na tela (achado HIGH do parecer da #42).
+  const rawCaveats = item.caveatsTemplate?.trim();
+  const resolvedCaveats =
+    rawCaveats === undefined || rawCaveats.length === 0
+      ? null
+      : resolvePlaceholders(rawCaveats, known);
+
   return {
     explanation: truncate(body, MAX_EXPLANATION_CHARS),
     flags: repaired ? [EXPLANATION_REPAIRED_FLAG] : [],
-    caveats: caveatsFor(item),
+    caveats:
+      resolvedCaveats !== null && resolvedCaveats.text.length > 0
+        ? truncate(resolvedCaveats.text, MAX_CAVEATS_CHARS)
+        : caveatsFor(item),
   };
 }
 
@@ -213,12 +237,12 @@ export function recommend(items: readonly ExplanationItem[]): Recommendation | n
   const breakdown = first.score_breakdown;
   const reason =
     breakdown.missing_fields > 0
-      ? 'it leads the deterministic ranking, with a penalty for the missing catalog fields'
-      : 'it leads the deterministic ranking on stars, vulnerabilities and installs';
+      ? 'lidera o ranking determinístico, com penalidade pelos campos do catálogo ausentes'
+      : 'lidera o ranking determinístico em estrelas, vulnerabilidades e instalações';
 
   const known = new Map(items.map((item) => [item.skill.skill_id, item.skill.name]));
   const { text } = resolvePlaceholders(
-    `${escapePlaceholderSyntax(first.skill.name)} is the best match for this search: ${reason}.`,
+    `${escapePlaceholderSyntax(first.skill.name)} é a melhor correspondência para esta busca: ${reason}.`,
     known,
   );
 

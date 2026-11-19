@@ -53,23 +53,45 @@ export interface DocumentRecord {
   readonly skill_md_excerpt: string | null;
 }
 
-/** Página de listagem; `has_more` decide se o orquestrador pede a próxima. */
-export interface CatalogPage {
-  readonly items: SkillRecord[];
-  readonly page: number;
-  readonly has_more: boolean;
-}
-
 /** O que a fonte sabe entregar — lido antes de qualquer chamada, nunca inferido. */
 export interface SkillSourceCapabilities {
   readonly supports_categories: boolean;
   readonly supports_documents: boolean;
 }
 
-/** Porta da fonte externa (skills.sh ou fixture). */
+/**
+ * Porta da fonte externa (skills.sh ou fixture).
+ *
+ * **A fonte não pagina** (#46): não existe listagem paginada, não há
+ * `pagination_style` e a aquisição é sempre por chave. O que há é a enumeração
+ * de chaves (`listKeys`) e o detalhe por chave (`fetchSkills`).
+ */
 export interface SkillSource {
   readonly capabilities: SkillSourceCapabilities;
   listCategories(): Promise<CategoryRecord[]>;
-  fetchCatalog(page: number): Promise<CatalogPage>;
+  /**
+   * Skills conhecidas para as chaves pedidas, na ordem pedida — a unidade do
+   * rodízio (§7.3), que escolhe até 720 `source_key` por ciclo e pede
+   * exatamente essas. O skills.sh não publica listagem paginada (só sitemap +
+   * página de detalhe), então a chave é a única unidade honesta de aquisição.
+   *
+   * Contrato: devolve **só** as chaves conhecidas, com a repetida aparecendo
+   * uma vez (na primeira posição pedida). Chave desconhecida é ausência, não
+   * erro: é omitida e **nunca lança** por causa dela — uma chave que sumiu da
+   * fonte, ou que veio corrompida, não pode derrubar o ciclo de ingestão.
+   */
+  fetchSkills(keys: readonly string[]): Promise<SkillRecord[]>;
+  /**
+   * As chaves que a fonte conhece, para o **primeiro** ciclo (§7.3): com o
+   * catálogo vazio não há linha para o rodízio selecionar, e sem enumeração o
+   * rodízio nunca começaria. É a única leitura que não vem de `source_key`
+   * conhecido — por isso ela não entrega registros, só chaves: quem busca o
+   * detalhe continua sendo `fetchSkills(keys)`, respeitando o limitador.
+   *
+   * Enumeração, não paginação: o adaptador `html` devolve as chaves do
+   * `sitemap.xml`, e o chamador corta no teto do ciclo (`CYCLE_SLOTS`). Pode
+   * lançar — sitemap fora do ar é falha do run, não "catálogo vazio".
+   */
+  listKeys(): Promise<string[]>;
   fetchDocument(sourceKey: string): Promise<DocumentRecord | null>;
 }

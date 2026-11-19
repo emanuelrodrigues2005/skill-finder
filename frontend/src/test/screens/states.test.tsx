@@ -64,10 +64,10 @@ describe("estados por tela", () => {
 
     renderAt("/");
 
-    expect(screen.getByText("Loading categories…")).toBeVisible();
+    expect(screen.getByText("Carregando categorias…")).toBeVisible();
     // O select chega depois; esperar o fim evita deixar requisição pendente para o próximo teste.
     await expect(screen.findByRole("option", { name: "Documents" })).resolves.toBeInTheDocument();
-    expect(screen.queryByText("Loading categories…")).toBeNull();
+    expect(screen.queryByText("Carregando categorias…")).toBeNull();
   });
 
   it("Search: shows the empty state when the catalog has no categories", async () => {
@@ -78,7 +78,7 @@ describe("estados por tela", () => {
     renderAt("/");
 
     expect(
-      await screen.findByText("no categories available — you can still search without one"),
+      await screen.findByText("nenhuma categoria disponível — você ainda pode buscar sem uma"),
     ).toBeVisible();
   });
 
@@ -87,8 +87,8 @@ describe("estados por tela", () => {
 
     renderAt(PERMALINK);
 
-    expect(screen.getByText("Searching…")).toBeVisible();
-    await expect(screen.findByRole("heading", { name: "Results" })).resolves.toBeVisible();
+    expect(screen.getByText("Buscando…")).toBeVisible();
+    await expect(screen.findByRole("heading", { name: "Resultados" })).resolves.toBeVisible();
   });
 
   it("Detail: shows the loading state while the skill is on its way", async () => {
@@ -117,7 +117,7 @@ describe("estados por tela", () => {
 
     renderAt("/skills/skl_pdf_extract");
 
-    expect(screen.getByText("Loading skill…")).toBeVisible();
+    expect(screen.getByText("Carregando skill…")).toBeVisible();
     await expect(screen.findByRole("heading", { name: "pdf-extract" })).resolves.toBeVisible();
   });
 
@@ -132,12 +132,12 @@ describe("estados por tela", () => {
     renderAt({ pathname: "/results", search: `?search=${REQUEST_ID}`, state: { response: searchResponse } });
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Too many searches. Try again in 30 seconds.");
+    expect(alert).toHaveTextContent("Muitas buscas. Tente de novo em 30 segundos.");
     expect(alert).toHaveTextContent("RATE_LIMITED");
     // O resultado anterior continua na tela — o 429 não troca a lista por uma tela de erro.
     expect(screen.getByText("1. pdf-extract")).toBeVisible();
     expect(screen.getByText("2. table-reader")).toBeVisible();
-    expect(screen.queryByText("Something went wrong")).toBeNull();
+    expect(screen.queryByText("Algo deu errado")).toBeNull();
   });
 
   it("Results: the empty state offers the three actions of US-07", async () => {
@@ -145,12 +145,14 @@ describe("estados por tela", () => {
 
     renderAt(PERMALINK);
 
-    expect(await screen.findByRole("link", { name: "Remove the category filter" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "Simplify the description" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "extract tables from a pdf" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "summarise a changelog" })).toBeVisible();
+    expect(
+      await screen.findByRole("link", { name: "Remover o filtro de categoria" }),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: "Simplificar a descrição" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "extrair tabelas de um pdf" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "resumir um changelog" })).toBeVisible();
     // O vazio continua explicado, não é só uma caixa com links.
-    expect(screen.getByText(/no skills matched — try broader wording/)).toBeVisible();
+    expect(screen.getByText(/nenhuma skill correspondeu — tente palavras mais amplas/)).toBeVisible();
     // A tela de resultados não ganha uma segunda lista: quem é `list` é a lista de resultados.
     expect(screen.queryByRole("list")).toBeNull();
   });
@@ -163,26 +165,26 @@ describe("estados por tela", () => {
     serveReplay(emptySearchResponse);
 
     renderAt(PERMALINK);
-    fireEvent.click(await screen.findByRole("link", { name: "Remove the category filter" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Remover o filtro de categoria" }));
 
     expect(currentLocation()).toBe("/");
     // O texto volta do rascunho; só a categoria foi removida.
-    expect(await screen.findByLabelText(/what do you need the skill to do/i)).toHaveValue(
+    expect(await screen.findByLabelText(/o que você precisa que a skill faça/i)).toHaveValue(
       "extract tables from a pdf",
     );
     await expect(screen.findByRole("option", { name: "Documents" })).resolves.toBeInTheDocument();
-    expect(screen.getByLabelText(/category \(optional\)/i)).toHaveValue("");
+    expect(screen.getByLabelText(/categoria \(opcional\)/i)).toHaveValue("");
   });
 
   it("Results: an example query fills the search box", async () => {
     serveReplay(emptySearchResponse);
 
     renderAt(PERMALINK);
-    fireEvent.click(await screen.findByRole("link", { name: "summarise a changelog" }));
+    fireEvent.click(await screen.findByRole("link", { name: "resumir um changelog" }));
 
     expect(currentLocation()).toBe("/");
-    expect(await screen.findByLabelText(/what do you need the skill to do/i)).toHaveValue(
-      "summarise a changelog",
+    expect(await screen.findByLabelText(/o que você precisa que a skill faça/i)).toHaveValue(
+      "resumir um changelog",
     );
   });
 
@@ -191,9 +193,9 @@ describe("estados por tela", () => {
 
     renderAt(PERMALINK);
 
-    const region = await screen.findByRole("region", { name: "Results" });
+    const region = await screen.findByRole("region", { name: "Resultados" });
     // O `<ol>` de resultados é o único `list` com nome; os `<ul>` de razões dos cartões não têm.
-    expect(within(region).getByRole("list", { name: "Results" })).toHaveAttribute(
+    expect(within(region).getByRole("list", { name: "Resultados" })).toHaveAttribute(
       "aria-live",
       "polite",
     );

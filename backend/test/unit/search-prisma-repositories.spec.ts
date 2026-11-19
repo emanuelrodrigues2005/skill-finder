@@ -145,7 +145,12 @@ describe('PrismaSearchCatalogRepository — recuperação', () => {
     const { prisma, repo } = catalog();
     prisma.queryRows = [row({ id: 7n })];
 
-    const found = await repo.search({ query: 'find skills', category: null, limit: 5 });
+    const found = await repo.search({
+      query: 'find skills',
+      keywords: ['find', 'skills'],
+      category: null,
+      limit: 5,
+    });
     const [item] = found;
 
     expect(found).toHaveLength(1);
@@ -156,6 +161,45 @@ describe('PrismaSearchCatalogRepository — recuperação', () => {
     expect(prisma.calls).toHaveLength(1);
     expect(prisma.calls[0]?.sql).toContain('search_doc @@');
     expect(prisma.calls[0]?.values).toContain('find skills');
+  });
+
+  /**
+   * Issue #40: `search_doc` é indexado com `to_tsvector('english', ...)`, então
+   * uma consulta em português só casa depois de traduzida — é para isso que o
+   * passo de intenção entrega `keywords_en`. A consulta crua continua servindo
+   * **só** ao `name ILIKE` (o nome pode estar no idioma do usuário).
+   */
+  it('queries the FTS with the english keywords and keeps the raw query for ILIKE', async () => {
+    const { prisma, repo } = catalog();
+    prisma.queryRows = [row()];
+    const query = 'quero uma skill para documentar uma api em portugues';
+
+    await repo.search({ query, keywords: ['document', 'api'], category: null, limit: 5 });
+
+    const sql = prisma.calls[0]?.sql ?? '';
+    const values = prisma.calls[0]?.values ?? [];
+
+    // O `tsquery` e o `ts_rank` falam a mesma expressão, e é a inglesa: o
+    // fragmento aparece duas vezes (no `@@` e no `ts_rank`).
+    expect(sql).toContain("websearch_to_tsquery('english'");
+    expect(sql).toContain('ts_rank(s.search_doc');
+    expect(values.filter((value) => value === 'document api')).toHaveLength(2);
+    // A consulta crua aparece uma vez só: no `ILIKE` do nome.
+    expect(values.filter((value) => value === query)).toHaveLength(1);
+    expect(sql).toContain("s.name ILIKE '%' ||");
+  });
+
+  it('falls back to the raw query when the intent brought no english keyword', async () => {
+    const { prisma, repo } = catalog();
+    prisma.queryRows = [];
+
+    // Sem `keywords_en` a busca continua funcionando (nunca derruba a busca):
+    // o `tsquery` recebe a consulta crua, como antes da issue #40.
+    await repo.search({ query: 'find skills', keywords: [], category: null, limit: 5 });
+
+    const values = prisma.calls[0]?.values ?? [];
+    // Duas ocorrências no `tsquery` (`@@` + `ts_rank`) e uma no `ILIKE`.
+    expect(values.filter((value) => value === 'find skills')).toHaveLength(3);
   });
 
   it('does not query the database for an empty id set', async () => {

@@ -29,6 +29,14 @@ export interface Llm {
   model: string | null;
   cached: boolean;
   tokens: LlmTokens | null;
+  /**
+   * Desfecho do passo de explicacao (issue #42). `null` = nao tentado
+   * (replay, LLM desligada, confianca baixa). O contrato o marca como
+   * `required` + `nullable` desde a #39; sem ele o cliente gerado do
+   * `openapi.yaml` recebia um corpo invalido e a tela nao distinguia
+   * prosa do agente de texto de template.
+   */
+  explain_status: LlmStatus | null;
 }
 
 export type DegradedReason = "source_stale" | "llm_unavailable";

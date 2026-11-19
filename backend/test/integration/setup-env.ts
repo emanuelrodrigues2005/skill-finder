@@ -18,3 +18,12 @@ const url = testDatabaseUrl();
 
 process.env.TEST_DATABASE_URL = url;
 process.env.DATABASE_URL = url;
+
+/**
+ * Piso de tempo deste nivel, em ms.
+ *
+ * Os hooks fazem I/O de banco (`truncateAll`, migrations) e ja estouraram 5 s
+ * uma vez sob carga paralela, reprovando o CI por espera, nao por defeito.
+ * `testTimeout` da config tambem vale para hooks; este valor e o cinto.
+ */
+jest.setTimeout(60_000);

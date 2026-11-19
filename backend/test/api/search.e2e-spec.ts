@@ -116,6 +116,17 @@ function freshSnapshot(): Date {
 }
 
 /**
+ * Valor de uma série de `/metrics` (exposition format do Prometheus).
+ *
+ * `NaN` quando a série não existe: é o que distingue "contador em zero" de
+ * "métrica ausente" — a diferença que a issue #48 precisa provar.
+ */
+function metricValue(text: string, series: string): number {
+  const line = text.split('\n').find((candidate) => candidate.startsWith(`${series} `));
+  return line === undefined ? Number.NaN : Number(line.slice(series.length + 1));
+}
+
+/**
  * Porta do catálogo em memória. `SkillSummary.skill_id` já sai no formato
  * público; `findByIds`/`detail` falam a língua do banco (`bigint`), como o
  * adaptador Postgres fará.
@@ -247,7 +258,7 @@ describe('search endpoints (e2e)', () => {
   it('does not warn source_stale for a fresh snapshot, even with the LLM disabled', async () => {
     const response = await postSearch({ query: OK_QUERY }).expect(200);
 
-    expect(response.body.data.age_seconds).toBeLessThan(6 * 3600);
+    expect(response.body.data.age_seconds).toBeLessThan(12 * 3600);
     expect(response.body.data.degraded).toBe(true);
     expect(response.body.data.degraded_reason).toBe('llm_unavailable');
     expect(response.body.warnings).not.toContain('source_stale');
@@ -264,11 +275,31 @@ describe('search endpoints (e2e)', () => {
     // não pode aparecer é "catálogo velho" com snapshot fresco.
     expect(fresh.body.data.degraded_reason).toBe('llm_unavailable');
 
-    catalog.snapshotAt = new Date(Date.now() - 7 * HOUR_MS);
+    catalog.snapshotAt = new Date(Date.now() - 13 * HOUR_MS);
     const stale = await get(`/api/v1/searches/${requestId}`).expect(200);
     expect(stale.body.warnings).toContain('source_stale');
     expect(stale.body.data.degraded_reason).toBe('source_stale');
-    expect(stale.body.data.age_seconds).toBeGreaterThanOrEqual(7 * 3600 - 60);
+    expect(stale.body.data.age_seconds).toBeGreaterThanOrEqual(13 * 3600 - 60);
+  });
+
+  /**
+   * Issue #48: o limiar de `source_stale` segue o ciclo do rodízio (12 h = duas
+   * execuções de 6 h), não a fatia da página. 10 h ainda é o ciclo anterior;
+   * 13 h é uma execução perdida.
+   */
+  it('serves a 10-hour-old snapshot as fresh and degrades only past 12 h (#48)', async () => {
+    catalog.snapshotAt = new Date(Date.now() - 10 * HOUR_MS);
+    const fresh = await postSearch({ query: OK_QUERY }).expect(200);
+    // `llm_unavailable` continua: o LLM_ENABLED=false do CI não é catálogo velho.
+    expect(fresh.body.data.degraded_reason).toBe('llm_unavailable');
+    expect(fresh.body.data.age_seconds).toBeGreaterThanOrEqual(10 * 3600 - 60);
+    expect(fresh.body.warnings).not.toContain('source_stale');
+
+    catalog.snapshotAt = new Date(Date.now() - 13 * HOUR_MS);
+    const stale = await postSearch({ query: OK_QUERY }).expect(200);
+    expect(stale.body.data.degraded).toBe(true);
+    expect(stale.body.data.degraded_reason).toBe('source_stale');
+    expect(stale.body.warnings).toContain('source_stale');
   });
 
   it('rejects an out-of-range page with 422 instead of a 500 from the offset (issue #10)', async () => {
@@ -406,6 +437,23 @@ describe('search endpoints (e2e)', () => {
     expect(malformed.body.error.code).toBe('NOT_FOUND');
   });
 
+  /**
+   * Issue #42: com `LLM_ENABLED=false` o passo 7 **não é tentado** — `explain_status`
+   * vem `null` (ausência, não falha) e o texto sai do template determinístico.
+   * Este é o modo degradado de dev/CI (regra 5 do AGENTS.md).
+   */
+  it('answers explain_status null and the template when the LLM is disabled (issue #42)', async () => {
+    const response = await postSearch({ query: OK_QUERY }).expect(200);
+
+    expect(response.body.llm.status).toBe('disabled');
+    expect(response.body.llm.explain_status).toBeNull();
+    expect(response.body.warnings).toContain('explanation_from_template');
+    for (const item of response.body.results as ResultItem[]) {
+      expect(item.explanation.trim().length).toBeGreaterThan(0);
+      expect(item.explanation).not.toContain('{{');
+    }
+  });
+
   it('replays a stored search in the same order with llm.cached=true (D-D)', async () => {
     const created = await postSearch({ query: OK_QUERY }).expect(200);
     const requestId = created.body.request_id as string;
@@ -421,6 +469,8 @@ describe('search endpoints (e2e)', () => {
     expect(replay.body.llm.cached).toBe(true);
     expect(replay.body.llm.model).toBeNull();
     expect(replay.body.llm.tokens).toBeNull();
+    // Issue #42: o replay não tenta o passo 7 — nenhum provedor é chamado.
+    expect(replay.body.llm.explain_status).toBeNull();
   });
 
   it('answers 404 for an unknown permalink and 410 for one past the 30-day retention', async () => {
@@ -554,5 +604,34 @@ describe('search endpoints (e2e)', () => {
     const metrics = await get('/metrics').expect(200);
 
     expect(metrics.text).toContain('llm_calls_total{status="disabled"}');
+  });
+
+  /**
+   * Issue #48: staleness tem métrica própria. O gauge sem labels é a idade que a
+   * última resposta viu — `SEARCH_WARNINGS.source_stale` sem número não diz se o
+   * catálogo está duas horas ou dois dias velho. O contador é por motivo do
+   * contrato (`DEGRADED_REASONS`), não por query: nenhum label de alta
+   * cardinalidade entra em `/metrics`.
+   */
+  it('/metrics exposes catalog staleness: snapshot age and degraded responses by reason (#48)', async () => {
+    catalog.snapshotAt = new Date(Date.now() - 13 * HOUR_MS);
+
+    await postSearch({ query: OK_QUERY }).expect(200);
+
+    const metrics = await get('/metrics').expect(200);
+
+    expect(metrics.text).toMatch(/^catalog_snapshot_age_seconds /m);
+    expect(metricValue(metrics.text, 'catalog_snapshot_age_seconds')).toBeGreaterThanOrEqual(
+      13 * 3600 - 60,
+    );
+
+    // A série existe desde o boot em zero (como `llm_calls_total`), então o
+    // `grep` de `/metrics` a vê mesmo antes da primeira resposta degradada.
+    expect(
+      metricValue(metrics.text, 'search_degraded_total{reason="source_stale"}'),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      metricValue(metrics.text, 'search_degraded_total{reason="llm_unavailable"}'),
+    ).toBeGreaterThanOrEqual(0);
   });
 });

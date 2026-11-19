@@ -40,7 +40,7 @@ function catalog(seed: Partial<InMemoryCatalogSeed> & { skills: readonly SkillSu
 
 /** Busca com o mínimo preenchido: o resto é `null`/limite alto. */
 function searchInput(overrides: Partial<Parameters<InMemorySearchCatalog['search']>[0]> = {}) {
-  return { query: '', category: null, limit: 100, ...overrides };
+  return { query: '', keywords: [], category: null, limit: 100, ...overrides };
 }
 
 describe('InMemorySearchCatalog — search (match lexical)', () => {
@@ -89,6 +89,33 @@ describe('InMemorySearchCatalog — search (match lexical)', () => {
 
   it('answers an empty list when nothing matches', async () => {
     expect(await catalog({ skills }).search(searchInput({ query: 'kubernetes' }))).toEqual([]);
+  });
+});
+
+/**
+ * Issue #40: o duplo imita a recuperação real — `search_doc` é inglês e a
+ * consulta chega em português. Os termos que casam são os `keywords` em inglês
+ * que o passo de intenção entrega; a consulta crua só serve ao `name ILIKE`.
+ */
+describe('InMemorySearchCatalog — consulta em português, nome em inglês (issue #40)', () => {
+  const skills = [
+    skill(1n, { name: 'documentation-writer' }),
+    skill(2n, { name: 'pr-hygiene' }),
+  ];
+  const query = 'quero uma skill para documentar uma api em portugues';
+
+  it('finds nothing when only the raw query is available', async () => {
+    const found = await catalog({ skills }).search(searchInput({ query, keywords: [] }));
+
+    expect(found).toEqual([]);
+  });
+
+  it('matches the english name through the intent keywords', async () => {
+    const found = await catalog({ skills }).search(
+      searchInput({ query, keywords: ['document', 'api'] }),
+    );
+
+    expect(found.map((item) => item.name)).toEqual(['documentation-writer']);
   });
 });
 

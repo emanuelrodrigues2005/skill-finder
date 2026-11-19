@@ -20,7 +20,7 @@
 6. **Proposta de valor:** descrever a necessidade em linguagem natural e receber, em segundos, uma **lista curta, ordenada e explicada**, com a mais adequada destacada.
 7. A ordem é **determinística e auditável** (estrelas, vulnerabilidades, instalações); a LLM interpreta o pedido e escreve o **porquê** — ela não escolhe a ordem.
 8. O produto **não instala** a skill: ele decide *qual* instalar. O link para a origem acompanha cada resultado.
-9. Interface em **inglês** (público do site e da banca); documentação do projeto em **português**.
+9. Interface em **português do Brasil (pt-BR)**; documentação do projeto em **português**.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ### 3.1 Fluxo A — busca livre
 
-1. A pessoa abre a página inicial: campo de texto ("Describe what you need the skill to do"), seletor de categoria em `All categories`, botão **Search**.
+1. A pessoa abre a página inicial: campo de texto ("Descreva o que a skill precisa fazer"), seletor de categoria em `Todas as categorias`, botão **Buscar**.
 2. Digita a necessidade em linguagem natural (inglês ou português) e envia.
 3. Vê o estado de carregamento; a resposta traz a **intenção interpretada** (categoria detectada + palavras-chave) e até 5 resultados ordenados.
 4. O primeiro item vem destacado como **Recommended**, com a explicação e os números.
@@ -125,7 +125,7 @@ Formato: `US-nn` · persona · história. Cada critério de aceitação (AC) é 
 **Como** usuário, **quero** saber quando a resposta veio pior do que o normal, **para** não confiar em dado velho ou em texto genérico.
 
 - **AC1** com o provedor de LLM indisponível (timeout, erro HTTP, orçamento estourado), a resposta é `200` com `llm.status = "unavailable"`, `degraded = true`, `degraded_reason = "llm_unavailable"` e explicações de template determinístico.
-- **AC2** com catálogo com mais de 6 h de idade, `degraded = true`, `degraded_reason = "source_stale"` e `data.age_seconds` correto; a UI mostra a faixa "Catalog may be outdated" com a idade em horas.
+- **AC2** com catálogo com mais de 12 h de idade (limiar da F2.10/D3), `degraded = true`, `degraded_reason = "source_stale"` e `data.age_seconds` correto; a UI mostra a faixa "Catalog may be outdated" com a idade em horas.
 - **AC3** sem catálogo nenhum e com o skills.sh inacessível, a resposta é `503` com `error.code = "SOURCE_UNAVAILABLE"` e a UI mostra "Data source unavailable — try again later"; a lista **não** é preenchida com dado inventado.
 - **AC4** em nenhum caso de degradação a tela mostra lista vazia sem explicação.
 
@@ -272,7 +272,7 @@ Números explícitos; cada um tem um jeito de medir.
 
 | Requisito | Alvo | Efeito |
 | --- | --- | --- |
-| Catálogo (estrelas, instalações, vulnerabilidades) | refresh a cada **6 h** | acima de 6 h → `degraded: true`, `source_stale` (US-08) |
+| Catálogo (estrelas, instalações, vulnerabilidades) | refresh a cada **6 h** | acima de 12 h → `degraded: true`, `source_stale` (US-08; limiar da F2.10/D3, alinhado ao ciclo do rodízio) |
 | Prontidão do serviço | `/readyz` reprova com catálogo acima de **24 h** | `503 NOT_READY` |
 | `SKILL.md` cacheado | **7 dias** | reduz chamadas ao GitHub/skills.sh |
 | Explicação da LLM em cache | **24 h**, chaveada por intenção + conjunto de candidatos + snapshot | corta custo de token |
@@ -312,9 +312,10 @@ Números explícitos; cada um tem um jeito de medir.
 
 | Requisito | Regra |
 | --- | --- |
-| Idioma da interface | **inglês** em todos os rótulos, mensagens de erro e estados vazios |
+| Idioma da interface | **português do Brasil (pt-BR)** em todos os rótulos, mensagens de erro e estados vazios |
 | Idioma da documentação | **português do Brasil** |
-| Consulta aceita | inglês e português (a intenção é interpretada; a resposta é sempre em inglês) |
+| Consulta aceita | inglês e português (a intenção é interpretada; a resposta é sempre em pt-BR) |
+| Texto da fonte | `name`, `summary`, `SKILL.md` e o rótulo de categoria vêm do catálogo e são exibidos **como publicados** (em inglês); não há tradução |
 | Estados obrigatórios por tela | carregando, erro, vazio, sucesso — nenhuma tela "em branco" |
 | Acessibilidade mínima | navegação por teclado no formulário e nos resultados, foco visível, contraste legível |
 | Voltar do detalhe | preserva a última busca e a posição de rolagem |
@@ -349,7 +350,7 @@ Números explícitos; cada um tem um jeito de medir.
 | **Login / contas de usuário** | O produto é consulta pública e não guarda dado pessoal além de `client_hash`; conta adicionaria senha, sessão, JWT e recuperação de senha — esforço alto, valor zero para o problema descrito. Histórico funciona sem identidade (US-10) |
 | **Upload de `SKILL.md` ou de skill própria** | O app é de **descoberta**, não de publicação; upload exige moderação, antivírus e storage de objeto — nada disso está no problema |
 | **Busca por embeddings / vetorial** | Sem evidência de que a busca lexical (`tsvector` + `pg_trgm`) com palavras-chave geradas pela LLM deixe a desejar; embeddings trazem custo por token, dependência de modelo e reindexação. Vira ADR novo se a avaliação com ≥ 20 consultas reais mostrar item relevante fora do top-5 (`02` ADR-002) |
-| **i18n da interface (PT/EN)** | Rótulos em inglês são o público do site e da banca; dois idiomas significam dois conjuntos de strings, dois testes de tela e revisão dupla, sem ganho de nota. Documentação em português cobre o requisito acadêmico |
+| **i18n da interface (PT/EN)** | A interface é **só em pt-BR**; "i18n" aqui significa um **toggle de idioma ou uma segunda locale** — dois conjuntos de strings, dois testes de tela e revisão dupla, sem ganho de nota. Uma locale só, decidida (pt-BR), atende o público da banca e a documentação em português |
 | **Instalar/executar a skill** | O produto termina na decisão de *qual* adotar; execução é responsabilidade do agente do usuário. Escopo diferente, risco de segurança muito maior |
 | **Reviews e notas próprias de usuário** | A avaliação é a do GitHub (estrelas), fonte já disponível; reviews exigiriam moderação e identidade, incompatíveis com "sem login" |
 | **Comparação lado a lado de 2+ skills** | O ranking já entrega a ordem e a explicação; a comparação dedicada é polimento de UI, candidata a pós-v1 |

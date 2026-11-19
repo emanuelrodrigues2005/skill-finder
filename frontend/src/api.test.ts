@@ -34,28 +34,28 @@ function stubFetch(response: Response) {
 
 describe("messageForCode", () => {
   it("maps a contract code to its own message", () => {
-    expect(messageForCode("NOT_FOUND")).toBe("We could not find what you asked for.");
-    expect(messageForCode("SOURCE_UNAVAILABLE")).toBe("Data source unavailable — try again later.");
-  });
-
-  it("falls back to the generic message for a code the UI does not know", () => {
-    expect(messageForCode("SOMETHING_NEW_FROM_THE_SERVER")).toBe(
-      "Something went wrong. Please try again.",
+    expect(messageForCode("NOT_FOUND")).toBe("Não encontramos o que você pediu.");
+    expect(messageForCode("SOURCE_UNAVAILABLE")).toBe(
+      "Fonte de dados indisponível — tente de novo mais tarde.",
     );
   });
 
+  it("falls back to the generic message for a code the UI does not know", () => {
+    expect(messageForCode("SOMETHING_NEW_FROM_THE_SERVER")).toBe("Algo deu errado. Tente de novo.");
+  });
+
   it("appends the retry delay only for RATE_LIMITED with a positive value", () => {
-    expect(messageForCode("RATE_LIMITED", 30)).toBe("Too many searches. Try again in 30 seconds.");
-    expect(messageForCode("RATE_LIMITED", 1)).toBe("Too many searches. Try again in 1 second.");
-    expect(messageForCode("RATE_LIMITED", 0)).toBe("Too many searches.");
-    expect(messageForCode("RATE_LIMITED", null)).toBe("Too many searches.");
+    expect(messageForCode("RATE_LIMITED", 30)).toBe("Muitas buscas. Tente de novo em 30 segundos.");
+    expect(messageForCode("RATE_LIMITED", 1)).toBe("Muitas buscas. Tente de novo em 1 segundo.");
+    expect(messageForCode("RATE_LIMITED", 0)).toBe("Muitas buscas.");
+    expect(messageForCode("RATE_LIMITED", null)).toBe("Muitas buscas.");
   });
 });
 
 describe("describeApiError", () => {
   it("returns the generic message and a null code for a non-ApiError failure", () => {
     expect(describeApiError(new TypeError("Failed to fetch"))).toEqual({
-      message: "Something went wrong. Please try again.",
+      message: "Algo deu errado. Tente de novo.",
       code: null,
     });
   });
@@ -70,7 +70,7 @@ describe("describeApiError", () => {
     });
 
     expect(describeApiError(error)).toEqual({
-      message: "That category does not exist. Pick one from the list.",
+      message: "Essa categoria não existe. Escolha uma da lista.",
       code: "UNKNOWN_CATEGORY",
     });
   });
@@ -95,7 +95,10 @@ describe("describeApiError", () => {
     });
 
     const described = describeApiError(error);
-    expect(described).toEqual({ message: "Something went wrong on our side. Try again.", code: "INTERNAL" });
+    expect(described).toEqual({
+      message: "Algo deu errado do nosso lado. Tente de novo.",
+      code: "INTERNAL",
+    });
     expect(described.message).not.toContain("stack trace");
   });
 });

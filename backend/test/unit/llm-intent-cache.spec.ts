@@ -78,17 +78,38 @@ describe('sha256Hex', () => {
 });
 
 describe('intentCacheKey — forma documentada da chave (§6.3)', () => {
-  it('is sha256 of kind|prompt_version|model|query|categories|-', () => {
+  it('is sha256 of kind|prompt_version|model|query|categories|snapshot|candidates', () => {
+    // Dois slots novos (achado HIGH do parecer da #41): `catalogSnapshot` e
+    // `candidates`. O primeiro impede servir prosa com numeros vencidos; o
+    // segundo entra SEM ordenar, porque a posicao e parte da resposta.
     const expected = createHash('sha256')
       .update(
-        ['intent', 'v1', 'deepseek-v4.1-flash', 'review python pull requests for security', 'backend,security', '-'].join(
-          '|',
-        ),
+        [
+          'intent',
+          'v1',
+          'deepseek-v4.1-flash',
+          'review python pull requests for security',
+          'backend,security',
+          '-',
+          '',
+        ].join('|'),
         'utf8',
       )
       .digest('hex');
 
     expect(intentCacheKey(parts())).toBe(expected);
+  });
+
+  it('separates two candidate orders and two catalog snapshots', () => {
+    const ordered = intentCacheKey(parts({ candidates: ['sk_a', 'sk_b'] }));
+    const reversed = intentCacheKey(parts({ candidates: ['sk_b', 'sk_a'] }));
+    // Sem `sort` em `candidates`: a recomendacao e o `rank 1`, entao duas
+    // ordens distintas NAO podem compartilhar prosa.
+    expect(ordered).not.toBe(reversed);
+
+    const oldSnapshot = intentCacheKey(parts({ catalogSnapshot: '2026-11-01T00:00:00.000Z' }));
+    const newSnapshot = intentCacheKey(parts({ catalogSnapshot: '2026-11-15T00:00:00.000Z' }));
+    expect(oldSnapshot).not.toBe(newSnapshot);
   });
 
   it('normalizes the query: trim, collapsed spaces, lower case', () => {

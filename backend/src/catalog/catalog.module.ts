@@ -5,7 +5,9 @@
  * ambiente: `forRoot` recebe as instâncias prontas (fonte, repositório, ou o
  * `PrismaClient` para construir o repositório de produção) e as expõe por
  * token. O mesmo módulo serve à produção (`source` + `prisma`) e ao teste
- * (`source` + `repository` em memória) sem `if` espalhado pelo código.
+ * (`source` + `repository` em memória) sem `if` espalhado pelo código. Sem
+ * fonte injetada, `adapter` escolhe entre a fixture congelada (`fixture`,
+ * padrão) e o único adaptador real (`html`, #47) — `json` não existe mais.
  *
  * Este módulo **não** está registrado em `app.module.ts` ainda: quem monta a
  * busca (F2.6) chama `CatalogModule.forRoot` e é o dono dos tokens. Construir o
@@ -16,6 +18,7 @@ import type { PrismaClient } from '@prisma/client';
 
 import type { CatalogRepository } from './catalog-repository';
 import { createFixtureSource } from './fixture-source';
+import { createHtmlSource, type HtmlSourceClock } from './html-source';
 import { PrismaCatalogRepository } from './prisma-catalog.repository';
 import type { SkillSource } from './skill-source';
 
@@ -30,12 +33,20 @@ export const CATALOG_ADAPTER = 'CATALOG_ADAPTER';
 
 /** Configuração do módulo; nada aqui é lido do ambiente. */
 export interface CatalogModuleOptions {
-  /** Nome do adaptador (`SKILL_SOURCE_KIND`); padrão `fixture`. */
+  /** Nome do adaptador (`SKILL_SOURCE_KIND`): `fixture` (padrão) ou `html`. */
   readonly adapter?: string;
-  /** Fonte já construída; sem ela, `fixture` lê a amostra congelada. */
+  /** Fonte já construída; quando presente, vence a fiação do adaptador. */
   readonly source?: SkillSource;
   /** Caminho da fixture, quando a fonte não é injetada. */
   readonly fixturePath?: string;
+  /** Base fixa do adaptador `html` (`SKILL_SOURCE_BASE_URL`). */
+  readonly baseUrl?: string;
+  /** Requisições por segundo do adaptador `html` (`SKILL_SOURCE_RPS`). */
+  readonly rps?: number;
+  /** Timeout por requisição do adaptador `html`. */
+  readonly timeoutMs?: number;
+  /** Relógio injetado do adaptador `html` (o teste prova o 1 req/s sem dormir). */
+  readonly clock?: HtmlSourceClock;
   /** Repositório já construído (duplo de teste); vence `prisma`. */
   readonly repository?: CatalogRepository;
   /** Cliente Prisma, para o repositório de produção. */
@@ -64,13 +75,37 @@ export class CatalogModule {
   }
 }
 
-function createSource(options: CatalogModuleOptions): SkillSource {
+/**
+ * Constrói a fonte a partir das opções (o adaptador vem da configuração).
+ *
+ * Exportada porque o grafo de runtime do admin (#49) precisa resolvê-la **por
+ * injeção** — `AppConfigService` só existe em runtime, e `forRoot` recebe opções
+ * já prontas. Mantê-la aqui é o que impede um segundo `switch` de adaptador
+ * espalhado pelo código.
+ */
+export function createSource(options: CatalogModuleOptions): SkillSource {
   if (options.source !== undefined) {
     return options.source;
   }
-  return options.fixturePath === undefined
-    ? createFixtureSource()
-    : createFixtureSource({ path: options.fixturePath });
+  switch (options.adapter ?? 'fixture') {
+    case 'fixture':
+      return options.fixturePath === undefined
+        ? createFixtureSource()
+        : createFixtureSource({ path: options.fixturePath });
+    case 'html':
+      // Produção: base fixa + 1 req/s (SKILL_SOURCE_RPS). Nenhuma URL de skill
+      // vem do banco — o adaptador monta a partir do `source_key` do sitemap.
+      return createHtmlSource({
+        baseUrl: options.baseUrl,
+        rps: options.rps,
+        timeoutMs: options.timeoutMs,
+        clock: options.clock,
+      });
+    default:
+      throw new Error(
+        `SKILL_SOURCE_KIND "${String(options.adapter)}" não existe: use html ou fixture`,
+      );
+  }
 }
 
 function createRepository(options: CatalogModuleOptions): CatalogRepository {

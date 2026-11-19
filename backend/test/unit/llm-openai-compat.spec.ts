@@ -26,8 +26,10 @@
 import axios from 'axios';
 import nock from 'nock';
 
+import type { ExplainCandidate, ExplainRequest } from '@/llm/explain-parser';
 import { OpenAICompatParser } from '@/llm/openai-compat';
 import type { OpenAiCompatOptions } from '@/llm/openai-compat';
+import type { Intent } from '@/contract/dto/search-response.dto';
 
 const ORIGIN = 'https://llm.test';
 const REDIRECT_ORIGIN = 'https://redirected.test';
@@ -44,6 +46,51 @@ const VALID_CONTENT = JSON.stringify({
   language: 'en',
   confidence: 0.82,
 });
+
+/** Candidatos do passo de explicação (issue #41), já na ordem do ranking. */
+const EXPLAIN_CANDIDATES: readonly ExplainCandidate[] = [
+  {
+    skill_id: 'sk_rank1',
+    name: 'Python security reviewer',
+    category: 'security',
+    stars: 1200,
+    installs: 8000,
+    vulnerability_count: 0,
+    summary: 'Reviews pull requests for security problems in Python.',
+  },
+  {
+    skill_id: 'sk_rank2',
+    name: 'Lint helper',
+    category: 'dev',
+    stars: 250,
+    installs: null,
+    vulnerability_count: null,
+    summary: null,
+  },
+];
+
+const EXPLAIN_INTENT: Intent = {
+  category: 'security',
+  keywords: ['pull request', 'security', 'python'],
+  filters: { exclude_with_vulnerabilities: false },
+  language: 'en',
+  confidence: 0.82,
+};
+
+const EXPLAIN_CONTENT = JSON.stringify({
+  items: [
+    { skill_id: 'sk_rank1', why: 'Casa com a consulta.', caveats: null },
+    { skill_id: 'sk_rank2', why: 'Complementa a revisão.', caveats: null },
+  ],
+  recommendation: { skill_id: 'sk_rank1', why: 'Comece por aqui.' },
+});
+
+function explainRequest(
+  candidates: readonly ExplainCandidate[],
+  query: string = QUERY,
+): ExplainRequest {
+  return { query, intent: EXPLAIN_INTENT, candidates };
+}
 
 function completion(content: string): Record<string, unknown> {
   return {
@@ -239,6 +286,45 @@ describe('openai-compatible client (docs/app/02-arquitetura.md 6.3 e 8.3)', () =
 
     expect(result.status).toBe('unavailable');
     expect(third.isDone()).toBe(false);
+  });
+
+  /**
+   * Degrau 6 da escada da #41: o corpo da explicação é fixo. `tools: []` é o que
+   * fecha a barreira 4 do §6.5 (o provedor não executa nada), e `temperature` /
+   * `max_tokens` não podem variar com o tamanho da entrada — duas requisições com
+   * conjuntos de candidatos diferentes têm que sair com os mesmos valores.
+   */
+  it('pins tools/temperature/max_tokens in the explain body', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const scope = nock(ORIGIN)
+      .post(CHAT_PATH, (body: Record<string, unknown>) => {
+        bodies.push(body);
+        return true;
+      })
+      .twice()
+      .reply(200, completion(EXPLAIN_CONTENT));
+
+    const client = parser();
+    await client.explain(explainRequest([EXPLAIN_CANDIDATES[0]]));
+    await client.explain(explainRequest(EXPLAIN_CANDIDATES, 'outra consulta sobre testes'));
+
+    expect(scope.isDone()).toBe(true);
+    expect(bodies).toHaveLength(2);
+    for (const body of bodies) {
+      expect(body.tools).toEqual([]);
+      expect(body.tool_choice).toBe('none');
+      expect(body.temperature).toBe(0.2);
+      expect(body.max_tokens).toBeGreaterThan(0);
+      expect(body.max_tokens).toBeLessThanOrEqual(1024);
+      expect((body.response_format as { type?: string }).type).toBe('json_object');
+    }
+    // Fixos: não derivam do tamanho da entrada.
+    expect(bodies[0]?.max_tokens).toBe(bodies[1]?.max_tokens);
+    expect(bodies[0]?.temperature).toBe(bodies[1]?.temperature);
+    // O prompt é o da explicação, não o da intenção.
+    const system = (bodies[0]?.messages as Array<{ role: string; content: string }>)[0];
+    expect(system?.role).toBe('system');
+    expect(system?.content).toContain('<candidates>');
   });
 
   it('maps 401 without echoing the key', async () => {

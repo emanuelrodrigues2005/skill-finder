@@ -81,3 +81,61 @@ describe('fake intent parser (docs/app/03-plano-app.md F2.5-t4)', () => {
     expect(result.tokens).toBeNull();
   });
 });
+
+/**
+ * Issue #40: o catalogo indexa o `search_doc` em ingles, mas a consulta chega em
+ * portugues. O falso — unico provedor de dev/CI — entrega `keywords_en` com o
+ * glossario deterministico de `fake.ts`, para a busca em PT nao devolver zero.
+ */
+describe('fake intent parser — english keywords (issue #40)', () => {
+  /** Consultas em portugues, com acento de proposito, e o que o glossario devolve. */
+  const PT_CASES: ReadonlyArray<{ query: string; expected: readonly string[] }> = [
+    { query: 'quero uma skill para documentar uma api em portugues', expected: ['document', 'api'] },
+    { query: 'preciso testar um banco de dados postgres', expected: ['test', 'database', 'data', 'postgres'] },
+    {
+      query: 'preciso revisar a segurança de uma aplicação',
+      expected: ['review', 'security', 'application'],
+    },
+  ];
+
+  it('maps at least three portuguese queries to english keywords', async () => {
+    expect(PT_CASES.length).toBeGreaterThanOrEqual(3);
+    const parser = new FakeIntentParser(loadCases());
+
+    for (const { query, expected } of PT_CASES) {
+      const result = await parser.parse(query, catalogOf(loadCases()));
+
+      expect(result.keywordsEn).toEqual(expected);
+      // Os termos do FTS sao ingleses e cabem no teto do schema.
+      expect(result.keywordsEn?.length ?? 0).toBeLessThanOrEqual(MAX_KEYWORDS);
+      for (const keyword of result.keywordsEn ?? []) {
+        expect(keyword).toMatch(/^[a-z]+$/);
+      }
+    }
+  });
+
+  it('keeps the english keywords of an english query and the determinism of the map', async () => {
+    const cases = loadCases();
+    const parser = new FakeIntentParser(cases);
+    const englishCase = cases.find((testCase) => testCase.intent.language === 'en');
+    expect(englishCase).toBeDefined();
+
+    const first = await parser.parse(englishCase?.query ?? '', catalogOf(cases));
+    const second = await parser.parse(englishCase?.query ?? '', catalogOf(cases));
+
+    expect(first.keywordsEn).toEqual(englishCase?.intent.keywords);
+    expect(second).toEqual(first);
+  });
+
+  it('never answers an empty english list: falls back to the intent keywords', async () => {
+    const cases = loadCases();
+    const parser = new FakeIntentParser(cases);
+    // Consulta sem nenhum termo do glossario: nada a traduzir.
+    const query = 'zzz qqq';
+
+    const result = await parser.parse(query, catalogOf(cases));
+
+    expect(result.keywordsEn?.length ?? 0).toBeGreaterThan(0);
+    expect(result.keywordsEn).toEqual(result.intent.keywords);
+  });
+});

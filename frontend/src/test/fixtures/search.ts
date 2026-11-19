@@ -85,7 +85,14 @@ export const searchResponse = {
     language: "en",
     confidence: 0.87,
   },
-  llm: { status: "ok", model: "llm-test-1", cached: false, tokens: { prompt: 812, completion: 96 } },
+    llm: {
+      status: "ok",
+      model: "llm-test-1",
+      cached: false,
+      tokens: { prompt: 812, completion: 96 },
+      // Passo 7 do contrato (issue #42): `required` + `nullable`.
+      explain_status: "ok",
+    },
   data: {
     source: "skills.sh",
     catalog_snapshot: "2026-11-15T03:00:00Z",
@@ -109,7 +116,7 @@ export const emptySearchResponse = {
 /** Catálogo velho: faixa de degradação com motivo e idade derivada de `age_seconds`. */
 export const degradedSearchResponse = {
   ...searchResponse,
-  llm: { status: "disabled", model: null, cached: false, tokens: null },
+  llm: { status: "disabled", model: null, cached: false, tokens: null, explain_status: null },
   data: {
     source: "skills.sh",
     catalog_snapshot: "2026-11-14T03:00:00Z",

@@ -46,7 +46,9 @@ describe("ResultsPage", () => {
 
     renderResults();
 
-    expect(await screen.findByText(/no skills matched — try broader wording/)).toBeVisible();
+    expect(
+      await screen.findByText(/nenhuma skill correspondeu — tente palavras mais amplas/),
+    ).toBeVisible();
     expect(screen.queryByRole("list")).toBeNull();
   });
 
@@ -55,11 +57,11 @@ describe("ResultsPage", () => {
 
     renderResults();
 
-    expect(await screen.findByText("The catalog snapshot is stale")).toBeVisible();
+    expect(await screen.findByText("O snapshot do catálogo está desatualizado")).toBeVisible();
     expect(screen.getByText(/degraded_reason/)).toHaveTextContent(/source_stale/);
-    expect(screen.getByText(/2\.0 h old \(7200 s\)/)).toBeVisible();
+    expect(screen.getByText(/2\.0 h de idade \(7200 s\)/)).toBeVisible();
     // Lista vazia com explicação: a regra 7 proíbe vazio sem motivo.
-    expect(screen.getByText(/the answer is degraded/)).toBeVisible();
+    expect(screen.getByText(/a resposta está degradada/)).toBeVisible();
   });
 
   it("renders null catalog fields as n/a instead of zero", async () => {
@@ -68,9 +70,11 @@ describe("ResultsPage", () => {
     renderResults();
 
     expect(
-      await screen.findByText(/category n\/a · stars n\/a · installs n\/a · vulns n\/a/),
+      await screen.findByText(
+        /categoria n\/a · estrelas n\/a · instalações n\/a · vulns n\/a/,
+      ),
     ).toBeVisible();
-    expect(screen.getByText(/3 missing fields · confidence ×0\.82/)).toBeVisible();
+    expect(screen.getByText(/3 campos ausentes · confiança ×0\.82/)).toBeVisible();
     // O `score` existe no contrato e continua numérico: `n/a` é só para o que veio `null`.
     expect(screen.getByText("score 0.5100")).toBeVisible();
   });
@@ -91,7 +95,7 @@ describe("ResultsPage", () => {
 
     // 1) Permalink puro (aba nova, URL colada): um `GET`, nenhum `POST`.
     renderResults();
-    expect(await screen.findByRole("heading", { name: "Results" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Resultados" })).toBeVisible();
     // O permalink é endereçado pelo `request_id` visível, nunca pelo `search_id` interno.
     expect(screen.getByLabelText("permalink")).toHaveValue(`http://localhost:5173${permalinkPath}`);
     expect(currentLocation()).toBe(permalinkPath);
@@ -104,7 +108,7 @@ describe("ResultsPage", () => {
     // 2) Chegando da busca (`location.state` + `?search=`): o state pinta a tela e o servidor
     // revalida com **um** `GET` — a busca não é refeita, então segue zero `POST`.
     renderResults({ pathname: "/results", search: `?search=${REQUEST_ID}`, state: { response: searchResponse } });
-    expect(await screen.findByRole("heading", { name: "Results" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Resultados" })).toBeVisible();
     expect(gets).toBe(1);
     expect(posts).toBe(0);
 
@@ -113,7 +117,7 @@ describe("ResultsPage", () => {
 
     // 3) Sem `?search=` não há permalink a revalidar: o state é a única fonte, zero chamada.
     renderResults({ pathname: "/results", state: { response: searchResponse } });
-    expect(await screen.findByRole("heading", { name: "Results" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Resultados" })).toBeVisible();
     expect(gets).toBe(0);
     expect(posts).toBe(0);
   });
@@ -127,9 +131,11 @@ describe("ResultsPage", () => {
 
     renderResults();
 
-    expect(await screen.findByText("Too many searches. Try again in 30 seconds.")).toBeVisible();
+    expect(
+      await screen.findByText("Muitas buscas. Tente de novo em 30 segundos."),
+    ).toBeVisible();
     expect(screen.getByText("RATE_LIMITED")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Tentar de novo" })).toBeVisible();
     expect(screen.queryByText(/server said:/)).toBeNull();
   });
 
@@ -142,7 +148,9 @@ describe("ResultsPage", () => {
 
     renderResults();
 
-    expect(await screen.findByText("Something went wrong on our side. Try again.")).toBeVisible();
+    expect(
+      await screen.findByText("Algo deu errado do nosso lado. Tente de novo."),
+    ).toBeVisible();
     expect(screen.getByLabelText("request_id")).toHaveValue(FAILED_REQUEST_ID);
   });
 });

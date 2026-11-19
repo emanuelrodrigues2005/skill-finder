@@ -21,7 +21,12 @@
  *   decisão que o bloco C fixa. Sem ela, uma página que repete a skill (destaque + listagem) empurra
  *   a razão para baixo e o run vira `partial` mesmo com tudo gravado.
  */
-import type { CatalogRepository, IngestRunFinish } from '@/catalog/catalog-repository';
+import type {
+  CatalogRepository,
+  IngestRunFinish,
+  RotationBands,
+  RotationParams,
+} from '@/catalog/catalog-repository';
 import { ingest } from '@/catalog/ingest';
 import {
   buildMetricSnapshotStatement,
@@ -282,17 +287,27 @@ describe('catalog SQL — snapshot de métrica (bloco B)', () => {
  * Repositório de duplo para o bloco C: o mínimo da porta, com a semântica que a porta declara —
  * `upsertSkills` devolve **quantas linhas de `skill` foram gravadas**, isto é, o número de
  * `source_key` distintas, como `INSERT ... ON CONFLICT (source_key) DO UPDATE`.
+ *
+ * `cycle` é o ciclo de rodízio (as chaves que a ingestão vai pedir, #46): sem ele a ingestão
+ * não teria o que buscar, e `countActiveSkills` responde o mesmo número para o bootstrap
+ * (catálogo vazio) não disparar.
  */
 class RecordingRepository implements CatalogRepository {
   readonly finishes: IngestRunFinish[] = [];
   readonly upsertCalls: SkillRecord[][] = [];
   private nextRunId = 1;
 
+  constructor(private readonly cycle: readonly string[] = []) {}
+
   failStaleRuns(_startedBefore: Date): Promise<number> {
     return Promise.resolve(0);
   }
 
-  startRun(_run: { adapter: string; started_at: Date }): Promise<number> {
+  startRun(_run: {
+    adapter: string;
+    started_at: Date;
+    items_requested?: number | null;
+  }): Promise<number> {
     const id = this.nextRunId;
     this.nextRunId += 1;
     return Promise.resolve(id);
@@ -304,7 +319,16 @@ class RecordingRepository implements CatalogRepository {
   }
 
   countActiveSkills(): Promise<number> {
-    return Promise.resolve(0);
+    return Promise.resolve(this.cycle.length);
+  }
+
+  selectRotationKeys(_params: RotationParams): Promise<RotationBands> {
+    // O ciclo inteiro vem do rodízio: nada é inédito para esta fonte.
+    return Promise.resolve({ hot: [], cold: [...this.cycle] });
+  }
+
+  selectUnseenKeys(_candidates: readonly string[]): Promise<string[]> {
+    return Promise.resolve([]);
   }
 
   upsertSkills(skills: SkillRecord[]): Promise<number> {
@@ -312,31 +336,46 @@ class RecordingRepository implements CatalogRepository {
     return Promise.resolve(new Set(skills.map((item) => item.source_key)).size);
   }
 
-  deactivateSkillsNotSeenSince(_seenAt: Date): Promise<number> {
+  deactivateSkillsStaleBefore(_cutoff: Date): Promise<number> {
     return Promise.resolve(0);
   }
 }
 
-/** Fonte que entrega exatamente estes itens na página 1 e nada depois. */
+/**
+ * Fonte que entrega, para as chaves pedidas, **todos** os registros da lista que
+ * têm aquela chave — inclusive a repetida. A fonte bem-comportada devolve uma
+ * linha por chave; aqui ela é deliberadamente repetitiva para que o teste prove
+ * a deduplicação do lado da ingestão (`new Set` em `items_seen`), não a da fonte.
+ */
 function staticSource(items: SkillRecord[]): SkillSource {
+  const asked = new Set(items.map((item) => item.source_key));
   return {
     capabilities: { supports_categories: false, supports_documents: false },
     listCategories: () => Promise.resolve([]),
-    fetchCatalog: (pageNumber: number) =>
-      Promise.resolve({ items: pageNumber === 1 ? items : [], page: pageNumber, has_more: false }),
+    // Só o bootstrap enumeraria; o ciclo já vem do repositório (#46).
+    listKeys: () => Promise.resolve([...asked]),
+    fetchSkills: (keys: readonly string[]): Promise<SkillRecord[]> => {
+      const requested = new Set(keys);
+      return Promise.resolve(items.filter((item) => requested.has(item.source_key)));
+    },
     fetchDocument: () => Promise.resolve(null),
   };
 }
 
+/** O ciclo do rodízio para uma lista de registros: as chaves distintas, na ordem. */
+function cycleOf(items: readonly SkillRecord[]): string[] {
+  return [...new Set(items.map((item) => item.source_key))];
+}
+
 describe('catalog ingest — items_seen conta chaves distintas (bloco C)', () => {
   it('8. 3 itens com uma source_key repetida: items_seen === 2, upserted === 2, run ok', async () => {
-    const repository = new RecordingRepository();
     const duplicated = [
       skill({ source_key: 'acme/toolbox/find-skills', stars: 10 }),
       skill({ source_key: 'acme/toolbox/other-skill', stars: 20 }),
       // A mesma skill de novo (destaque + listagem): uma linha em `skill`, um item "recebido".
       skill({ source_key: 'acme/toolbox/find-skills', stars: 11 }),
     ];
+    const repository = new RecordingRepository(cycleOf(duplicated));
 
     const outcome = await ingest({
       source: staticSource(duplicated),
@@ -362,7 +401,6 @@ describe('catalog ingest — items_seen conta chaves distintas (bloco C)', () =>
   });
 
   it('8b. a razão usa a mesma unidade: 5 itens com 2 chaves não viram partial', async () => {
-    const repository = new RecordingRepository();
     const page = [
       skill({ source_key: 'acme/toolbox/a', stars: 1 }),
       skill({ source_key: 'acme/toolbox/b', stars: 2 }),
@@ -370,6 +408,7 @@ describe('catalog ingest — items_seen conta chaves distintas (bloco C)', () =>
       skill({ source_key: 'acme/toolbox/b', stars: 4 }),
       skill({ source_key: 'acme/toolbox/a', stars: 5 }),
     ];
+    const repository = new RecordingRepository(cycleOf(page));
 
     const outcome = await ingest({
       source: staticSource(page),

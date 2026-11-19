@@ -1,5 +1,6 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiExtraModels, ApiProperty } from '@nestjs/swagger';
 
+import { ExplainPayload } from './explain.dto';
 import { ResultItem } from './result-item.dto';
 
 /** Os sete estados de `llm.status` (§5.3), nesta ordem — renomear é mudança de contrato. */
@@ -68,13 +69,34 @@ export class TokenUsage {
   completion!: number;
 }
 
-/** O que a LLM fez nesta busca; `cached` diz se houve chamada ao provedor. */
+/**
+ * O que a LLM fez nesta busca; `cached` diz se houve chamada ao provedor.
+ *
+ * O schema interno do `explain` (`ExplainPayload`) não tem path público — o
+ * serviço o valida, não o serve — mas o contrato versionado precisa registrá-lo.
+ * `@ApiExtraModels` num modelo que o documento já explora o põe em
+ * `components.schemas` sem criar operação, o mesmo mecanismo que
+ * `ApiErrorResponses` usa para o `ErrorEnvelope`.
+ */
+@ApiExtraModels(ExplainPayload)
 export class LlmInfo {
   @ApiProperty({
     enum: [...LLM_STATUSES],
     description: 'How the LLM step ended. `disabled` is the LLM_ENABLED=false mode.',
   })
   status!: LlmStatus;
+
+  @ApiProperty({
+    enum: [...LLM_STATUSES],
+    nullable: true,
+    description:
+      'How the explain step ended; null when it was not attempted (e.g. a replayed search).',
+  })
+  // Opcional no tipo só enquanto o passo de explicação não popula a resposta
+  // (issue #42, `src/search/**`): o contrato OpenAPI o mantém **obrigatório** —
+  // sempre presente, com `null` quando o passo não foi tentado. Quem constrói
+  // `LlmInfo` tem que preencher; `null` e ausente não são a mesma coisa.
+  explain_status!: LlmStatus | null;
 
   @ApiProperty({
     type: String,

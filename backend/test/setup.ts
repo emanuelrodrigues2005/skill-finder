@@ -15,6 +15,10 @@ const TEST_ENV: Record<string, string> = {
   // querer. Um teste de rate limit fixa o próprio teto; aqui o default é alto.
   RATE_LIMIT_SEARCH_PER_MIN: '1000',
   RATE_LIMIT_SEARCH_PER_DAY: '10000',
+  // Token de operador das rotas de admin (#49). Em dev ele é opcional e a rota
+  // falha fechada sem ele; a suíte precisa de um valor conhecido para provar o
+  // caminho autorizado.
+  ADMIN_TOKEN: 'test-admin-token-com-32-caracteres-ok',
 };
 
 for (const [key, value] of Object.entries(TEST_ENV)) {

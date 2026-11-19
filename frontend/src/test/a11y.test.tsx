@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import App from "../App";
 import DetailPage from "../pages/DetailPage";
 import ResultsPage from "../pages/ResultsPage";
+import { color } from "../ui/tokens";
 import {
   emptySearchResponse,
   errorEnvelope,
@@ -74,11 +75,23 @@ function linear(channel: number): number {
   return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
 }
 
-/** Razão de contraste contra o branco — o fundo de todos os metadados das telas. */
-function contrastOnWhite(color: string): number {
-  const [r, g, b] = channels(color);
-  const luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
-  return 1.05 / (luminance + 0.05);
+/** Razão de contraste entre duas cores, na definição do WCAG 2.x. */
+function contrast(foreground: string, background: string): number {
+  const [r1, g1, b1] = channels(foreground);
+  const [r2, g2, b2] = channels(background);
+  const first = 0.2126 * linear(r1) + 0.7152 * linear(g1) + 0.0722 * linear(b1);
+  const second = 0.2126 * linear(r2) + 0.7152 * linear(g2) + 0.0722 * linear(b2);
+  const lighter = Math.max(first, second);
+  const darker = Math.min(first, second);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/**
+ * Razão de contraste contra o branco — o fundo de todos os metadados das telas. O branco é
+ * literal de propósito: este caso confere o que foi pintado, não o que o token diz.
+ */
+function contrastOnWhite(colorValue: string): number {
+  return contrast(colorValue, "#ffffff");
 }
 
 /** Cores de texto declaradas no DOM renderizado, sem repetição. */
@@ -110,7 +123,7 @@ describe("skip link and focus", () => {
     await screen.findByRole("option", { name: "Documents" });
 
     const focusable = tabbables();
-    expect(focusable[0]).toHaveAccessibleName("Skip to results");
+    expect(focusable[0]).toHaveAccessibleName("Ir para os resultados");
     expect(focusable[0]).toHaveAttribute("href", "#results");
     // O alvo existe em qualquer tela: o `main` é onde os resultados aparecem.
     expect(document.getElementById("results")).toBe(document.querySelector("main"));
@@ -131,8 +144,8 @@ describe("skip link and focus", () => {
       "select",
       "button",
     ]);
-    expect(tabbables()[1]).toHaveAccessibleName("Skills Search");
-    expect(tabbables()[4]).toHaveAccessibleName("Search");
+    expect(tabbables()[1]).toHaveAccessibleName("Busca de Skills");
+    expect(tabbables()[4]).toHaveAccessibleName("Buscar");
   });
 
   it("declares a focus-visible outline of at least 2 px and hides the skip link until focused", async () => {
@@ -159,13 +172,13 @@ describe("skip link and focus", () => {
     server.use(http.get(apiUrl(`/searches/${REQUEST_ID}`), () => HttpResponse.json(searchResponse)));
 
     renderAt(`/results?search=${REQUEST_ID}`);
-    await screen.findByRole("heading", { name: "Results" });
+    await screen.findByRole("heading", { name: "Resultados" });
 
     const colors = textColors(document.body);
     expect(colors.length).toBeGreaterThan(0);
-    for (const color of colors) {
+    for (const declared of colors) {
       // O segundo argumento é a mensagem que aparece quando a razão é insuficiente.
-      expect(contrastOnWhite(color), color).toBeGreaterThanOrEqual(4.5);
+      expect(contrastOnWhite(declared), declared).toBeGreaterThanOrEqual(4.5);
     }
   });
 
@@ -191,9 +204,9 @@ describe("live regions and state roles", () => {
 
     renderAt(`/results?search=${REQUEST_ID}`);
 
-    const region = await screen.findByRole("region", { name: "Results" });
-    // O `<ol>` é o único `list` chamado "Results"; os `<ul>` de razões de cada cartão não têm nome.
-    expect(within(region).getByRole("list", { name: "Results" })).toHaveAttribute(
+    const region = await screen.findByRole("region", { name: "Resultados" });
+    // O `<ol>` é o único `list` chamado "Resultados"; os `<ul>` de razões de cada cartão não têm nome.
+    expect(within(region).getByRole("list", { name: "Resultados" })).toHaveAttribute(
       "aria-live",
       "polite",
     );
@@ -205,7 +218,7 @@ describe("live regions and state roles", () => {
 
     // `CopyText` já mantém uma região `role="status"` (o anúncio da cópia), então o estado vazio é
     // localizado pelo texto e amarrado à região viva que o contém — não por ser a única da tela.
-    const message = await screen.findByText(/no skills matched/);
+    const message = await screen.findByText(/nenhuma skill correspondeu/);
     expect(message.closest('[role="status"]')).not.toBeNull();
   });
 
@@ -218,7 +231,9 @@ describe("live regions and state roles", () => {
 
     renderAt(`/results?search=${REQUEST_ID}`);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Something went wrong on our side.");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Algo deu errado do nosso lado. Tente de novo.",
+    );
   });
 });
 
@@ -263,4 +278,77 @@ describe("user text stays text", () => {
     expect(await screen.findByText(/<script>alert\('x'\)<\/script>/)).toBeVisible();
     expect(document.querySelector("script")).toBeNull();
   });
+});
+
+interface ColorPair {
+  /** Como o par aparece na tela — é o nome do caso quando ele falha. */
+  name: string;
+  foreground: string;
+  background: string;
+}
+
+/**
+ * Texto sobre o fundo em que ele é desenhado (WCAG AA 1.4.3: 4,5:1 para texto normal).
+ *
+ * Os valores vêm dos tokens, não do DOM: aqui se prova a **paleta**, e `tokens.test.ts` garante
+ * que nenhuma tela escreve cor por fora dela. O par só entra nesta lista se as telas o usam.
+ */
+const TEXT_PAIRS: ColorPair[] = [
+  { name: "text sobre bg", foreground: color.text, background: color.bg },
+  { name: "textBody sobre surface", foreground: color.textBody, background: color.surface },
+  { name: "textSubtle sobre surface", foreground: color.textSubtle, background: color.surface },
+  { name: "textMuted sobre surface", foreground: color.textMuted, background: color.surface },
+  { name: "link sobre bg", foreground: color.link, background: color.bg },
+  { name: "onLink sobre link (skip link)", foreground: color.onLink, background: color.link },
+  {
+    name: "warnText sobre warnSurface",
+    foreground: color.warnText,
+    background: color.warnSurface,
+  },
+  { name: "flagText sobre surface", foreground: color.flagText, background: color.surface },
+  {
+    name: "successText sobre successSurface",
+    foreground: color.successText,
+    background: color.successSurface,
+  },
+];
+
+/**
+ * Fronteira que identifica componente ou estado (WCAG AA 1.4.11: 3:1, não 4,5:1). É o anel de
+ * foco e a borda das faixas de erro/aviso e dos selos de evidência.
+ */
+const UI_PAIRS: ColorPair[] = [
+  { name: "focus sobre bg (anel de foco)", foreground: color.focus, background: color.bg },
+  { name: "border sobre surface (cartão)", foreground: color.border, background: color.surface },
+  { name: "danger sobre surface (erro)", foreground: color.danger, background: color.surface },
+  {
+    name: "warn sobre warnSurface (aviso)",
+    foreground: color.warn,
+    background: color.warnSurface,
+  },
+  {
+    name: "success sobre successSurface (selo)",
+    foreground: color.success,
+    background: color.successSurface,
+  },
+];
+
+describe("token contrast (WCAG AA)", () => {
+  for (const pair of TEXT_PAIRS) {
+    it(`keeps text pairs at 4.5:1 or more — ${pair.name}`, () => {
+      expect(
+        contrast(pair.foreground, pair.background),
+        `${pair.foreground} on ${pair.background}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+
+  for (const pair of UI_PAIRS) {
+    it(`keeps component and state boundaries at 3:1 or more — ${pair.name}`, () => {
+      expect(
+        contrast(pair.foreground, pair.background),
+        `${pair.foreground} on ${pair.background}`,
+      ).toBeGreaterThanOrEqual(3);
+    });
+  }
 });

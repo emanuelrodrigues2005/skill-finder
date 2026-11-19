@@ -74,14 +74,13 @@ describe('health, readiness and metrics (e2e)', () => {
     expect(readyz.headers['cache-control']).toBe('no-cache, no-store, must-revalidate');
   });
 
-  it('still mounts none of the two admin routes (D0, reduced by D-E)', async () => {
-    // D0 nasceu exigindo 404 nos sete caminhos do contrato v0. A F2.6 (D-E)
-    // monta os cinco públicos — quem prova que eles respondem é o D0
-    // *invertido* de `search.e2e-spec.ts`. O que sobra aqui, reduzido e não
-    // apagado, é o que continua fora do runtime até a F2.9: os dois de admin
-    // dependem de `X-Admin-Token`, orquestração de ingestão e lock. Se um
-    // controller de src/contract vazar para o AppModule, eles passam a
-    // responder 500 (o handler `contractOnly` lança) em vez de 404.
+  it('mounts both admin routes behind X-Admin-Token (#49)', async () => {
+    // D0 nasceu exigindo 404 nos sete caminhos do contrato v0. A F2.6 (D-E) monta
+    // os cinco públicos — quem prova que eles respondem é o D0 *invertido* de
+    // `search.e2e-spec.ts`. A #49 monta os dois de admin, e o que sobra desta
+    // guarda invertida é a **proteção**: sem `X-Admin-Token` a rota existe e
+    // recusa (401, envelope de §5.5), em vez de 404 — e nunca chega no handler de
+    // ingestão. A prova de que elas respondem com token é `admin-ingest.e2e-spec.ts`.
     const adminRoutes = [
       ['post', '/api/v1/admin/ingest'],
       ['get', '/api/v1/admin/ingest/runs'],
@@ -90,10 +89,10 @@ describe('health, readiness and metrics (e2e)', () => {
     for (const [method, path] of adminRoutes) {
       const response =
         method === 'post'
-          ? await request(app.getHttpServer()).post(path).expect(404)
-          : await request(app.getHttpServer()).get(path).expect(404);
+          ? await request(app.getHttpServer()).post(path).expect(401)
+          : await request(app.getHttpServer()).get(path).expect(401);
 
-      expect({ path, code: response.body.error.code }).toEqual({ path, code: 'NOT_FOUND' });
+      expect({ path, code: response.body.error.code }).toEqual({ path, code: 'UNAUTHORIZED' });
     }
   });
 

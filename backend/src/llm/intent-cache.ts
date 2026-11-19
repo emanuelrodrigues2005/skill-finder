@@ -20,9 +20,9 @@ export const INTENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export const INTENT_CACHE_MAX_ENTRIES = 512;
 
 /** Contrato mínimo do cache; a implementação durável entra por aqui. */
-export interface IntentCache {
-  get(key: string): IntentParserResult | null;
-  set(key: string, value: IntentParserResult): void;
+export interface IntentCache<T = IntentParserResult> {
+  get(key: string): T | null;
+  set(key: string, value: T): void;
 }
 
 /** Partes da chave de cache (§6.3). */
@@ -35,6 +35,18 @@ export interface IntentCacheKeyParts {
   readonly query: string;
   /** Categorias do catálogo em ordem canônica. */
   readonly categories: readonly string[];
+  /**
+   * Ids **na ordem** (não canônica): só a explicação usa, porque a posição faz
+   * parte da resposta — `recommendation` aponta para o `rank 1`. Ordenar aqui
+   * faria duas ordens distintas compartilharem prosa (parecer da #41).
+   */
+  readonly candidates?: readonly string[];
+  /**
+   * Snapshot do catálogo. A explicação cita números (estrelas, instalações) que
+   * mudam entre ciclos de ingestão; sem ele na chave, o cache serve prosa com
+   * números vencidos (§4.1).
+   */
+  readonly catalogSnapshot?: string;
 }
 
 /** sha256 hex — usado na chave do cache e no mapa do provedor falso. */
@@ -56,25 +68,42 @@ export function intentCacheKey(parts: IntentCacheKeyParts): string {
     .map((category) => category.trim().toLowerCase())
     .sort()
     .join(',');
+  // A ordem dos candidatos entra SEM `.sort()`: para a explicação ela é parte da
+  // resposta (a recomendação é o `rank 1`), e ordenar aqui faria duas ordens
+  // distintas acertarem a mesma prosa. Para a intenção o campo fica ausente.
+  const candidates = (parts.candidates ?? []).map((candidate) => candidate.trim()).join(',');
+  const snapshot = parts.catalogSnapshot === undefined ? '-' : parts.catalogSnapshot;
   return sha256Hex(
-    [parts.kind, parts.promptVersion, parts.model, normalizedQuery, categories, '-'].join('|'),
+    [
+      parts.kind,
+      parts.promptVersion,
+      parts.model,
+      normalizedQuery,
+      categories,
+      snapshot,
+      candidates,
+    ].join('|'),
   );
 }
 
-interface CacheEntry {
-  readonly value: IntentParserResult;
+interface CacheEntry<T> {
+  readonly value: T;
   readonly expiresAt: number;
 }
 
 /**
  * Cache em memória com TTL e teto de entradas.
  *
+ * Genérico no valor (`IntentParserResult` por default) porque o passo de
+ * explicação (#41) usa a mesma política com o payload dele: uma cópia da classe
+ * para cada etapa divergiria no primeiro ajuste de TTL.
+ *
  * A ordem de inserção do `Map` dá o FIFO: quando o teto é atingido, a entrada
  * mais antiga sai — inclusive a que acabou de ser renovada, que volta para o
  * fim da fila. Não há relógio de fundo: a expiração é verificada na leitura.
  */
-export class InMemoryIntentCache implements IntentCache {
-  private readonly entries = new Map<string, CacheEntry>();
+export class InMemoryIntentCache<T = IntentParserResult> implements IntentCache<T> {
+  private readonly entries = new Map<string, CacheEntry<T>>();
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly maxEntries: number;
@@ -85,7 +114,7 @@ export class InMemoryIntentCache implements IntentCache {
     this.maxEntries = options.maxEntries ?? INTENT_CACHE_MAX_ENTRIES;
   }
 
-  get(key: string): IntentParserResult | null {
+  get(key: string): T | null {
     const entry = this.entries.get(key);
     if (entry === undefined) {
       return null;
@@ -97,7 +126,7 @@ export class InMemoryIntentCache implements IntentCache {
     return entry.value;
   }
 
-  set(key: string, value: IntentParserResult): void {
+  set(key: string, value: T): void {
     this.entries.delete(key);
     this.entries.set(key, { value, expiresAt: this.now() + this.ttlMs });
     while (this.entries.size > this.maxEntries) {
