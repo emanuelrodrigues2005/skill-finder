@@ -20,12 +20,17 @@ DB_TEST_URL ?= postgresql://skills:skills@127.0.0.1:$(DB_TEST_PORT)/skills_test
 
 .PHONY: bootstrap up down logs migrate seed test test-web test-integration test-all \
         test-coverage offline-check db-test-up db-test-down migrate-test \
-        lint config help preflight lockfile openapi openapi-check
+        lint config help preflight lockfile openapi openapi-check \
+        port port/free dev/start dev/stop
 
 help:
-	@echo "alvos: bootstrap | up | down | logs | migrate | seed | test | test-web | lint | config | openapi | openapi-check"
+	@echo "alvos: dev/start | dev/stop | port | port/free | bootstrap | up | down | logs | migrate | seed | test | test-web | lint | config | openapi | openapi-check"
 	@echo "       test-integration | test-all | test-coverage | offline-check | db-test-up | db-test-down | migrate-test"
 	@echo "  bootstrap  gera pnpm-lock.yaml (exige Node 22 nativo no WSL e rede)"
+	@echo "  dev/start  checa as portas, libera o que e nosso e sobe tudo + seed (uso diario)"
+	@echo "  dev/stop   derruba o stack do profile $(PROFILE)"
+	@echo "  port       mostra o estado das portas do backend e do frontend"
+	@echo "  port/free  libera as portas que pertencem a este repositorio"
 	@echo "  up         sobe postgres + API + web no profile $(PROFILE)"
 	@echo "  test       unit + api (sem Docker; é o gate rápido)"
 	@echo "  test-web   roda a suíte do frontend (Vitest + Testing Library + MSW)"
@@ -80,6 +85,37 @@ down:
 logs:
 	$(COMPOSE) --profile $(PROFILE) logs -f --tail=100
 
+
+# --- uso diario: portas, subir e derrubar -------------------------------------
+#
+# `dev/start` e o alvo do dia a dia. Ele NAO assume que as portas estao livres:
+# a 8080 deste host ja esteve presa por um proxy orfao do Docker Desktop, e o
+# `up` falhava com "address already in use" no meio. A ordem e: checar, liberar o
+# que e NOSSO, conferir de novo, subir, esperar o healthcheck, migrar e semear.
+#
+# `port/free` nunca mata processo alheio: se a porta pertence a outro programa,
+# ele diz quem e para, porque matar o que nao e nosso seria pior que o erro.
+# O `-` no inicio da receita: o codigo de saida diz o ESTADO (0 livre, 2 nossa,
+# 3 alheia) e o `dev/start` o usa; o `make port` so informa e nao deve falhar.
+port:
+	-@bash scripts/dev/port.sh list
+
+port/free:
+	@bash scripts/dev/port.sh free
+
+dev/start: lockfile
+	@echo "== portas =="
+	@bash scripts/dev/port.sh list || $(MAKE) --no-print-directory port/free
+	@bash scripts/dev/port.sh assert-free || { echo "portas ainda ocupadas; resolva acima e repita"; exit 1; }
+	@echo "== subindo (profile $(PROFILE)) =="
+	$(COMPOSE) --profile $(PROFILE) up -d --build
+	@bash scripts/dev/port.sh wait
+	@echo "== migrations + seed =="
+	@$(MAKE) --no-print-directory seed
+	@bash scripts/dev/port.sh url
+
+dev/stop:
+	$(COMPOSE) --profile $(PROFILE) down --remove-orphans
 # `migrate deploy` é idempotente: aplica só o que ainda não está em
 # `_prisma_migrations`, então pode rodar em todo deploy. Sem `--no-deps`: o `run`
 # sobe o `postgres` e espera o healthcheck antes de aplicar a migration.
