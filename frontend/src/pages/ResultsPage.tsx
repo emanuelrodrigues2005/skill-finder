@@ -274,7 +274,7 @@ function ResultCard({ item, isRecommended }: { item: ResultItem; isRecommended: 
   const badgeTone =
     badge.tone === "complete"
       ? { border: color.success, background: color.successSurface, color: color.successText }
-      : { border: color.warnAccent, background: color.warnSurface, color: color.warnText };
+      : { border: color.warn, background: color.warnSurface, color: color.warnText };
   return (
     <li
       style={{

@@ -1,10 +1,10 @@
 /**
  * Tokens de design (issue #50, milestone F2.10).
  *
- * **Hex literal, nunca `var(--token)`.** O teste de contraste (`src/test/a11y.test.tsx`) lê
- * `element.style.color` e calcula a razão WCAG sobre esse valor; se o componente devolvesse
- * `var(--color-link)`, o navegador entregaria a string da variável e não haveria número para
- * calcular. Cor de token é `#rrggbb`, com nome semântico.
+ * **Hex literal, nunca uma variável CSS.** O teste de contraste (`src/test/a11y.test.tsx`) lê
+ * `element.style.color` e calcula a razão WCAG sobre esse valor; se o componente devolvesse uma
+ * variável, o navegador entregaria o nome dela e não haveria número para calcular. Cor de token é
+ * `#rrggbb`, com nome semântico.
  *
  * Duas camadas, de propósito:
  *
@@ -15,8 +15,11 @@
  *   uma cor é mexer aqui.
  *
  * `space` segue a escala de 4–32 px. Valor fora da escala (ajuste herdado de 2–4 px, como
- * `0.35rem`) continua literal no componente: encaixá-lo mudaria pixels, e a extração dos tokens
- * não muda nenhum pixel — quem muda valor é o commit da paleta.
+ * `0.35rem`) continua literal no componente: encaixá-lo mudaria pixels.
+ *
+ * Os pisos do WCAG AA são medidos **sobre estes valores** em `src/test/a11y.test.tsx`: 4,5:1 para
+ * par de texto e 3:1 para fronteira de componente/estado (o anel de foco, a borda das faixas de
+ * erro e aviso, os selos). Mudar um hex aqui é mudar a razão medida ali — o teste diz o número.
  */
 
 /** Rampa de cores. Nomes `hue + shade`; o valor é o único lugar onde o hex aparece. */
@@ -26,23 +29,28 @@ export const palette = {
   slate800: "#1e293b",
   slate700: "#334155",
   slate600: "#475569",
-  slate300: "#cbd5e1",
-  slate200: "#e2e8f0",
   blue700: "#1d4ed8",
-  red400: "#f87171",
-  amber200: "#fbbf24",
-  amber500: "#f59e0b",
+  /**
+   * Os três tons `450`/`650` não são degraus de uma escala pronta: são a mistura mínima que
+   * cumpre o piso de 3:1 de fronteira (WCAG 1.4.11) sobre o fundo em que a cor é desenhada.
+   * Escurecer além do necessário seria repintar a tela sem motivo — o piso é 3:1, não "o mais
+   * escuro possível".
+   */
+  gray450: "#8f9298",
+  red450: "#de6565",
   amber50: "#fffbeb",
-  amber800: "#92400e",
+  amber650: "#bd7a09",
   amber700: "#b45309",
+  amber800: "#92400e",
   green600: "#16a34a",
   green50: "#f0fdf4",
   green800: "#166534",
 } as const;
 
 /**
- * Cor com significado. Cada token aqui é usado por pelo menos uma tela; a cor que não tem
- * significado próprio fica na `palette` até ter.
+ * Cor com significado. Cada token aqui tem um papel — e o papel decide o par de contraste que o
+ * teste mede. `bg`/`surface` existem para isso: o fundo da página é o branco padrão do navegador,
+ * ninguém o pinta, mas é contra ele que todo texto e toda borda são medidos.
  */
 export const color = {
   /** Papel da página. */
@@ -57,10 +65,8 @@ export const color = {
   textSubtle: palette.slate700,
   /** Texto secundário: metadados, contadores, dicas. O mais claro que ainda lê. */
   textMuted: palette.slate600,
-  /** Fronteira de cartão e divisor. */
-  border: palette.slate200,
-  /** Fronteira do estado vazio (tracejada). */
-  borderDashed: palette.slate300,
+  /** Fronteira de cartão, divisor e caixa do estado vazio. */
+  border: palette.gray450,
   /** Cor de link e de destaque (borda da recomendação, selo). */
   link: palette.blue700,
   /** Texto em cima de `link`. */
@@ -68,11 +74,9 @@ export const color = {
   /** Anel de foco (`:focus-visible`, 3 px). */
   focus: palette.blue700,
   /** Fronteira de erro. */
-  danger: palette.red400,
-  /** Fronteira de aviso (faixa degradada, histórico expirado, limite de uso). */
-  warn: palette.amber200,
-  /** Fronteira do selo de evidência parcial. */
-  warnAccent: palette.amber500,
+  danger: palette.red450,
+  /** Fronteira de aviso (faixa degradada, histórico expirado, limite de uso, selo parcial). */
+  warn: palette.amber650,
   /** Fundo de aviso. */
   warnSurface: palette.amber50,
   /** Texto de aviso sobre `warnSurface`. */
@@ -144,12 +148,15 @@ export const radius = {
   pill: 999,
 } as const;
 
+/** Largura do anel de foco, em px. A issue #50 pede 3 — e o CSS global sai daqui. */
+const FOCUS_RING_WIDTH = 3;
+
 /**
  * Anel de foco: 3 px sólido, 2 px de afastamento. O CSS global (`App.tsx`) lê daqui — a suíte
  * de acessibilidade procura `outline: <n>px solid` no `:focus-visible` e exige `n >= 2`.
  */
 export const focusRing = {
-  width: 3,
+  width: FOCUS_RING_WIDTH,
   offset: 2,
-  outline: `3px solid ${palette.blue700}`,
+  outline: `${FOCUS_RING_WIDTH}px solid ${palette.blue700}`,
 } as const;

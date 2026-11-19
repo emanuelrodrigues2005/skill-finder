@@ -25,7 +25,7 @@ export function EmptyState({ message = STR.states.empty.default, hint }: EmptySt
   return (
     <div
       role="status"
-      style={{ border: `1px dashed ${color.borderDashed}`, padding: space.lg, borderRadius: radius.md }}
+      style={{ border: `1px dashed ${color.border}`, padding: space.lg, borderRadius: radius.md }}
     >
       <p style={{ margin: 0 }}>{message}</p>
       {hint ? <p style={{ margin: `${space.sm} 0 0`, color: color.textMuted }}>{hint}</p> : null}
