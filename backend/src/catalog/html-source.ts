@@ -23,9 +23,12 @@
  * - uma página que falha (HTTP, rede ou conteúdo) não derruba o run: o erro é
  *   local àquela chave e ela simplesmente falta no resultado.
  *
- * `fetchCatalog` continua existindo só porque a porta ainda o exige até a #46;
- * ele **recusa** e aponta `fetchSkills(keys)`. `fetchDocument` devolve `null`:
- * buscar `SKILL.md` não é esta issue (as capabilities dizem isso de antemão).
+ * `fetchSkills(keys)` é a aquisição: uma requisição por chave pedida, cada uma
+ * passando pelo limitador. `listKeys()` (#46) é a enumeração do sitemap, usada
+ * apenas pelo bootstrap do catálogo vazio; ela **não** busca página de detalhe.
+ * Não existe listagem paginada: a aquisição é sempre por chave. `fetchDocument`
+ * devolve `null`: buscar `SKILL.md` não é esta issue (as capabilities dizem isso
+ * de antemão).
  */
 import axios from 'axios';
 
@@ -41,7 +44,6 @@ import {
   sourceKeyFromDetailUrl,
 } from './sitemap';
 import type {
-  CatalogPage,
   CategoryRecord,
   SkillRecord,
   SkillSource,
@@ -50,6 +52,14 @@ import type {
 
 /** `SKILL_SOURCE_RPS` default: 1 requisição por segundo (D3). */
 const DEFAULT_RPS = 1;
+
+/**
+ * Quanto tempo o indice do sitemap vale antes de ser relido, em ms.
+ *
+ * 6 h = o intervalo do ciclo do rodizio: o custo e um sitemap por ciclo. Sem
+ * expiracao, chave publicada depois do boot nunca seria descoberta.
+ */
+const SITEMAP_TTL_MS = 6 * 60 * 60 * 1000;
 
 /** Teto por requisição: página pesada ou servidor pendurado não trava o ciclo. */
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -145,15 +155,28 @@ export function createHtmlSource(options: HtmlSourceOptions = {}): SkillSource {
   }
 
   let keysPromise: Promise<ReadonlySet<string>> | null = null;
+  let keysExpiresAt = 0;
 
-  /** Índice memoizado (uma leitura de sitemap por instância); falha permite retry. */
+  /**
+   * Indice de chaves do sitemap, memoizado **com TTL**.
+   *
+   * Sem TTL, o `Set` era o do primeiro ciclo do processo: chave publicada depois
+   * do boot so apareceria no proximo restart, e a descoberta continua da #46
+   * dependeria de reinicio (MEDIUM do parecer). Com 4 ciclos/dia, 6 h e o mesmo
+   * intervalo do rodizio; o custo e um sitemap por ciclo, nao por chave.
+   * Falha na leitura zera o cache: o proximo ciclo tenta de novo.
+   */
   function sitemapKeys(): Promise<ReadonlySet<string>> {
-    if (keysPromise === null) {
-      keysPromise = loadSitemapKeys().catch((error: unknown) => {
-        keysPromise = null;
-        throw error;
-      });
+    const now = clock.now();
+    if (keysPromise !== null && now < keysExpiresAt) {
+      return keysPromise;
     }
+    keysExpiresAt = now + SITEMAP_TTL_MS;
+    keysPromise = loadSitemapKeys().catch((error: unknown) => {
+      keysPromise = null;
+      keysExpiresAt = 0;
+      throw error;
+    });
     return keysPromise;
   }
 
@@ -216,13 +239,10 @@ export function createHtmlSource(options: HtmlSourceOptions = {}): SkillSource {
       }
       return records;
     },
-    // @deprecated: sai na #46. Recusar é mais honesto do que fingir página vazia.
-    fetchCatalog: (): Promise<CatalogPage> =>
-      Promise.reject(
-        new Error(
-          'html source has no paginated listing; fetchCatalog is deprecated, use fetchSkills(keys)',
-        ),
-      ),
+    // Enumeração do `sitemap.xml`, sem buscar nenhuma página de detalhe: é o
+    // bootstrap do catálogo vazio (#46). Pode lançar — sitemap fora do ar é
+    // falha do run, e o catálogo anterior continua válido.
+    listKeys: async (): Promise<string[]> => [...(await sitemapKeys())],
     fetchDocument: (): Promise<null> => Promise.resolve(null),
   };
 }
