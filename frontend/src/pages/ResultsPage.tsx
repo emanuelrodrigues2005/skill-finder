@@ -214,25 +214,63 @@ function RecommendationPanel({
     <section
       aria-labelledby="recommendation-heading"
       style={{
-        border: `1px solid ${color.link}`,
-        borderLeft: `4px solid ${color.link}`,
-        borderRadius: radius.md,
-        padding: space.md,
-        margin: `0 0 ${space.lg}`,
+        // Veredito da folha: régua de 3 px à esquerda sobre fundo lavado. A borda
+        // fechada de antes fazia a recomendação parecer só mais um cartão; a régua
+        // diz "esta linha foi medida e escolhida".
+        borderLeft: `3px solid ${color.link}`,
+        background: color.wash,
+        borderRadius: radius.none,
+        padding: `${space.md} ${space.lg}`,
+        margin: `0 0 ${space.xl}`,
       }}
     >
-      <h3 id="recommendation-heading" style={{ margin: 0, fontSize: font.size.lead }}>
+      <h3
+        id="recommendation-heading"
+        style={{
+          margin: 0,
+          fontFamily: font.family.mono,
+          fontSize: font.size.meta,
+          fontWeight: font.weight.regular,
+          color: color.textMuted,
+        }}
+      >
         {STR.results.recommendation.heading}
       </h3>
-      <p style={{ margin: "0.35rem 0 0", fontWeight: font.weight.strong }}>
-        <Link to={skillHref(recommendation.skill_id, searchId)} style={{ color: color.link }}>
+      <p
+        style={{
+          margin: `${space.xs} 0 0`,
+          fontSize: font.size.title,
+          fontWeight: font.weight.strong,
+          lineHeight: font.leading.snug,
+        }}
+      >
+        <Link
+          to={skillHref(recommendation.skill_id, searchId)}
+          style={{ color: color.link, textDecoration: "none" }}
+        >
           {cited === null ? recommendation.skill_id : cited.skill.name}
         </Link>
         {cited === null ? null : STR.results.recommendation.rankSuffix(cited.rank, results.length)}
       </p>
-      <p style={{ margin: "0.35rem 0 0" }}>{recommendation.text}</p>
-      <p style={{ margin: `${space.sm} 0 0`, fontSize: font.size.small, color: color.textMuted }}>
-        {STR.results.recommendation.skillIdLabel} <code>{recommendation.skill_id}</code>{" "}
+      <p
+        style={{
+          margin: `${space.xs} 0 0`,
+          color: color.textBody,
+          maxWidth: "68ch",
+          lineHeight: font.leading.body,
+        }}
+      >
+        {recommendation.text}
+      </p>
+      <p
+        style={{
+          margin: `${space.sm} 0 0`,
+          fontFamily: font.family.mono,
+          fontSize: font.size.meta,
+          color: color.textMuted,
+        }}
+      >
+        {STR.results.recommendation.skillIdLabel} {recommendation.skill_id}{" "}
         {matchesTopPick
           ? STR.results.recommendation.isTopPick
           : STR.results.recommendation.isNotTopPick(
@@ -246,7 +284,7 @@ function RecommendationPanel({
 const EXAMPLE_QUERIES = STR.results.emptyActions.examples;
 
 const actionStyle = { color: color.link } as const;
-const actionLineStyle = { margin: "0.35rem 0 0", fontSize: font.size.body } as const;
+const actionLineStyle = { margin: `${space.xs} 0 0`, fontSize: font.size.body, lineHeight: font.leading.body } as const;
 
 /**
  * Ações do estado vazio (issue #28; `docs/app/01-spec-produto.md` US-07 AC2): as três saídas são
@@ -259,8 +297,10 @@ const actionLineStyle = { margin: "0.35rem 0 0", fontSize: font.size.body } as c
  */
 function EmptyActions() {
   return (
-    <div style={{ borderTop: `1px solid ${color.border}`, marginTop: space.md, paddingTop: space.md }}>
-      <p style={{ margin: 0, fontWeight: font.weight.strong }}>{STR.results.emptyActions.heading}</p>
+    <div style={{ borderTop: `1px solid ${color.hairline}`, marginTop: space.md, paddingTop: space.md }}>
+      <p style={{ margin: 0, fontWeight: font.weight.strong, fontSize: font.size.lead }}>
+        {STR.results.emptyActions.heading}
+      </p>
       <p style={actionLineStyle}>
         <Link to="/" state={{ clearCategory: true }} style={actionStyle}>
           {STR.results.emptyActions.removeCategory}

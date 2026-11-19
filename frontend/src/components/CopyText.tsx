@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { STR } from "../ui/strings";
-import { color, font, space } from "../ui/tokens";
+import { color, font, radius, space } from "../ui/tokens";
 
 /**
  * Valor copiável (permalink, `request_id`) com feedback anunciado (`aria-live`).
@@ -63,10 +63,30 @@ export function CopyText({ label, value }: CopyTextProps) {
     <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
       {clipboard ? (
         <>
-          <code style={{ fontSize: font.size.compact, wordBreak: "break-all" }}>
+          <code
+            style={{
+              fontFamily: font.family.mono,
+              fontSize: font.size.meta,
+              color: color.textSubtle,
+              wordBreak: "break-all",
+            }}
+          >
             {label}: {value}
           </code>
-          <button type="button" onClick={handleCopy}>
+          <button
+            type="button"
+            onClick={handleCopy}
+            style={{
+              padding: `${space.xs} ${space.sm}`,
+              border: `1px solid ${color.border}`,
+              borderRadius: radius.sm,
+              background: color.surface,
+              color: color.textBody,
+              fontFamily: "inherit",
+              fontSize: font.size.meta,
+              cursor: "pointer",
+            }}
+          >
             {STR.copy.button}
           </button>
         </>
@@ -81,7 +101,16 @@ export function CopyText({ label, value }: CopyTextProps) {
             aria-label={label}
             onFocus={(event) => event.currentTarget.select()}
             onClick={(event) => event.currentTarget.select()}
-            style={{ flex: 1, fontFamily: font.family.mono, fontSize: font.size.compact, padding: space.xs }}
+            style={{
+              flex: 1,
+              fontFamily: font.family.mono,
+              fontSize: font.size.compact,
+              padding: space.xs,
+              border: `1px solid ${color.border}`,
+              borderRadius: radius.sm,
+              background: color.surface,
+              color: color.textBody,
+            }}
           />
         </label>
       )}
