@@ -1,0 +1,565 @@
+# Deploy do Skill Finder — issue #17 (F4).
+#
+# O gate de testes é o `workflow_run`: este workflow só nasce quando `ci.yml`
+# concluiu com `success` a partir de um `push` em `main`. Repetir lint/typecheck/
+# teste aqui custaria runner duas vezes para o mesmo resultado e criaria dois
+# veredictos possíveis para o mesmo commit. O único caminho que não passa por esse
+# grafo é o `workflow_dispatch`, e o job `gate` prova o CI verde dele via API antes
+# de qualquer passo caro.
+#
+# Sem OIDC: a conta do AWS Academy não deixa criar provider nem role, então
+# `configure-aws-credentials` com `role-to-assume` não tem onde assumir. As
+# credenciais são de sessão (~4 h, com `AWS_SESSION_TOKEN`) e chegam por `secrets`;
+# elas vencem no meio do lab, e é por isso que o `gate` chama
+# `sts get-caller-identity` antes de construir imagem.
+#
+# Sem SSH: o security group da F3 abre só a 80, e a porta 22 nem existe na lista de
+# regras. O canal é o SSM RunCommand — o mesmo do ciclo da F3 —, então o runner não
+# guarda chave privada e o host não expõe shell na internet.
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'SHA ja publicado no ECR (rollback). Vazio = SHA do ref disparado.'
+        required: false
+        type: string
+      skip_build:
+        description: 'Pula build+push e implanta a imagem que ja esta no ECR.'
+        required: false
+        default: false
+        type: boolean
+      provision:
+        description: 'Roda terraform apply antes do deploy (infra derrubada).'
+        required: false
+        default: false
+        type: boolean
+
+# `contents: read` para o checkout; `actions: read` é o mínimo para o `gate` ler a
+# conclusão do CI de um dispatch manual. Nada escreve na API do GitHub.
+permissions:
+  contents: read
+  actions: read
+
+# Um deploy por ref, e sem cancelar o que está em curso: abortar entre `up -d` e
+# `prisma:deploy` deixa a stack meio atualizada, que é pior que esperar.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+# A sessão do Learner Lab só vale em us-east-1 (`infra/versions.tf`).
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: skill-finder
+
+jobs:
+  gate:
+    # `workflow_run` chega com qualquer conclusão; só o CI verde prossegue, e o
+    # filtro por `push` deixa de fora o CI de um PR que aponte para `main`.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+      ecr_registry: ${{ steps.target.outputs.ecr_registry }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      REQUESTED_TAG: ${{ inputs.image_tag }}
+      WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+      DISPATCHED_SHA: ${{ github.sha }}
+    steps:
+      - name: Mask credentials
+        run: |
+          set -uo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Verify the lab session
+        run: |
+          set -uo pipefail
+          if ! account="$(aws sts get-caller-identity --query Account --output text 2>&1)"; then
+            echo "::error::credencial AWS recusada: ${account}"
+            {
+              echo "## Sessao do AWS Academy invalida"
+              echo ""
+              echo "Renove as credenciais em *AWS Details* e regrave os tres secrets:"
+              echo '`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "conta: ${account}"
+
+      - name: Prove the CI gate for a manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          sha="${REQUESTED_TAG:-$DISPATCHED_SHA}"
+          if ! [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::image_tag '${sha}' nao e um SHA de commit"
+            exit 1
+          fi
+          green="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=50" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length' 2>/dev/null || echo 0)"
+          if [ "${green:-0}" -lt 1 ]; then
+            echo "::error::nenhum run verde do CI para ${sha}; dispatch manual exige o mesmo gate do workflow_run"
+            exit 1
+          fi
+          echo "CI verde para ${sha}: ${green} run(s)"
+
+      - name: Resolve the deploy target
+        id: target
+        run: |
+          set -uo pipefail
+          sha="${REQUESTED_TAG:-${WORKFLOW_RUN_SHA:-$DISPATCHED_SHA}}"
+          if ! [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::tag de destino '${sha}' nao e um SHA de commit"
+            exit 1
+          fi
+          registry="$(aws ecr describe-repositories --repository-names "${PROJECT_NAME}-api" \
+            --query 'repositories[0].repositoryUri' --output text | cut -d/ -f1)"
+          if [ -z "$registry" ] || [ "$registry" = "None" ]; then
+            echo "::error::repositorio ${PROJECT_NAME}-api nao encontrado no ECR; a infra da F3 nao esta de pe"
+            exit 1
+          fi
+          {
+            echo "sha=${sha}"
+            echo "ecr_registry=${registry}"
+          } >> "$GITHUB_OUTPUT"
+          echo "sha: ${sha}"
+          echo "registry: ${registry}"
+
+      - name: Fail fast when the host is missing
+        # Com `provision=true` a instância ainda pode não existir: quem resolve o
+        # host é o job `deploy`, depois do apply.
+        if: ${{ !inputs.provision }}
+        run: |
+          set -uo pipefail
+          found="$(aws ec2 describe-instances \
+            --filters "Name=tag:project,Values=${PROJECT_NAME}" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' --output text)"
+          if [ -z "$found" ]; then
+            echo "::error::nenhuma instancia 'running' com tag project=${PROJECT_NAME}"
+            {
+              echo "## Sem host"
+              echo ""
+              echo "Suba a infraestrutura (runbook §1) ou dispare este workflow com \`provision=true\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "instancias: ${found}"
+
+  build:
+    needs: gate
+    if: ${{ !inputs.skip_build }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+    steps:
+      - name: Mask credentials
+        run: |
+          set -uo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Checkout the deployed commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push both images
+        env:
+          REGISTRY: ${{ needs.gate.outputs.ecr_registry }}
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for part in "api:backend" "web:frontend"; do
+            repository="${part%%:*}"
+            context="${part##*:}"
+            image="${REGISTRY}/${PROJECT_NAME}-${repository}:${SHA}"
+            docker build --target runtime -t "$image" "$context"
+            docker push "$image"
+          done
+
+      - name: Assert the SHA tag is in the registry
+        env:
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for repository in api web; do
+            aws ecr describe-images --repository-names "${PROJECT_NAME}-${repository}" \
+              --image-ids imageTag="$SHA" \
+              --query 'imageDetails[0].[imageTags,imagePushedAt,imageScanStatus.status]' --output text
+          done
+
+  provision:
+    needs: gate
+    if: ${{ inputs.provision }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      TF_IN_AUTOMATION: '1'
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+    steps:
+      - name: Mask credentials
+        run: |
+          set -uo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.17.2
+          terraform_wrapper: false
+
+      - name: Apply the infrastructure
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          # `infra/terraform.tfvars` e ignorado pelo Git: no runner nao existe, e as
+          # duas variaveis sem default chegam por `-var`. O bucket segue a regra de
+          # `scripts/bootstrap-state.sh` quando `vars.TF_STATE_BUCKET` nao esta setada.
+          bucket="${TF_STATE_BUCKET:-bcc-cloud-tfstate-${account}}"
+          cd infra
+          terraform init -input=false -no-color -backend-config="bucket=${bucket}"
+          terraform fmt -check -recursive
+          terraform validate -no-color
+          terraform plan -input=false -no-color \
+            -var="project_name=${PROJECT_NAME}" -var="state_bucket=${bucket}" \
+            -out=tfplan
+          terraform apply -input=false -no-color tfplan
+          terraform output -no-color
+
+  deploy:
+    needs: [gate, build, provision]
+    # `build` e `provision` podem ter sido pulados de propósito (rollback,
+    # `skip_build`, `provision=false`); `gate` nunca. `!cancelled()` mantém o
+    # cancelamento como cancelamento.
+    if: >-
+      !cancelled() && needs.gate.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.provision.result == 'success' || needs.provision.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      public_ip: ${{ steps.target.outputs.public_ip }}
+      # O `smoke` só enxerga o `needs` das suas dependências diretas: o SHA que ele
+      # publica no sumário tem de viajar de `gate` para `deploy` e de `deploy`
+      # para `smoke`.
+      sha: ${{ needs.gate.outputs.sha }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      SHA: ${{ needs.gate.outputs.sha }}
+      REGISTRY: ${{ needs.gate.outputs.ecr_registry }}
+    steps:
+      - name: Mask credentials
+        run: |
+          set -uo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Resolve the host
+        id: target
+        run: |
+          set -euo pipefail
+          found="$(aws ec2 describe-instances \
+            --filters "Name=tag:project,Values=${PROJECT_NAME}" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].[InstanceId,PublicIpAddress]' --output text)"
+          if [ -z "$found" ]; then
+            echo "::error::nenhuma instancia 'running' com tag project=${PROJECT_NAME}"
+            echo "Suba a infra (runbook §1) ou dispare com provision=true." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          line="$(printf '%s\n' "$found" | head -1)"
+          {
+            echo "instance_id=$(printf '%s' "$line" | cut -f1)"
+            echo "public_ip=$(printf '%s' "$line" | cut -f2)"
+          } >> "$GITHUB_OUTPUT"
+          printf 'host: %s\n' "$line"
+
+      - name: Wait for the SSM agent
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 24); do
+            status="$(aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=${INSTANCE_ID}" \
+              --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || true)"
+            if [ "$status" = "Online" ]; then
+              echo "SSM online em ${attempt} tentativa(s)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::agente SSM nao ficou Online em 240s na instancia ${INSTANCE_ID}"
+          echo "O canal do deploy e o SSM: confira o instance profile (LabInstanceProfile) e o servico amazon-ssm-agent." >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Prepare the SSM runner
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ssm-run.sh" <<'HELPER'
+          # ssm_run <titulo> <script> — envia por AWS-RunShellScript, acompanha até o
+          # fim e devolve stdout/stderr no log. O script vai em base64 para não
+          # brigar com o JSON de `--parameters`.
+          ssm_run() {
+            local title="$1" script="$2" instance="$3"
+            local encoded parameters command_id status invocation
+            encoded="$(printf '%s' "$script" | base64 -w 0)"
+            parameters="$(jq -nc --arg c "echo '${encoded}' | base64 -d > /tmp/${title}.sh && bash /tmp/${title}.sh" '{commands: [$c]}')"
+            command_id="$(aws ssm send-command \
+              --document-name AWS-RunShellScript \
+              --instance-ids "$instance" \
+              --comment "$title" \
+              --timeout-seconds 900 \
+              --parameters "$parameters" \
+              --query 'Command.CommandId' --output text)"
+            echo "SSM ${title}: ${command_id}"
+            status="Pending"
+            for _ in $(seq 1 180); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" \
+                --query 'Status' --output text 2>/dev/null || echo Pending)"
+              case "$status" in
+                Success|Failed|TimedOut|Cancelled) break ;;
+              esac
+              sleep 5
+            done
+            invocation="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --output json 2>/dev/null || echo '{}')"
+            printf '%s' "$invocation" | jq -r '.StandardOutputContent // ""'
+            printf '%s' "$invocation" | jq -r '.StandardErrorContent // ""' >&2
+            if [ "$status" != "Success" ]; then
+              printf '::error::comando SSM %s terminou em %s\n' "$title" "$status"
+              return 1
+            fi
+          }
+          HELPER
+
+      - name: Deploy through SSM
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/ssm-run.sh"
+          remote="$(cat <<'REMOTE'
+          #!/usr/bin/env bash
+          # Espelha a §2 do runbook: IMAGE_TAG, pull, up -d --no-build, PS e migracao.
+          set -euo pipefail
+          cd /opt/app
+
+          if [ ! -f .env ]; then
+            echo "ERRO: /opt/app/.env ausente; o pipeline nao cria segredo — refaca a §1.5 do runbook." >&2
+            exit 1
+          fi
+
+          sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=__IMAGE_TAG__/" .env
+          if ! grep -qx 'IMAGE_TAG=__IMAGE_TAG__' .env; then
+            echo "ERRO: nao consegui fixar IMAGE_TAG em /opt/app/.env (arquivo editado a mao?)." >&2
+            exit 1
+          fi
+          grep -E '^(IMAGE_TAG|ECR_REGISTRY)=' .env
+
+          compose() {
+            docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod "$@"
+          }
+
+          # --no-build: a imagem vem do ECR. Sem a flag o compose.yaml construiria
+          # api e web neste host (t3.small, 2 GB) em vez de baixar o que o build
+          # publicou; com pull_policy: always o digest e sempre o do registry.
+          compose pull
+          compose up -d --no-build
+          compose ps
+          compose exec -T api npm run --silent prisma:deploy
+          REMOTE
+          )"
+          # O SHA é hex validado no `gate` e não é segredo: entra por substituição,
+          # não por interpolação de shell.
+          remote="${remote//__IMAGE_TAG__/$SHA}"
+          ssm_run deploy "$remote" "$INSTANCE_ID"
+
+      - name: First ingestion through the admin endpoint
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/ssm-run.sh"
+          remote="$(cat <<'REMOTE'
+          #!/usr/bin/env bash
+          # §1.8 do runbook: a imagem runtime nao tem scripts/ nem ts-node, entao a
+          # ingestao e a rota admin. O token nunca sai do host.
+          set -euo pipefail
+          cd /opt/app
+          port="$(sed -n 's/^WEB_PORT=//p' .env)"
+          port="${port:-80}"
+          token="$(sed -n 's/^ADMIN_TOKEN=//p' .env)"
+          if [ -z "$token" ]; then
+            echo "ERRO: ADMIN_TOKEN vazio em /opt/app/.env" >&2
+            exit 1
+          fi
+          code="$(curl -sS -m 120 -o /tmp/ingest.json -w '%{http_code}' \
+            -X POST "http://localhost:${port}/api/v1/admin/ingest" \
+            -H "X-Admin-Token: ${token}" -H 'Content-Type: application/json' \
+            -d '{"source_keys":["vercel-labs/skills/find-skills","anthropics/skills/webapp-testing"]}')"
+          head -c 400 /tmp/ingest.json; echo
+          case "$code" in
+            202|409) echo "ingestao: ${code}" ;;
+            401) echo "ERRO: ADMIN_TOKEN recusado pela API (401)" >&2; exit 1 ;;
+            *) echo "AVISO: ingestao respondeu ${code}; o deploy segue e o catalogo nao mudou" >&2 ;;
+          esac
+          REMOTE
+          )"
+          ssm_run ingest "$remote" "$INSTANCE_ID"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          PUBLIC_IP: ${{ steps.target.outputs.public_ip }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## Deploy"
+            echo ""
+            echo "| item | valor |"
+            echo "| --- | --- |"
+            echo "| commit | \`${SHA}\` |"
+            echo "| IP publico | \`${PUBLIC_IP:-desconhecido}\` |"
+            echo "| imagens | \`${PROJECT_NAME}-api:${SHA}\`, \`${PROJECT_NAME}-web:${SHA}\` |"
+            echo "| registry | \`${REGISTRY}\` |"
+            echo "| gatilho | \`${EVENT_NAME}\` |"
+            echo ""
+            echo "Rollback: dispare com \`image_tag=<SHA anterior>\` e \`skip_build=true\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      BASE_URL: http://${{ needs.deploy.outputs.public_ip }}
+    steps:
+      - name: Wait for the edge
+        run: |
+          set -uo pipefail
+          for attempt in $(seq 1 24); do
+            if curl -fsS -m 5 -o /dev/null "${BASE_URL}/healthz"; then
+              echo "borda respondendo (tentativa ${attempt})"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::${BASE_URL}/healthz nao respondeu em 120s"
+          exit 1
+
+      - name: smoke /healthz is JSON and ok
+        run: |
+          set -euo pipefail
+          body="$(curl -fsS -m 10 "${BASE_URL}/healthz")"
+          echo "$body"
+          printf '%s' "$body" | jq -e '.status == "ok"' > /dev/null
+
+      - name: smoke /readyz is JSON and ok
+        run: |
+          set -euo pipefail
+          body="$(curl -fsS -m 15 "${BASE_URL}/readyz")"
+          echo "$body"
+          printf '%s' "$body" | jq -e '.status == "ok"' > /dev/null
+
+      - name: smoke / serves the SPA as HTML
+        run: |
+          set -euo pipefail
+          content_type="$(curl -fsS -m 10 -o "$RUNNER_TEMP/root.html" -w '%{content_type}' "${BASE_URL}/")"
+          echo "content-type: ${content_type}"
+          case "$content_type" in
+            text/html*) ;;
+            *) echo "::error::raiz serviu '${content_type}', esperado text/html"; exit 1 ;;
+          esac
+          grep -qi '<!doctype html' "$RUNNER_TEMP/root.html"
+
+      - name: smoke admin ingest answers 401 without a token
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -m 15 -o "$RUNNER_TEMP/ingest-denied.json" -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/admin/ingest" \
+            -H 'Content-Type: application/json' \
+            -d '{"source_keys":["vercel-labs/skills/find-skills"]}')"
+          echo "status: ${code}"
+          head -c 300 "$RUNNER_TEMP/ingest-denied.json"; echo
+          if [ "$code" != "401" ]; then
+            echo "::error::ingestao sem token respondeu ${code}, esperado 401"
+            exit 1
+          fi
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          SHA: ${{ needs.deploy.outputs.sha }}
+        run: |
+          set -uo pipefail
+          probe() {
+            curl -sS -m 15 -o - -w '|%{http_code}' "$1" 2>&1 | tr '\n' ' ' | head -c 500 || true
+          }
+          healthz="$(probe "${BASE_URL}/healthz")"
+          readyz="$(probe "${BASE_URL}/readyz")"
+          root="$(curl -sS -m 10 -o /dev/null -w '%{http_code} %{content_type}' "${BASE_URL}/" 2>&1 || true)"
+          ingest="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/admin/ingest" -H 'Content-Type: application/json' \
+            -d '{"source_keys":["vercel-labs/skills/find-skills"]}' 2>&1 || true)"
+          {
+            echo "## Smoke pos-deploy"
+            echo ""
+            echo "URL: \`${BASE_URL}\` — SHA implantado: \`${SHA}\`."
+            echo ""
+            echo "| checagem | esperado | observado |"
+            echo "| --- | --- | --- |"
+            echo "| \`GET /healthz\` | 200, JSON \`status: ok\` | \`${healthz}\` |"
+            echo "| \`GET /readyz\` | 200, JSON \`status: ok\` | \`${readyz}\` |"
+            echo "| \`GET /\` | 200 \`text/html\` | \`${root}\` |"
+            echo "| \`POST /api/v1/admin/ingest\` sem token | 401 | \`${ingest}\` |"
+            echo ""
+            echo "Reprovou? Rollback: dispatch com \`image_tag=<SHA anterior>\` e \`skip_build=true\`."
+          } >> "$GITHUB_STEP_SUMMARY"

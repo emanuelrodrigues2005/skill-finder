@@ -227,6 +227,11 @@ Uma versão nova de código com a infraestrutura de pé: a imagem nova no ECR, `
 `pull`, `up -d --no-build`, migração, smoke. Nada de `terraform apply` aqui — infraestrutura só
 muda na §1 — e nada de construir imagem no host.
 
+Esta seção é o caminho **manual**, para quando a sessão não tem credencial de GitHub Actions. O
+caminho automatizado é `.github/workflows/deploy.yml`: ele executa esta mesma sequência por SSM
+RunCommand (sem SSH) e reprova o workflow se o smoke falhar — desenho, secrets e limitações do lab
+em [`docs/app/06-pipeline-deploy.md`](app/06-pipeline-deploy.md).
+
 ### 2.1 Publicar a imagem e apontar o `IMAGE_TAG`
 
 A imagem sai do CI (F4) ou, sem CI, da máquina de quem desenvolve. O contrato é um só: **tag = SHA
@@ -295,7 +300,9 @@ SHA_ANTERIOR="<sha que está rodando hoje>"
 ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" "sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=$SHA_ANTERIOR/' /opt/app/.env"
 ```
 
-Depois, `pull` + `up -d --no-build` + `prisma:deploy` (§2.2) e o smoke (§2.3). Se o SHA anterior já
+Depois, `pull` + `up -d --no-build` + `prisma:deploy` (§2.2) e o smoke (§2.3). Com o pipeline, o
+mesmo movimento é um dispatch — `gh workflow run deploy.yml --ref main -f image_tag=$SHA_ANTERIOR -f
+skip_build=true` —, que repete §2.2 e só fica verde se o smoke passar. Se o SHA anterior já
 saiu da janela de 5 imagens, o rollback é republicar o commit antigo
 (`git switch --detach <sha>` e o bloco de build de §2.1) — migrations aplicadas **não** voltam: elas
 são para frente por desenho, e é por isso que a migration de cada release entra antes do smoke.

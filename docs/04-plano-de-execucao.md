@@ -25,7 +25,7 @@
 | **F1** — Proposta e decisões | Congelar escopo e arquitetura e obter aprovação | **E1** | C1, C2, C8 | 0,5–1,0 | Proposta aprovada + Q1–Q6 respondidas ou padrão adotado + ADR-0001 escrito |
 | **F2** — Aplicação e testes | MVP (domínio, API, UI, migrations) rodando local com testes | **E2**, parte de E4 | **C1 (25%)**, **C5 (10%)** | 4,0–4,5 | `/healthz` local verde, 3 telas operáveis, cobertura do domínio ≥ 80%, teste de concorrência verde |
 | **F3** — Infraestrutura como código | Provisionar por Terraform, com estado remoto, e ver a app no ar | **E2**, **E4** | **C3 (15%)**, C1 | 1,5–2,0 | `fmt`/`validate` limpos, `apply` sem erro, app em HTTP, `ssh` OK, `destroy` sem órfãos |
-| **F4** — Pipeline CI/CD e ECR | Ciclar sem passo manual, com gate de testes explícito | **E3** | **C4 (15%)**, **C5 (10%)** | 1,0–1,5 | Workflow verde com 7 jobs, imagem com tag = SHA, execução vermelha com `build`/`deploy` `skipped` |
+| **F4** — Pipeline CI/CD e ECR | Ciclar sem passo manual, com gate de testes explícito | **E3** | **C4 (15%)**, **C5 (10%)** | 1,0–1,5 | CI verde com 8 jobs; `deploy.yml` com gate por `workflow_run`, imagem com tag = SHA e smoke que reprova o workflow |
 | **F5** — Observabilidade e segredos | Mostrar métrica, log e dashboard vivos; nenhum segredo rastreável | **E2**, **E5** | **C7 (5%)**, **C6 (5%)** | 0,5–1,0 | 4 painéis com dados, log de erro no Loki, `/grafana` protegido, `.env` gerado pelo cofre |
 | **F6** — Endurecimento e entrega | Fechar documentação, ensaiar a demo e entregar | **E5**, **E4** | **C8 (5%)** + protege C1–C4 | 0,5–1,0 | Docs completos, ciclo completo em < 15 min, demo de 3 min ensaiada, checklist da §11 marcado |
 | **Total** | | | | **8,0–12,0** | — |
@@ -270,7 +270,7 @@
 
 **Objetivo.** Repetir a F3 sem passo manual: push/PR → lint, testes, build, push no ECR, deploy e smoke, com o *gate* de testes explícito no grafo de jobs.
 
-**Pré-requisitos.** F3 verde; repositório no GitHub com Actions habilitado; `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` e a chave privada SSH gravados como Actions Secrets; imagem já publicada manualmente na F3.
+**Pré-requisitos.** F3 verde; repositório no GitHub com Actions habilitado; `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` e `AWS_SESSION_TOKEN` gravados como Actions Secrets (as credenciais de sessão do lab — nada de chave SSH, o canal é o SSM); imagem já publicada manualmente na F3.
 
 **Tarefas.**
 
@@ -279,13 +279,15 @@
 2. Publicar como artefatos apenas o JUnit XML e o relatório de cobertura, com caminhos explícitos — nunca `tfstate`, `.env` ou `docker save` (`docs/01` §7.5).
 3. Adicionar o job `secrets` (`gitleaks`) reprovando o PR ao encontrar segredo no diff.
 
-*CD (com AWS)*
-4. Criar `.github/workflows/deploy.yml` com `workflow_dispatch`, `concurrency` para impedir dois deploys simultâneos e `permissions: contents: read`.
-5. Implementar o job `preflight` com `aws sts get-caller-identity` e mensagem explícita ("renove a sessão do lab"), executando **antes** de qualquer job com AWS.
-6. Implementar o job `build` com `docker buildx` e push para o ECR com tag = SHA do commit, sem `latest`.
-7. Implementar o job `tf-plan` (somente em PR) rodando `fmt -check`, `validate` e `plan -no-color`, com a saída no *summary*.
-8. Implementar o job `deploy`: `terraform apply` quando `infra/` mudou; depois SSH → `compose pull && up -d --no-build` e `docker compose exec -T api npm run --silent prisma:deploy`, lendo **apenas** `terraform output -json`.
-9. Implementar o job `smoke` que descobre a URL pelas saídas e verifica `/healthz`, `/readyz`, e criação+leitura de um registro pelo contrato, **falhando o workflow** em qualquer desvio.
+*CD (com AWS)* — implementado na issue #17; o desenho completo está em
+`docs/app/06-pipeline-deploy.md`.
+
+4. Criar `.github/workflows/deploy.yml` com gatilho `workflow_run` de `ci.yml` (concluído com sucesso, vindo de `push` em `main`), `workflow_dispatch` para o disparo manual e `concurrency` para impedir dois deploys simultâneos, com `permissions: contents: read` e `actions: read`.
+5. Implementar o job `gate` com `aws sts get-caller-identity` e mensagem explícita ("renove a sessão do lab"), executando **antes** de qualquer job com AWS; no dispatch manual ele também prova o CI verde do SHA pela API de Actions.
+6. Implementar o job `build` com `docker build --target runtime` e push para o ECR com tag = SHA do commit, sem `latest`, conferindo a tag depois no `describe-images`.
+7. Implementar o job `provision` (desligado por padrão, só com `provision=true`) rodando `init -backend-config`, `fmt -check`, `validate`, `plan -out` e `apply tfplan`, com as variáveis que o `terraform.tfvars` (ignorado pelo Git) daria no runner.
+8. Implementar o job `deploy`: resolve o host por tag, espera o agente SSM ficar `Online` e, por **SSM RunCommand** (`AWS-RunShellScript`; a porta 22 não existe no security group da F3), troca o `IMAGE_TAG` do `/opt/app/.env`, roda `compose pull` + `up -d --no-build`, `npm run --silent prisma:deploy` e a ingestão pelo endpoint admin.
+9. Implementar o job `smoke` na borda pública: `/healthz` e `/readyz` em JSON com `status: ok`, `/` em `text/html` com a SPA e `POST /api/v1/admin/ingest` **sem** token respondendo `401`, **falhando o workflow** em qualquer desvio.
 10. Publicar no `$GITHUB_STEP_SUMMARY` a URL, o digest da imagem e o SHA implantado.
 11. Configurar a proteção do branch padrão exigindo `lint`, `test-unit`, `test-integration` e `secrets` verdes.
 
@@ -297,11 +299,11 @@
 
 | # | Critério | Como provar |
 | --- | --- | --- |
-| 1 | Pipeline mínimo do edital | execução verde com `preflight, lint, test-unit, test-integration, build, deploy, smoke` — as 4 etapas do §3.3 do edital visíveis no histórico |
-| 2 | Gate provado | na execução vermelha, `build` e `deploy` aparecem `skipped` |
+| 1 | Pipeline mínimo do edital | execução verde com `gate, build, deploy, smoke` no `deploy.yml` e os 8 jobs do `ci.yml` acima dele — as 4 etapas do §3.3 do edital visíveis no histórico |
+| 2 | Gate provado | com `workflow_run`, CI vermelho **não gera** run de deploy; a prova é o run de CI vermelho (nenhum deploy nasce) e o `gate` vermelho no dispatch manual do mesmo commit |
 | 3 | Artefato por SHA | `aws ecr describe-images --repository-name <repo> --query 'imageDetails[].imageTags'` contém o SHA implantado |
-| 4 | Sem IP no repositório | `grep -rnE '([0-9]{1,3}\.){3}[0-9]{1,3}' .github/ infra/ \| grep -v '0\.0\.0\.0'` → vazio |
-| 5 | Deploy sem clique humano após o dispatch | log do job `deploy` mostra `apply`, `compose pull`, `up -d` e `prisma migrate deploy` |
+| 4 | Sem IP no repositório | `grep -rnE '([0-9]{1,3}\.){3}[0-9]{1,3}' .github/workflows/deploy.yml \| grep -vE '127\.0\.0\.1\|0\.0\.0\.0'` → vazio |
+| 5 | Deploy sem clique humano após o dispatch | log do job `deploy` mostra `compose pull`, `up -d --no-build`, `prisma:deploy` e a resposta da ingestão |
 | 6 | Smoke honesto | derrubar o banco no host e ver `smoke` (não `deploy`) reprovar o workflow |
 | 7 | Segredo fora do Git | `gitleaks` verde; `git log --all --full-history -- "*.env"` → vazio |
 | 8 | Credenciais mascaradas | log do workflow exibe `***` no lugar dos valores; busca pelo prefixo do segredo no log não retorna nada |
@@ -312,8 +314,8 @@
 
 | Risco | Mitigação |
 | --- | --- |
-| Token de sessão vence entre dispatch e deploy | `preflight` com mensagem clara; rodar o deploy cedo na sessão; atualizar os 3 secrets no início (§10) |
-| SSH dos runners bloqueado | Plano B *pull-based* (timer no host puxando do ECR via instance profile, `docs/01` §4.2h-4) |
+| Token de sessão vence entre dispatch e deploy | `gate` com mensagem clara antes de construir imagem; rodar o deploy cedo na sessão; atualizar os 3 secrets no início (§10) |
+| Porta 22 fechada no host (não há SSH) | o canal do deploy é o **SSM RunCommand**, o mesmo do ciclo da F3: sem chave no runner, sem porta aberta; o job espera o agente ficar `Online` e reprova com mensagem explícita |
 | CI lento demais | Cache de build, Dockerfile multi-stage e um único service container de Postgres |
 | `test-integration` *flaky* | `healthcheck` do Postgres antes dos testes, `retry` limitado e proibição de `sleep` |
 | `Error acquiring the state lock` | `terraform force-unlock <id>` só depois de confirmar que ninguém está aplicando (`docs/02` §7.4) |
@@ -568,9 +570,9 @@ Regras de convivência, em ordem de importância:
 **F4 — Pipeline completo**
 - [ ] *Ready:* F3 verde, Actions habilitado e 4 secrets gravados.
 - [ ] `ci.yml` roda em push e em PR
-- [ ] `deploy.yml` disparado por `workflow_dispatch`
-- [ ] Uma execução verde com os 7 jobs
-- [ ] Uma execução vermelha com `build`/`deploy` `skipped` capturada
+- [ ] `deploy.yml` com `workflow_run` do CI verde e `workflow_dispatch` para o disparo manual
+- [ ] Uma execução verde com os 8 jobs do CI e os jobs `gate`, `build`, `deploy`, `smoke`
+- [ ] Prova do gate: CI vermelho de propósito **não** gera deploy; `gate` vermelho no dispatch manual do mesmo commit
 - [ ] Imagem no ECR com tag = SHA do commit
 - [ ] `smoke` reprova o workflow quando a app está fora
 - [ ] `gitleaks` verde e nenhum IP no repositório
