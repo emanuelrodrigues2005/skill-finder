@@ -31,12 +31,13 @@ bash scripts/bootstrap-state.sh
 ```
 
 Esperado: `bucket criado` (ou `bucket já existe — não recriado`), `versionamento: Enabled`,
-`criptografia SSE-S3 aplicada`, `acesso público bloqueado` e, no fim, a linha
-`export TF_STATE_BUCKET='bcc-cloud-tfstate-<id-da-conta>'`. Grave-a em
-`~/.local/bin/academy-env` e exporte na sessão atual:
+`criptografia SSE-S3 aplicada`, `acesso público bloqueado` e, no fim, a linha com o nome do bucket
+(o sufixo é o id da conta). Exporte-o na sessão atual, grave em `~/.local/bin/academy-env` e use o
+mesmo valor em `state_bucket` no `terraform.tfvars` (§1.2):
 
 ```bash
-export TF_STATE_BUCKET='bcc-cloud-tfstate-<id-da-conta>'
+export TF_STATE_BUCKET="bcc-cloud-tfstate-$(aws sts get-caller-identity --query Account --output text)"
+echo "$TF_STATE_BUCKET"
 ```
 
 ### 1.2 Variáveis do Terraform
@@ -122,6 +123,9 @@ ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'chmod 600 /opt/app/.env && stat -c "%a %U" 
 Esperado: `600 ubuntu`. O `chmod 600` é obrigatório — o arquivo tem a senha do banco, o
 `ADMIN_TOKEN` e a chave da LLM, e é lido por um usuário só.
 
+Troque `LLM_API_KEY` pelo valor real **antes** de rodar o bloco: o schema só exige string não vazia,
+então o placeholder passa no boot e falha na primeira busca, com `degraded: true`.
+
 Por que essas chaves: o compose deriva `DATABASE_URL` de `POSTGRES_*` e fixa `ENV=prod` por
 serviço; com `ENV=prod` o boot **recusa** subir sem `DATABASE_URL`, `IP_HASH_SALT`, `ADMIN_TOKEN`
 (≥ 32 caracteres) e `LLM_API_KEY` (quando `LLM_ENABLED=true`), e recusa a senha de dev `skillsdev`
@@ -188,8 +192,9 @@ scp -i ~/.ssh/projeto2 /tmp/skill-finder.tar.gz "ubuntu@$IP:/tmp/"
 ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'sudo tar -xzf /tmp/skill-finder.tar.gz -C /opt/app && sudo chown -R ubuntu:ubuntu /opt/app'
 ```
 
-Esperado: nenhuma saída de erro. O `tar` extrai por cima: alteração e remoção de arquivo no host só
-aparecem se você apagar `/opt/app/backend` e `/opt/app/frontend` antes — para um deploy limpo:
+Esperado: nenhuma saída de erro. O que vai para o host é o commit `HEAD` — alteração não commitada
+fica de fora. O `tar` extrai por cima: alteração e remoção de arquivo no host só aparecem se você
+apagar `/opt/app/backend` e `/opt/app/frontend` antes — para um deploy limpo:
 
 ```bash
 ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'rm -rf /opt/app/backend /opt/app/frontend && tar -xzf /tmp/skill-finder.tar.gz -C /opt/app'
@@ -262,12 +267,17 @@ aws ec2 describe-volumes --filters "Name=tag:project,Values=skill-finder" \
   --query 'Volumes[].[VolumeId,State,Size]' --output table
 ```
 
-Esperado: **duas tabelas vazias**. Qualquer linha é órfão e continua consumindo crédito: confira o
-`InstanceId`/`VolumeId` antes de remover e depois repita a varredura.
+Esperado: **duas tabelas vazias**. Qualquer linha é órfão e continua consumindo crédito. Confira o
+id na tabela e remova com o comando abaixo — sem id, ele falha em vez de apagar outra coisa; repita a
+varredura e o comando até as duas tabelas voltarem vazias (`delete-volume` apaga um volume por vez):
 
 ```bash
-aws ec2 terminate-instances --instance-ids <instance-id>
-aws ec2 delete-volume --volume-id <volume-id>
+aws ec2 terminate-instances --instance-ids \
+  "$(aws ec2 describe-instances --filters "Name=tag:project,Values=skill-finder" \
+     --query 'Reservations[].Instances[].InstanceId' --output text)"
+aws ec2 delete-volume --volume-id \
+  "$(aws ec2 describe-volumes --filters "Name=tag:project,Values=skill-finder" \
+     --query 'Volumes[0].VolumeId' --output text)"
 ```
 
 ### 3.3 Confirmar state vazio e bucket preservado
