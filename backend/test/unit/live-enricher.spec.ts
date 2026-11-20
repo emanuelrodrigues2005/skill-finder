@@ -8,9 +8,11 @@
  */
 import {
   CatalogLiveEnricher,
+  liveAdapterName,
   matchKeysBySlug,
   slugTerms,
 } from '@/catalog/live-enricher.service';
+import { ingest } from '@/catalog/ingest';
 import type { AppConfigService } from '@/config/config.module';
 import type { CatalogRepository } from '@/catalog/catalog-repository';
 import type { SkillRecord, SkillSource } from '@/catalog/skill-source';
@@ -326,5 +328,72 @@ describe('CatalogLiveEnricher — orçamento da rodada', () => {
     await enricher.enrich({ keywords: ['test', 'find', 'tdd', 'pdf'], limit: 12 });
 
     expect(source.chavesPedidas[0]).toHaveLength(4);
+  });
+});
+
+/**
+ * Fase 5 da auditoria — a origem da rodada é legível em `ingest_run`.
+ *
+ * Toda busca vazia dispara `ingest({keys})` e grava uma linha com
+ * `adapter='html'` e `items_requested=12`: em `GET /admin/ingest/runs` (e num
+ * `SELECT adapter, count(*) FROM ingest_run GROUP BY 1`), ela era
+ * **indistinguível** de um run do operador (`POST /admin/ingest`) ou do
+ * agendador. A rodada automática passa a gravar o sufixo `+live` no `adapter`.
+ *
+ * O sufixo — e não uma coluna nova — porque `ingest_run.adapter` é `TEXT` sem
+ * enum, não entra no contrato (`IngestRun` não o expõe) e ninguém ramifica em
+ * cima do valor gravado: quem escolhe o adaptador é `CATALOG_ADAPTER`, não a
+ * coluna. Um sufixo não muda nenhum dos dois.
+ */
+describe('CatalogLiveEnricher — origem da rodada', () => {
+  /** Repositório que registra o `adapter` de cada `startRun` — é a coluna do banco. */
+  function repositorioQueRegistra(): {
+    readonly repo: CatalogRepository;
+    readonly adapters: string[];
+  } {
+    const adapters: string[] = [];
+    const repo = {
+      failStaleRuns: () => Promise.resolve(0),
+      startRun: (run: { adapter: string }): Promise<number> => {
+        adapters.push(run.adapter);
+        return Promise.resolve(1);
+      },
+      finishRun: () => Promise.resolve(),
+      upsertSkills: (skills: readonly SkillRecord[]) => Promise.resolve(skills.length),
+      deactivateSkillsStaleBefore: () => Promise.resolve(0),
+    } as unknown as CatalogRepository;
+    return { repo, adapters };
+  }
+
+  it('a rodada disparada pela busca grava html+live, não html', async () => {
+    const { repo, adapters } = repositorioQueRegistra();
+    const enricher = new CatalogLiveEnricher(fonteContada(CHAVES), repo, config(true));
+
+    await enricher.enrich({ keywords: ['testing'] });
+
+    expect(adapters).toEqual(['html+live']);
+  });
+
+  it('a rodada do operador continua gravando só o adaptador da fonte', async () => {
+    const { repo, adapters } = repositorioQueRegistra();
+
+    // O caminho do `POST /admin/ingest` e do agendador: `ingest` chamado direto,
+    // sem o sufixo do enriquecimento ao vivo.
+    await ingest({
+      source: fonteContada(CHAVES),
+      repository: repo,
+      adapter: 'html',
+      startedAt: new Date('2026-11-19T12:00:00.000Z'),
+      keys: ['anthropics/skills/webapp-testing'],
+    });
+
+    expect(adapters).toEqual(['html']);
+  });
+
+  it('o sufixo preserva o adaptador como prefixo, para o agrupamento por LIKE', () => {
+    // `adapter LIKE 'html%'` continua achando as duas origens; `html+live` não
+    // inventa um adaptador que não existe no `SKILL_SOURCE_KIND`.
+    expect(liveAdapterName('html')).toBe('html+live');
+    expect(liveAdapterName('fixture')).toBe('fixture+live');
   });
 });

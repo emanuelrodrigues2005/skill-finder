@@ -28,6 +28,29 @@ import { DEFAULT_LIVE_ENRICH_BUDGET_MS } from "../config/env.schema";
 /** Limite de chaves por enriquecimento. Cada chave é 1 requisição a 1 req/s. */
 export const DEFAULT_LIVE_ENRICH_MAX_KEYS = 12;
 
+/**
+ * Sufixo que marca, em `ingest_run.adapter`, a rodada disparada pela **busca**.
+ *
+ * Sem ele, toda busca vazia gravava `adapter='html'` e `items_requested=12` — a
+ * mesma linha que um `POST /admin/ingest` do operador ou um ciclo do agendador
+ * produz. `GET /api/v1/admin/ingest/runs` e um
+ * `SELECT adapter, count(*) FROM ingest_run GROUP BY 1` passam a dizer a origem.
+ *
+ * **Por que sufixo e não uma coluna `trigger`:** `ingest_run.adapter` é `TEXT` sem
+ * enum nem `CHECK` (`backend/prisma/schema.prisma`), não entra no contrato (§5.1 —
+ * `IngestRun` expõe `run_id`, datas, `status` e `skills_ingested`, não o
+ * adaptador) e **ninguém ramifica em cima do valor gravado**: quem escolhe o
+ * adaptador é o token `CATALOG_ADAPTER` (`SKILL_SOURCE_KIND`), não a coluna. Um
+ * sufixo custa uma linha de código e zero migration; uma coluna custaria a
+ * migration e três pontos de escrita para o mesmo diagnóstico.
+ *
+ * O nome da fonte fica como **prefixo** (`html+live`), para quem já agrupa por
+ * `adapter LIKE 'html%'` continuar vendo as duas origens juntas.
+ */
+export function liveAdapterName(sourceKind: string): string {
+  return `${sourceKind}+live`;
+}
+
 /** Tamanho mínimo de um termo para ele casar por `slug` (evita "de", "a", "of"). */
 const MIN_TERM = 3;
 
@@ -190,7 +213,9 @@ export class CatalogLiveEnricher {
       const outcome = await ingest({
         source: this.source,
         repository: this.repository,
-        adapter: this.config.env.skillSourceKind,
+        // Origem da rodada no `ingest_run` (Fase 5): `html+live` é busca,
+        // `html` é operador/agendador. Ver `liveAdapterName`.
+        adapter: liveAdapterName(this.config.env.skillSourceKind),
         startedAt: new Date(),
         keys: casadas,
       });
