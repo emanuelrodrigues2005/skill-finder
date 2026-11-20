@@ -27,7 +27,8 @@ catálogo — não rode.
 
 ## O ciclo
 
-`make ingest` (ou `pnpm --dir backend ingest`) executa **um** ciclo do rodízio:
+`pnpm --dir backend ingest` executa **um** ciclo do rodízio (precisa de `scripts/` e `ts-node`,
+então roda a partir do repositório, não da imagem de produção):
 
 1. `selectRotationKeys` — até 360 chaves **hot** (as que apareceram em `search_request` nos últimos 7 dias) e o resto **cold** (as mais antigas primeiro);
 2. `selectUnseenKeys` — chaves do sitemap que ainda não são linha ativa;
@@ -61,65 +62,32 @@ Para cobrir o intervalo entre ciclos existe o **enriquecimento ao vivo**
 slug e até `LIVE_ENRICH_MAX_KEYS` chaves são ingeridas na hora. Ele é rede de
 segurança, não a fonte principal.
 
-## Agendar em produção
+## Rodar em produção
 
-O agendador é **externo** ao processo: o comando roda o ciclo inteiro e sai. Isso
-evita dependência nova no `package.json` (o CI instala com `--frozen-lockfile`), e
-o relógio fica onde pertence — no deploy (F3/F4).
-
-### crontab (host ou EC2)
-
-```cron
-# a cada 6 h; o log guarda uma linha por ciclo ("ingest: status=... pedidas=720 ...")
-0 */6 * * *  cd /srv/skill-finder && make ingest >> /var/log/skill-finder-ingest.log 2>&1
-```
-
-### systemd timer
-
-`/etc/systemd/system/skill-finder-ingest.service`
-
-```ini
-[Unit]
-Description=Skill Finder — um ciclo de ingestao do catalogo
-After=docker.service
-
-[Service]
-Type=oneshot
-WorkingDirectory=/srv/skill-finder
-ExecStart=/usr/bin/make ingest
-```
-
-`/etc/systemd/system/skill-finder-ingest.timer`
-
-```ini
-[Unit]
-Description=Skill Finder — ingestao a cada 6 h
-
-[Timer]
-OnBootSec=10min
-OnUnitActiveSec=6h
-
-[Install]
-WantedBy=timers.target
-```
+A imagem `runtime` não carrega `scripts/` nem `ts-node` (`backend/Dockerfile`), então o
+host de produção **não** executa o ciclo: não há CLI ali. Em produção a ingestão é
+**pela API**, com a stack no ar e o `ADMIN_TOKEN` do `.env` (`chmod 600`):
 
 ```bash
-systemctl enable --now skill-finder-ingest.timer
+curl -fsS -X POST "http://$IP/api/v1/admin/ingest" \
+  -H "X-Admin-Token: $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"source_keys":["vercel-labs/skills/find-skills"]}'
 ```
 
-### GitHub Actions (agendado)
+`202` com o resultado do run; `409` se outra ingestão estiver em curso; **1 a 20**
+`source_keys` por request (`owner/repo/slug`).
 
-Útil quando o deploy ainda não existe:
+A rota **não** substitui o rodízio: ela atualiza as chaves pedidas, não escolhe as 720 do
+ciclo. O ciclo de 720 em produção precisa de um agendador que consiga executar o CLI —
+um checkout com o repositório e `ts-node`, ou uma imagem de ferramenta —, e é isso que a
+F4/F5 resolve. Enquanto ele não existe, o catálogo de produção cresce pelo
+enriquecimento ao vivo e pelas chamadas admin.
 
-```yaml
-on:
-  schedule:
-    - cron: "0 */6 * * *"
-  workflow_dispatch:
-```
-
-O job faz SSH na instância e roda `make ingest`. Segredos ficam nos *secrets* do
-repositório — nunca no workflow.
+O agendador, quando existir, é **externo** ao processo: o comando roda o ciclo inteiro e
+sai. Isso evita dependência nova no `package.json` (o CI instala com `--frozen-lockfile`)
+e mantém o relógio no deploy. A forma que não depende do CLI na máquina é um job agendado
+que faz SSH em um host **com o repositório** e roda `pnpm --dir backend ingest` lá; segredos
+ficam nos *secrets* do repositório, nunca no workflow.
 
 ## Código de saída (o que acorda quem está de plantão)
 
@@ -153,11 +121,20 @@ removida do sitemap é rotina. Quem precisa do detalhe lê `ingest_run.error_cod
 
 ## Bootstrap depois do deploy
 
-Um catálogo novo leva ~14 dias para encher pelo ciclo normal. Para a demo, force
-alguns ciclos em sequência:
+Um catálogo novo leva ~14 dias para encher pelo ciclo normal. Para a demo, force lotes em
+série pela rota admin — 20 chaves por chamada, uma chamada por vez (a segunda recebe `409`
+enquanto a primeira roda):
 
 ```bash
-for i in $(seq 1 5); do make ingest; done   # ~5 × 12 min
+# chaves.txt: uma chave owner/repo/slug por linha
+split -l 20 chaves.txt lote-
+for lote in lote-*; do
+  jq -Rsc 'split("\n")[:-1] | {source_keys: .}' "$lote" > corpo.json
+  curl -fsS -X POST "http://$IP/api/v1/admin/ingest" \
+    -H "X-Admin-Token: $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+    -d @corpo.json >/dev/null
+done
 ```
 
-Cada execução grava a sua linha em `ingest_run`, então o progresso é auditável.
+Cada execução grava a sua linha em `ingest_run`, então o progresso é auditável — e o
+total do catálogo continua sendo `countActiveSkills`, não `items_seen`.
