@@ -68,8 +68,13 @@ padrão declarado; **Q7 (Tema D) registrada**; data e conclusão da aula em `doc
 `openapi.yaml` sincronizado.
 
 ### F3 — Infraestrutura como código
-- [ ] `feat(infra):` base do Terraform com backend S3 e rede
-- [ ] `feat(infra):` EC2, ECR e primeiro ciclo de `apply`/`destroy`
+- [x] **F3.1** Validar sessao do lab, Terraform >= 1.10 e bucket de state — #54, `96fc9e5`
+- [x] **F3.2** `feat(infra):` base do Terraform com backend S3 e data sources do IAM — #14, `ef5b6fb`
+- [x] **F3.3** `feat(infra):` security group, key pair e VPC padrao — #55, `1de44bf`
+- [x] **F3.4** `feat(infra):` EC2 com user_data, EBS de dados, ECR e as saidas do seam — #15, `9ef1902`
+- [x] **F3.5** `feat(web):` /healthz e /readyz na borda do nginx — #56, `f80c3b6`
+- [x] **F3.6** `docs(infra):` runbook de operacao (subir, implantar, destruir) — #57, `e6bcfed`
+- [x] **F3.7** Gate: apply, smoke e destroy sem orfaos — #58, `599010e`
 
 **Checkpoint F3:** `fmt -check` e `validate` limpos; `apply` sem `-auto-approve`; segundo `plan`
 "No changes."; app em HTTP; `state list` ≥ 8 sem `aws_iam_*`; **`destroy` sem órfãos**; runbook.

@@ -262,26 +262,88 @@
                        "bodyFile":  "scripts/github/issues/f2.md"
                    },
                    {
-                       "title":  "feat(infra): base do Terraform com backend S3 e rede",
+                       "title":  "F3.1 — Validar sessao do lab, Terraform >= 1.10 e bucket de state",
                        "milestone":  "F3 — Infraestrutura como código",
                        "labels":  [
-                                      "type:infra",
+                                      "type:gate",
                                       "area:infra",
                                       "priority:p0"
                                   ],
-                       "state":  "open",
-                       "bodyFile":  "scripts/github/issues/f3.md"
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f3.md",
+                       "closing_comment":  "Validada e registrada em `96fc9e5` (`docs/evidencias/sandbox.md`): Terraform v1.17.2, conta `794399909334`, sessao `assumed-role/voclabs/...`, bucket `bcc-cloud-tfstate-794399909334` com versionamento `Enabled`, SSE-S3 `AES256` e os quatro bloqueios publicos. Achado que mudou o plano: a conta tem `vockey`, nao `projeto2`; o `LabInstanceProfile` contem `LabRole`."
                    },
                    {
-                       "title":  "feat(infra): EC2, ECR e primeiro ciclo de apply e destroy",
+                       "title":  "F3.2 — feat(infra): base do Terraform com backend S3 e data sources do IAM",
                        "milestone":  "F3 — Infraestrutura como código",
                        "labels":  [
                                       "type:infra",
                                       "area:infra",
                                       "priority:p0"
                                   ],
-                       "state":  "open",
-                       "bodyFile":  "scripts/github/issues/f3.md"
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f3.md",
+                       "closing_comment":  "Concluida em `ef5b6fb`: `fmt -check -recursive` exit 0 e `validate` sem credencial AWS (`init -backend=false`). Zero `resource aws_iam*` — `LabRole` e `LabInstanceProfile` entram por `data`. Backend S3 parcial: o bucket vem de `-backend-config`; `use_lockfile = true` dispensa DynamoDB."
+                   },
+                   {
+                       "title":  "F3.3 — feat(infra): security group, key pair e VPC padrao",
+                       "milestone":  "F3 — Infraestrutura como código",
+                       "labels":  [
+                                      "type:infra",
+                                      "area:infra",
+                                      "priority:p0"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f3.md",
+                       "closing_comment":  "Concluida em `1de44bf` e provada no ciclo da F3.7: SG com exatamente duas regras de ingress (80 do mundo, 22 de `var.allowed_ssh_cidrs`, cujo default e vazio), VPC por `data` (nenhum `aws_vpc`/`aws_subnet`/`aws_internet_gateway`), key pair por `data`, nenhuma chave privada no repositorio."
+                   },
+                   {
+                       "title":  "F3.4 — feat(infra): EC2 com user_data, EBS de dados, ECR e as saidas do seam",
+                       "milestone":  "F3 — Infraestrutura como código",
+                       "labels":  [
+                                      "type:infra",
+                                      "area:infra",
+                                      "priority:p0"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f3.md",
+                       "closing_comment":  "Concluida em `9ef1902`, aplicada e destruida no ciclo da F3.7: `Resources: 8 added`, plano seguinte `No changes.`, `user_data` verificado no host (Docker 29.1.3, `/dev/nvme1n1` montado em `/var/lib/docker`), 5 saidas do seam conferindo. `metadata_options { http_tokens = required }` restaurado: o grep do criterio cegava o IMDSv2."
+                   },
+                   {
+                       "title":  "F3.5 — feat(web): /healthz e /readyz na borda do nginx",
+                       "milestone":  "F3 — Infraestrutura como código",
+                       "labels":  [
+                                      "type:feat",
+                                      "area:web",
+                                      "priority:p1"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f3.md",
+                       "closing_comment":  "Concluida em `f80c3b6`: `/healthz` devolvia 200 `text/html` pelo fallback da SPA e agora devolve 200 `application/json`. Com a API fora do ar, a borda nova devolve 504/502 em vez de 200 HTML."
+                   },
+                   {
+                       "title":  "F3.6 — docs(infra): runbook de operacao (subir, implantar, destruir)",
+                       "milestone":  "F3 — Infraestrutura como código",
+                       "labels":  [
+                                      "type:docs",
+                                      "area:docs",
+                                      "priority:p1"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f3.md",
+                       "closing_comment":  "Concluida em `e6bcfed`, `71a9dac` e `599010e`: runbook com as quatro secoes (subir, implantar, destruir, encerrar sessao), protocolo de credencial expirada e de lock preso. Corrigido pelo uso: bucket via `aws sts get-caller-identity`, 5 saidas do seam, `ecr_repository_urls` como mapa e deploy por SSM RunCommand (a porta 22 nasce fechada)."
+                   },
+                   {
+                       "title":  "F3.7 — Gate: apply, smoke e destroy sem orfaos",
+                       "milestone":  "F3 — Infraestrutura como código",
+                       "labels":  [
+                                      "type:gate",
+                                      "area:infra",
+                                      "priority:p0"
+                                  ],
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f3.md",
+                       "closing_comment":  "Gate executado com conta limpa: `Destroy complete! Resources: 8 destroyed` exit 0, nenhuma instancia/volume/SG/ECR viva e `terraform.tfstate` preservado em `s3://bcc-cloud-tfstate-.../projeto2/`. Smoke pela borda 4 de 5; o quinto criterio (`/api/v1/categories` com length >= 1) era invalido — nenhuma fonte publica categoria (ADR-008)."
                    },
                    {
                        "title":  "ci: workflow de CI com lint, três níveis de teste e gitleaks",
