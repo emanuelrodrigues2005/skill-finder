@@ -16,12 +16,16 @@
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\"",
     "test": "jest",
-    "test:e2e": "jest --config test/jest-e2e.json --runInBand",
+    "test:integration": "jest --config test/jest-integration.json",
+    "test:cov": "NODE_OPTIONS=--experimental-vm-modules jest --config test/jest-cov.json",
+    "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config test/jest-e2e.json --runInBand",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
-    "openapi:generate": "ts-node --project tsconfig.json scripts/generate-openapi.ts"
+    "openapi:generate": "ts-node --project tsconfig.json scripts/generate-openapi.ts",
+      "seed": "ts-node --project tsconfig.json scripts/seed.ts",
+      "ingest": "ts-node --project tsconfig.json scripts/ingest.ts"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.0",
@@ -50,6 +54,8 @@
     "@nestjs/cli": "^11.0.2",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.5",
+    "@scalar/api-reference": "1.79.0",
+    "@scalar/nestjs-api-reference": "^1.2.37",
     "@types/express": "^5.0.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.7",
@@ -74,7 +80,9 @@
       "ts"
     ],
     "rootDir": ".",
-    "testRegex": ".*\\.spec\\.ts$",
+    "testMatch": [
+      "<rootDir>/test/unit/**/*.spec.ts"
+    ],
     "testEnvironment": "node",
     "transform": {
       "^.+\\.ts$": [
@@ -83,7 +91,9 @@
           "tsconfig": "tsconfig.json",
           "isolatedModules": true,
           "diagnostics": {
-            "ignoreCodes": [151002]
+            "ignoreCodes": [
+              151002
+            ]
           }
         }
       ]
@@ -93,11 +103,6 @@
     ],
     "moduleNameMapper": {
       "^@/(.*)$": "<rootDir>/src/$1"
-    },
-    "collectCoverageFrom": [
-      "src/**/*.ts",
-      "!src/main.ts"
-    ],
-    "coverageDirectory": "coverage"
+    }
   }
 }

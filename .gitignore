@@ -61,6 +61,8 @@ junit*.xml
 
 # ---------- Node / frontend ----------
 node_modules/
+# artefatos do Jest: relatório JUnit e relatório de cobertura (`make test-coverage`)
+backend/coverage/
 dist/
 build/
 .vite/
@@ -95,3 +97,8 @@ desktop.ini
 # saídas brutas da extração/validação do PDF (ficam em _tools/)
 _tools/*.txt
 _tools/*.zip
+
+# Logs de verificação: `.logs/` concentra a saída dos scripts de `scripts/dev/`
+# (o `*.log` acima já cobre o conteúdo; a entrada existe para o diretório aparecer
+# como intencional e não ser recriado por engano em outro lugar).
+.logs/

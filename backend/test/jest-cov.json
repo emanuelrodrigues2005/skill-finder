@@ -1,0 +1,62 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": "..",
+  "testMatch": [
+    "<rootDir>/test/unit/**/*.spec.ts",
+    "<rootDir>/test/integration/**/*.spec.ts",
+    "<rootDir>/test/api/**/*.spec.ts",
+    "<rootDir>/test/api/**/*.e2e-spec.ts"
+  ],
+  "testEnvironment": "node",
+  "transform": {
+    "^.+\\.ts$": ["ts-jest", { "tsconfig": "tsconfig.json", "isolatedModules": true }]
+  },
+  "setupFilesAfterEnv": [
+    "<rootDir>/test/integration/setup-env.ts",
+    "<rootDir>/test/setup.ts"
+  ],
+  "moduleNameMapper": {
+    "^@/(.*)$": "<rootDir>/src/$1"
+  },
+  "collectCoverage": true,
+  "coverageDirectory": "<rootDir>/coverage",
+  "coverageReporters": ["text", "lcov", "json-summary"],
+  "collectCoverageFrom": [
+    "<rootDir>/src/ranking/**/*.ts",
+    "<rootDir>/src/catalog/**/*.ts",
+    "<rootDir>/src/llm/**/*.ts",
+    "<rootDir>/src/search/**/*.ts"
+  ],
+  "coveragePathIgnorePatterns": [
+    "/node_modules/",
+    "/src/(?:.*/)?index\\.ts$",
+    "/src/(?:.*/)?[^/]+\\.module\\.ts$"
+  ],
+  "coverageThreshold": {
+    "./src/ranking/": {
+      "statements": 80,
+      "branches": 80,
+      "functions": 80,
+      "lines": 80
+    },
+    "./src/catalog/": {
+      "statements": 80,
+      "branches": 80,
+      "functions": 80,
+      "lines": 80
+    },
+    "./src/llm/": {
+      "statements": 80,
+      "branches": 80,
+      "functions": 80,
+      "lines": 80
+    },
+    "./src/search/": {
+      "statements": 80,
+      "branches": 80,
+      "functions": 80,
+      "lines": 80
+    }
+  },
+  "reporters": ["default", "<rootDir>/test/reporters/junit-xml.js"]
+}

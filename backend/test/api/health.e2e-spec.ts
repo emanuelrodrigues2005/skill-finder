@@ -11,8 +11,8 @@ import { PrismaService } from '@/prisma/prisma.service';
 class PrismaStub {
   reachable = true;
 
-  async ping(): Promise<boolean> {
-    return this.reachable;
+  ping(): Promise<boolean> {
+    return Promise.resolve(this.reachable);
   }
 }
 
@@ -65,6 +65,37 @@ describe('health, readiness and metrics (e2e)', () => {
     expect(response.headers['x-powered-by']).toBeUndefined();
   });
 
+  it('marks the two probes as non-cacheable', async () => {
+    const healthz = await request(app.getHttpServer()).get('/healthz').expect(200);
+    expect(healthz.headers['cache-control']).toBe('no-cache, no-store, must-revalidate');
+
+    prisma.reachable = true;
+    const readyz = await request(app.getHttpServer()).get('/readyz').expect(200);
+    expect(readyz.headers['cache-control']).toBe('no-cache, no-store, must-revalidate');
+  });
+
+  it('mounts both admin routes behind X-Admin-Token (#49)', async () => {
+    // D0 nasceu exigindo 404 nos sete caminhos do contrato v0. A F2.6 (D-E) monta
+    // os cinco públicos — quem prova que eles respondem é o D0 *invertido* de
+    // `search.e2e-spec.ts`. A #49 monta os dois de admin, e o que sobra desta
+    // guarda invertida é a **proteção**: sem `X-Admin-Token` a rota existe e
+    // recusa (401, envelope de §5.5), em vez de 404 — e nunca chega no handler de
+    // ingestão. A prova de que elas respondem com token é `admin-ingest.e2e-spec.ts`.
+    const adminRoutes = [
+      ['post', '/api/v1/admin/ingest'],
+      ['get', '/api/v1/admin/ingest/runs'],
+    ] as const;
+
+    for (const [method, path] of adminRoutes) {
+      const response =
+        method === 'post'
+          ? await request(app.getHttpServer()).post(path).expect(401)
+          : await request(app.getHttpServer()).get(path).expect(401);
+
+      expect({ path, code: response.body.error.code }).toEqual({ path, code: 'UNAUTHORIZED' });
+    }
+  });
+
   it('keeps health endpoints outside the /api/v1 prefix', async () => {
     await request(app.getHttpServer()).get('/healthz').expect(200);
 
@@ -79,14 +110,14 @@ describe('health, readiness and metrics (e2e)', () => {
     expect(response.body.status).toBe('ok');
   });
 
-  it('GET /readyz answers 503 NOT_READY with the postgres dependency', async () => {
+  it('GET /readyz answers 503 NOT_READY with reason db_unavailable', async () => {
     prisma.reachable = false;
 
     const response = await request(app.getHttpServer()).get('/readyz').expect(503);
 
     expect(response.body.request_id).toMatch(/^req_/);
     expect(response.body.error.code).toBe('NOT_READY');
-    expect(response.body.error.details.dependency).toBe('postgres');
+    expect(response.body.error.details.reason).toBe('db_unavailable');
     expect(response.body.error.message).toBeTruthy();
     expect(response.body.error.stack).toBeUndefined();
     expect(response.body.error).not.toHaveProperty('statusCode');

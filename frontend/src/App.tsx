@@ -3,27 +3,133 @@ import { Link, Navigate, Route, Routes } from "react-router-dom";
 import DetailPage from "./pages/DetailPage";
 import ResultsPage from "./pages/ResultsPage";
 import SearchPage from "./pages/SearchPage";
+import { STR } from "./ui/strings";
+import { color, focusRing, font, measure, space } from "./ui/tokens";
+
+/**
+ * Foco visível, skip link e o papel da página (issue #28, `docs/app/01-spec-produto.md` §6.6).
+ *
+ * O projeto não tem folha de estilo: cada componente carrega o próprio `style` inline e
+ * `:focus-visible` não existe em estilo inline. Este bloco é o único CSS global — o contorno de
+ * **3 px** vale para todo controle focável, o skip link só aparece quando recebe foco, e o `body`
+ * recebe o papel (`color.bg`): sem isto a margem padrão do navegador criava uma moldura branca em
+ * volta do papel. Ficar no documento (em vez de um `.css` importado) é o que torna o critério
+ * verificável sem navegador: a suíte lê este texto em `document.querySelector("style")`.
+ *
+ * Os valores vêm de `ui/tokens.ts` e são interpolados como hex literal: o teste de contraste lê o
+ * valor computado, não o nome do token.
+ */
+const GLOBAL_STYLES = `
+html, body {
+  margin: 0;
+  background: ${color.bg};
+}
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+:focus-visible {
+  outline: ${focusRing.outline};
+  outline-offset: ${focusRing.offset}px;
+}
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: -9999px;
+  padding: ${space.sm} ${space.md};
+  background: ${color.link};
+  color: ${color.onLink};
+  border-radius: 0 0 4px 0;
+  z-index: 10;
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  left: 0;
+}
+`;
 
 export default function App() {
   return (
     <div
       style={{
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
-        margin: "0 auto",
-        maxWidth: 880,
-        padding: "1.5rem 1rem 3rem",
-        color: "#0f172a",
+        fontFamily: font.family.sans,
+        background: color.bg,
+        color: color.text,
+        minHeight: "100vh",
+        fontSize: font.size.body,
+        lineHeight: font.leading.body,
       }}
     >
-      <header style={{ marginBottom: "1.5rem" }}>
-        <Link to="/" style={{ textDecoration: "none", color: "inherit" }}>
-          <h1 style={{ fontSize: "1.4rem", margin: 0 }}>Skills Search</h1>
-        </Link>
-        <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>
-          Describe the agent skill you need, in plain English.
-        </p>
+      <style>{GLOBAL_STYLES}</style>
+      {/*
+        Primeiro elemento focável do documento: um `Tab` chega nele antes da navegação e do
+        formulário. O alvo é `#results` — o `<main>` é a região onde os resultados aparecem em
+        todas as telas, então o link nunca aponta para um id inexistente (Search e Detail incluídos).
+      */}
+      <a className="skip-link" href="#results">
+        {STR.app.skipToResults}
+      </a>
+
+      {/*
+        Cabeçalho fino, com uma régua de 1 px separando a marca do conteúdo. A régua é
+        estrutural: marca onde acaba o "chrome" e começa a superfície de trabalho — o mesmo
+        vocabulário de medida que a lista de resultados usa.
+      */}
+      <header
+        style={{
+          borderBottom: `1px solid ${color.hairline}`,
+          background: color.bg,
+        }}
+      >
+        <div
+          style={{
+            maxWidth: measure.page,
+            margin: "0 auto",
+            padding: `${space.lg} ${space.lg} ${space.md}`,
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            gap: space.md,
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            <Link to="/" style={{ textDecoration: "none", color: "inherit" }}>
+              <h1
+                style={{
+                  fontSize: font.size.display,
+                  fontWeight: font.weight.black,
+                  letterSpacing: font.tracking.tight,
+                  lineHeight: font.leading.tight,
+                  margin: 0,
+                }}
+              >
+                {STR.app.title}
+              </h1>
+            </Link>
+            <p
+              style={{
+                margin: `${space.xs} 0 0`,
+                color: color.textMuted,
+                fontSize: font.size.compact,
+              }}
+            >
+              {STR.app.tagline}
+            </p>
+          </div>
+        </div>
       </header>
-      <main>
+
+      {/* `tabIndex={-1}`: o `#results` recebe foco pelo skip link sem entrar na ordem de tabulação. */}
+      <main
+        id="results"
+        tabIndex={-1}
+        style={{
+          maxWidth: measure.page,
+          margin: "0 auto",
+          padding: `${space.xl} ${space.lg} ${space.xxxl}`,
+        }}
+      >
         <Routes>
           <Route path="/" element={<SearchPage />} />
           <Route path="/results" element={<ResultsPage />} />

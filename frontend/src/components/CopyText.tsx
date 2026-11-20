@@ -1,0 +1,126 @@
+import { useState } from "react";
+
+import { STR } from "../ui/strings";
+import { color, font, radius, space } from "../ui/tokens";
+
+/**
+ * Valor copiável (permalink, `request_id`) com feedback anunciado (`aria-live`).
+ *
+ * `navigator.clipboard` só existe em contexto seguro (https ou localhost). Em http comum a
+ * alternativa é um `input` `readOnly` que seleciona o texto ao receber foco — a pessoa copia com
+ * Ctrl+C. `document.execCommand` é obsoleto e não é usado aqui.
+ */
+interface CopyTextProps {
+  /** Rótulo curto exibido antes do valor. É identificador do contrato (`permalink`,
+   * `request_id`) — não é traduzido, é diagnosticável. A prosa do rodapé vem de `STR.copy`. */
+  label: string;
+  value: string;
+}
+
+type Outcome = "copied" | "copy-failed";
+
+/**
+ * Duas redações por desfecho (pt-BR, em `STR.copy`). A região viva só é anunciada quando o
+ * **texto muda**, e a ação que a pessoa repete é sempre a mesma cópia: sem alternar a frase, a
+ * segunda cópia gravaria a mesma string e o leitor de tela ficaria mudo. O par alternado garante
+ * mutação a cada tentativa.
+ */
+const MESSAGES: Readonly<Record<Outcome, readonly [string, string]>> = {
+  copied: STR.copy.copied,
+  "copy-failed": STR.copy.copyFailed,
+};
+
+interface Announcement {
+  outcome: Outcome;
+  /** Tentativa de cópia, 1-based. `0` = nada a anunciar: a região fica vazia. */
+  attempt: number;
+}
+
+const NOTHING_TO_ANNOUNCE: Announcement = { outcome: "copied", attempt: 0 };
+
+function announcementText({ outcome, attempt }: Announcement): string {
+  return attempt === 0 ? "" : MESSAGES[outcome][(attempt - 1) % 2];
+}
+
+export function CopyText({ label, value }: CopyTextProps) {
+  const [announcement, setAnnouncement] = useState<Announcement>(NOTHING_TO_ANNOUNCE);
+  // Lido no render: o contexto seguro não muda depois que a página carregou.
+  const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
+
+  async function handleCopy() {
+    let outcome: Outcome = "copied";
+    try {
+      // `?.` porque a API some fora de contexto seguro.
+      await clipboard?.writeText(value);
+    } catch {
+      outcome = "copy-failed";
+    }
+    // Só o `attempt` avança: a alternância da frase acompanha o gesto, não o resultado.
+    setAnnouncement((current) => ({ outcome, attempt: current.attempt + 1 }));
+  }
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+      {clipboard ? (
+        <>
+          <code
+            style={{
+              fontFamily: font.family.mono,
+              fontSize: font.size.meta,
+              color: color.textSubtle,
+              wordBreak: "break-all",
+            }}
+          >
+            {label}: {value}
+          </code>
+          <button
+            type="button"
+            onClick={handleCopy}
+            style={{
+              padding: `${space.xs} ${space.sm}`,
+              border: `1px solid ${color.border}`,
+              borderRadius: radius.sm,
+              background: color.surface,
+              color: color.textBody,
+              fontFamily: "inherit",
+              fontSize: font.size.meta,
+              cursor: "pointer",
+            }}
+          >
+            {STR.copy.button}
+          </button>
+        </>
+      ) : (
+        <label style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%" }}>
+          <span style={{ fontSize: font.size.compact }}>{label}:</span>
+          <input
+            readOnly
+            value={value}
+            // O `<label>` também envolve o `<input>`: sem isto o nome acessível viraria
+            // `permalink: https://…` inteiro, valor incluído.
+            aria-label={label}
+            onFocus={(event) => event.currentTarget.select()}
+            onClick={(event) => event.currentTarget.select()}
+            style={{
+              flex: 1,
+              fontFamily: font.family.mono,
+              fontSize: font.size.compact,
+              padding: space.xs,
+              border: `1px solid ${color.border}`,
+              borderRadius: radius.sm,
+              background: color.surface,
+              color: color.textBody,
+            }}
+          />
+        </label>
+      )}
+      {/*
+        A região existe desde o primeiro render, vazia: um leitor de tela precisa observar a
+        região *antes* da mutação. Inserida junto com o texto, ela geralmente não é anunciada.
+      */}
+      <span role="status" aria-live="polite" style={{ fontSize: font.size.compact, color: color.textMuted }}>
+        {announcementText(announcement)}
+      </span>
+    </div>
+  );
+}

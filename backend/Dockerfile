@@ -33,6 +33,9 @@ ENV NODE_ENV=development
 COPY prisma ./prisma
 COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY src ./src
+# `scripts/` traz o `seed.ts` (`make seed`) e o gerador do OpenAPI. Só no estágio
+# de dev: o runtime não executa nenhum dos dois.
+COPY scripts ./scripts
 RUN pnpm prisma generate
 EXPOSE 8000
 CMD ["pnpm", "start:dev"]

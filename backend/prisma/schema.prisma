@@ -102,6 +102,9 @@ model Skill {
   document  SkillDocument?
 
   @@index([categorySlug, isActive])
+  // Rodízio do catálogo (#45): varre "quem está ativo e há mais tempo não é
+  // visto" sem `seq scan` de 20.000 linhas a cada ciclo de 6 h.
+  @@index([isActive, lastSeenAt])
   @@index([stars(sort: Desc)])
   @@index([installs(sort: Desc)])
   @@map("skill")
@@ -140,6 +143,9 @@ model IngestRun {
   startedAt        DateTime     @map("started_at") @db.Timestamptz(6)
   finishedAt       DateTime?    @map("finished_at") @db.Timestamptz(6)
   status           IngestStatus
+  // Slots que o ciclo de rodízio pediu (#45) — separado de `items_seen`, que é
+  // o que a fonte entregou.
+  itemsRequested   Int?         @map("items_requested")
   itemsSeen        Int?         @map("items_seen")
   itemsUpserted    Int?         @map("items_upserted")
   itemsDeactivated Int?         @map("items_deactivated")

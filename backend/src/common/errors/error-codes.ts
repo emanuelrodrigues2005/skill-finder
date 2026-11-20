@@ -34,6 +34,9 @@ const STATUS_TO_CODE: Record<number, ErrorCode> = {
   500: ERROR_CODES.INTERNAL,
   502: ERROR_CODES.LLM_BAD_RESPONSE,
   503: ERROR_CODES.SOURCE_UNAVAILABLE,
+  // Defensivo: nenhuma operacao documenta 504, mas um gateway pode devolver.
+  // Sem este mapeamento o envelope sairia com status 504 e code INTERNAL,
+  // combinacao que nao existe na tabela de 5.5.
   504: ERROR_CODES.LLM_BAD_RESPONSE,
 };
 

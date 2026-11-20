@@ -62,7 +62,7 @@ flowchart LR
   NG -->|"/api/v1/*"| API
   API -->|"SQL 5432"| PG
   ING -->|"upsert do catalogo"| PG
-  ING -->|"list_categories / fetch_catalog"| SRC
+  ING -->|"list_categories / listKeys / fetchSkills"| SRC
   API -->|"le candidatos do cache"| PG
   API -->|"extract_intent + explain"| LLM
   SRC -->|"HTTPS json ou HTML"| SK
@@ -75,7 +75,7 @@ flowchart LR
 
 | Seam | Contrato | O que permite trocar sem retrabalho |
 | --- | --- | --- |
-| `SkillSource` | `list_categories()`, `fetch_catalog(page)`, `fetch_document(key)` | JSON público → scraping → fixture de teste, por variável de ambiente |
+| `SkillSource` | `list_categories()`, `listKeys()` (enumeração da fonte), `fetch_skills(keys)`, `fetch_document(key)` | JSON público → scraping → fixture de teste, por variável de ambiente |
 | `LLMProvider` | `extract_intent()`, `explain()` | opencode → qualquer provedor OpenAI-compatible → `NullProvider` |
 | UI ↔ API | `openapi.yaml` gerado pelos decorators do `@nestjs/swagger` (`scripts/generate-openapi.ts`) | Reescrever a SPA sem tocar no backend |
 | API ↔ Banco | migrations Prisma (`prisma migrate`) | Trocar Postgres gerenciado (Opção 2 de `docs/01` §4.3) sem alterar código de domínio |
@@ -124,7 +124,7 @@ As escolhas de `docs/01` §6.1/§6.2 estão **mantidas**, exceto o backend, alte
 | `LLM_BASE_URL` | `https://opencode.ai/inference/go/openai/v1` | `.env` gerado pelo Infisical |
 | `LLM_MODEL` | `deepseek-v4.1-flash` | `.env` |
 | `LLM_API_KEY` | credencial do opencode | **Infisical** (`LLM_API_KEY`) |
-| `LLM_TIMEOUT_S` | timeout por chamada (default `8`) | `.env` |
+| `LLM_TIMEOUT_S` | teto da chamada de intenção (default `8`); **só baixa** o teto efetivo, nunca sobe (ver abaixo) | `.env` |
 | `LLM_ENABLED` | `true`/`false`; `false` força modo degradado (usado em teste) | `.env` |
 | `SKILL_SOURCE_KIND` | `json` \| `html` \| `fixture` | `.env` |
 | `SKILL_SOURCE_BASE_URL` | base do skills.sh `[a confirmar]` | `.env` |
@@ -133,7 +133,21 @@ As escolhas de `docs/01` §6.1/§6.2 estão **mantidas**, exceto o backend, alte
 | `RATE_LIMIT_SEARCH_PER_MIN` / `_PER_DAY` | limites por cliente (default `10` / `60`) | `.env` |
 | `SEARCH_LOG_STORE_TEXT` | guardar o texto da consulta no histórico (default `false`) | `.env` |
 | `IP_HASH_SALT` | sal para pseudonimizar IP no rate limit | **Infisical** |
+| `ADMIN_TOKEN` | token do header `X-Admin-Token` da ingestao manual (#49); **obrigatorio em prod**, sem ele o boot recusa | **Infisical** |
 | `DATABASE_URL` | conexão Postgres | **Infisical** |
+
+**Os tetos efetivos da LLM são do código, não do `.env` (§6.3, F2.10).** O teto de uma chamada é
+`min(teto da etapa, o que sobrou de LLM_TOTAL_DEADLINE_MS)`, com `INTENT_STEP_MAX_MS = 3_000` e
+`EXPLAIN_STEP_MAX_MS = 4_000` em `backend/src/llm/explain-parser.ts`:
+
+| Etapa | Teto efetivo | Papel de `LLM_TIMEOUT_S` |
+| --- | --- | --- |
+| Intenção (passo 4) | **3 000 ms** | entra no `min()`: **só baixa** (o default `8` não muda nada; `LLM_TIMEOUT_S=2` corta para 2 000 ms) |
+| Explicação (passo 7) | **4 000 ms** | **não alcança** — a etapa é limitada só por `EXPLAIN_STEP_MAX_MS` |
+
+Nenhum ajuste de `.env` **sobe** um teto: os três números do orçamento são o orçamento de latência da
+busca, e cada etapa tem a sua fatia fixa. O log de falha do provedor (§8.5) traz o `timeoutMs`
+efetivo, então a pergunta "foi o teto?" se responde pela linha do log, sem ler o `.env`.
 
 ---
 
@@ -188,10 +202,20 @@ Base: `/api/v1` (atrás do nginx, mesma origem da SPA). JSON em `snake_case`. Da
 | `GET` | `/healthz` | Liveness (sem dependências) | — | `200` | — |
 | `GET` | `/readyz` | Readiness (verifica Postgres e frescor do catálogo) | — | `200` | `503` |
 | `GET` | `/metrics` | Métricas Prometheus | interno | `200` | — |
-| `POST` | `/admin/ingest` | Dispara ingestão manual | `X-Admin-Token` | `202` | `401`, `409` |
-| `GET` | `/admin/ingest/runs` | Últimas execuções de ingestão | `X-Admin-Token` | `200` | `401` |
+| `POST` | `/admin/ingest` | Dispara ingestão manual de até 20 `source_keys` (#49) | `X-Admin-Token` | `202` | `401`, `409`, `422` |
+| `GET` | `/admin/ingest/runs` | Últimas execuções de ingestão | `X-Admin-Token` | `200` | `401`, `422` |
 
 `X-Admin-Token` é segredo de servidor (Infisical), usado apenas pelo operador/smoke test; nunca no bundle do frontend.
+Em prod o boot recusa sem `ADMIN_TOKEN`; em dev, sem ele a rota responde `401` (**falha fechada**, nunca aberta).
+
+`POST /api/v1/admin/ingest` recebe `{"source_keys": ["owner/repo/slug", …]}` — **1 a 20 chaves**, validado
+pelo `ValidationPipe` (21 chaves e corpo sem `source_keys` são `422 VALIDATION_ERROR` com
+`error.details.fields`) — e executa a ingestão **só para essas chaves**, sem girar o rodízio nem gastar a
+cota de descoberta (#49). A resposta `202` carrega o resultado do run (`status`, `items_requested`,
+`items_seen`, `items_upserted`, `items_deactivated`, `error_code`, `error_detail`, `started_at`,
+`finished_at`): a execução é **síncrona e limitada ao pedido**, então `items_seen` é o tamanho do ciclo —
+nunca o tamanho do catálogo, que é `countActiveSkills`. Segunda execução simultânea recebe
+`409 CONFLICT`.
 
 ### 5.2 `POST /api/v1/search` — request
 
@@ -220,6 +244,7 @@ Validação: `query` obrigatório, 3–500 caracteres após `strip` e normaliza�
   },
   "llm": {
     "status": "ok",
+    "explain_status": "ok",
     "model": "deepseek-v4.1-flash",
     "cached": false,
     "tokens": {"prompt": 1840, "completion": 321}
@@ -274,6 +299,9 @@ Regras do contrato:
 - `explanation` e `recommendation.text` usam **placeholders** `{{skill:<skill_id>}}`; o backend substitui pelo `name` do banco antes de responder. Placeholder com id fora do conjunto → removido e o item ganha `flags: ["explanation_repaired"]`.
 - `score` e `score_breakdown` são calculados pelo servidor (ver §6.4 e `01-spec-produto.md` §4); a LLM não escreve nesses campos.
 - `data.degraded=true` com `degraded_reason` em `{"source_stale","llm_unavailable"}`.
+- `llm` reporta **dois** passos da LLM em campos separados: `status` é o desfecho da intenção
+  (passo 4) e `explain_status` o da explicação (passo 7). Os dois usam **o mesmo enum** (`LlmStatus`)
+  e `explain_status` é `null` quando o passo 7 não foi tentado — ver §6.3.
 
 ### 5.4 Demais payloads (resumo)
 
@@ -300,7 +328,7 @@ Regras do contrato:
 }
 ```
 
-`GET /api/v1/skills/{skill_id}` → `200` inclui `summary`, `repo_url`, `security_status`, `skill_md_present` e `skill_md_excerpt` (≤ 600 caracteres, sem markdown cru).
+`GET /api/v1/skills/{skill_id}` → `200` inclui `summary`, `repo_url`, `security_status`, `skill_md_present`, `skill_md_excerpt` (≤ 600 caracteres, sem markdown cru) e `data_snapshot` (RFC 3339 UTC do snapshot do catálogo; `null` quando nunca houve ingestão).
 
 `GET /api/v1/searches/{request_id}` → mesma forma do `POST /search`, com `llm.cached=true`; `410 Gone` quando o histórico expirou (30 dias).
 
@@ -377,13 +405,33 @@ flowchart TB
 
 `LLMProvider.extract_intent(query, categories)` chama `POST {LLM_BASE_URL}/chat/completions` com `response_format` de JSON Schema (ver §8.3 para os detalhes de segurança e o plano B se o provedor não aceitar `json_schema` `[a confirmar]`).
 
-Schema de saída (resumo): `{category: enum(categorias) | null, keywords: string[1..8], filters: {exclude_with_vulnerabilities: bool}, language: "en" | "pt" | "other", confidence: number[0..1]}`.
+Schema de saída (resumo): `{category: enum(categorias) | null, keywords: string[1..8], keywords_en: string[1..8], filters: {exclude_with_vulnerabilities: bool}, language: "en" | "pt" | "other", confidence: number[0..1]}`.
 Pós-condições no backend: `category` fora do enum → substituída por `null`; `keywords` vazias → usa o próprio `query` tokenizado; `confidence < 0.35` → busca só lexical (sem LLM na etapa 7, modo degradado explícito).
+
+**O passo 7 (`explain`) e o campo `llm.explain_status`.** O mesmo provedor redige o porquê de cada
+item e a recomendação — `LLMProvider.explain(intent, candidates)` —; o payload, os tetos de tamanho
+e as quatro barreiras contra id inventado estão na §6.5. O que o **contrato** precisa dizer é o que
+aconteceu em cada passo, e são dois passos independentes:
+
+- `llm.status` (`LlmStatus`) = desfecho da **intenção** (passo 4).
+- `llm.explain_status` (`LlmStatus | null`) = desfecho da **explicação** (passo 7). **Mesmo enum**,
+  sem valor novo: `ok`, `cached`, `repaired`, `invalid_ids`, `low_confidence`, `unavailable`,
+  `disabled`.
+- `explain_status` é **`null` quando o passo 7 não foi tentado** — `confidence < 0.35` (busca só
+  lexical) ou hit do cache de busca, que devolve a resposta original do passo 3. `null` aqui
+  **não** é falha: é ausência de tentativa. Falha da explicação é `unavailable`/`invalid_ids`, com o
+  fallback de template da §7.4 e `flags: ["explanation_fallback"]`.
+- Por que dois campos e não um: com um só, `status="ok"` esconderia que a prosa caiu no template, e
+  `status="unavailable"` apagaria o fato de a intenção ter vindo da LLM. A demo (e a banca) precisam
+  dizer a verdade sobre cada etapa sem abrir log.
+
+Os dois campos são independentes também na hora de cachear: `explain_status` pode ser `"cached"`
+com `status="ok"` — são caches distintos (`kind` diferente em `llm_cache`).
 
 ### 6.4 Passo 5–6 — recuperação e ranking determinístico
 
 1. **Filtro duro:** `skill.is_active = true`; `security_status <> 'fail'`; se `category` informada, `category_slug = category`.
-2. **Recuperação lexical:** `to_tsquery('english', …)` sobre `search_doc` (nome + resumo) com `websearch_to_tsquery` dos `keywords`; ranqueia por `ts_rank_cd`; se o resultado tiver menos de 5 itens, completa com similaridade `pg_trgm` sobre `name`; se ainda faltar, completa com os top-N da categoria por `installs`.
+2. **Recuperação lexical:** `to_tsvector('english', …)` sobre `search_doc` (nome + resumo), casado com `websearch_to_tsquery('english', …)` dos **termos em inglês da intenção** (`keywords_en`, caindo em `keywords` quando ausente); ranqueia por `ts_rank_cd`; se o resultado tiver menos de 5 itens, completa com similaridade `pg_trgm` sobre `name`; se ainda faltar, completa com os top-N da categoria por `installs`.
 3. **Score determinístico** (idêntico ao de `01-spec-produto.md` §4):
 
 ```
@@ -414,7 +462,7 @@ score = round( (0.5*S + 0.3*P + 0.2*I) * (1 - 0.10*m), 4 )      # m = nº de cam
 3. **Nomes só por placeholder:** o texto não pode escrever nomes de skills; deve usar `{{skill:<id>}}`, e o backend substitui pelo nome vindo do banco. Um nome inventado na prosa simplesmente não é renderizado como skill, e a lista/cards da UI vêm de `results[].skill` (banco), nunca do texto.
 4. **Sem ferramentas e sem escrita:** o `LLMProvider` não expõe *tools*, não executa busca, não grava no banco e não faz requisição a URL sugerida pelo modelo. O raio de ação de uma saída ruim é uma frase ruim, não um registro falso.
 
-O response marca `llm.status ∈ {ok, cached, repaired, invalid_ids, unavailable, disabled}` para que a UI (e a demo) digam a verdade sobre o que aconteceu.
+O response marca `llm.status ∈ {ok, cached, repaired, invalid_ids, low_confidence, unavailable, disabled}` — mais `llm.explain_status`, com o mesmo enum e `null` quando esta etapa não é tentada (§6.3) — para que a UI (e a demo) digam a verdade sobre o que aconteceu.
 
 ---
 
@@ -425,10 +473,15 @@ O response marca `llm.status ∈ {ok, cached, repaired, invalid_ids, unavailable
 ```text
 SkillSource
   listCategories()                   -> Promise<CategoryRecord[]>
-  fetchCatalog(page: number)         -> Promise<Page<SkillRecord>>     // paginação até esgotar
-  fetchDocument(sourceKey)           -> Promise<DocumentRecord | null> // SKILL.md, opcional
-  capabilities                       -> {supports_documents, supports_categories, pagination_style}
+  listKeys()                         -> Promise<source_key[]>             // enumeração da fonte: bootstrap + descoberta contínua
+  fetchSkills(keys: source_key[])    -> Promise<SkillRecord[]>            // só as conhecidas, na ordem pedida; chave faltante não lança
+  fetchDocument(sourceKey)           -> Promise<DocumentRecord | null>    // SKILL.md, opcional
+  capabilities                       -> {supports_documents, supports_categories}
 ```
+
+**A chave é a unidade de aquisição, não a página** (#44, #46). O rodízio (§7.3) escolhe até 720 `source_key` por ciclo e pede exatamente essas: `fetchSkills(keys)` é a chamada dele. O skills.sh não publica listagem paginada — só sitemap e página de detalhe —, então paginar o catálogo inteiro era a unidade errada; **a fonte não pagina** e não há `pagination_style` nem `fetchCatalog`: ambos saíram na #46 (o adaptador `html` recusava `fetchCatalog`, e habilitar `SKILL_SOURCE_KIND=html` antes disso fechava todo run como `failed`). Contrato de `fetchSkills`: devolve **só** as chaves conhecidas, na ordem em que foram pedidas, com a repetida aparecendo uma vez; chave desconhecida é omitida (ausência, não erro) e **nunca lança** por causa dela, porque uma chave que sumiu da fonte não pode derrubar o ciclo.
+
+`listKeys()` existe porque **o universo do rodízio é o conjunto de chaves da fonte, não o conjunto de linhas do banco** (F1 do parecer da #46). Ela é chamada em dois momentos: no **bootstrap** de um catálogo vazio (sem linha nenhuma, o rodízio devolve listas vazias e não começaria) e na **descoberta contínua**, que agora é **todo ciclo** — a cota de descoberta (`720 − hot`, no máximo 360 slots) é reservada **antes** do cold, então sobra slot para descobrir mesmo com o catálogo muito maior que o ciclo. A regra anterior ("não enumerar quando o rodízio já preencheu o ciclo") foi **revogada**: era ela que deixava a descoberta faminta e travava o catálogo nas primeiras 720 linhas. Ela devolve **chaves**, nunca registros — quem busca detalhe é `fetchSkills(keys)`, passando pelo limitador de 1 req/s. A enumeração é memoizada por instância do adaptador (o `html` guarda o `Set` do sitemap após a primeira leitura), então o custo por ciclo é a comparação com o banco (`selectUnseenKeys`), não um `sitemap.xml` novo por ciclo.
 
 `SkillRecord` já é o formato interno (não o formato do site): `source_key`, `name`, `summary`, `category_slug`, `stars`, `installs`, `vulnerability_count`, `security_status`, `repo_url`, `skill_md_url`, `raw`. **Toda a normalização vive no adaptador** — é o único lugar que conhece o formato do skills.sh.
 
@@ -441,7 +494,7 @@ SkillSource
 | Robustez | Alta (contrato explícito); quebra só com mudança de API | Baixa/média: quebra a cada mudança de layout | Total |
 | Esforço | Baixo | Médio-alto (seletores + testes de parser com HTML salvo) | Baixo |
 | Falha típica | Campo renomeado → `items_seen=0` | Seletor muda → `items_seen=0` ou `stars=null` | Nenhuma |
-| Detecção | `ingest_run.items_seen == 0` ou `items_upserted/items_seen < 0,5` → run `partial` + alerta | Idem, mais `skills_total` caindo > 20% | — |
+| Detecção | `ingest_run.items_seen == 0` ou `items_upserted/items_requested < 0,5` → run `partial` + alerta | Idem, mais `skills_total` caindo > 20% | — |
 
 **Escolha por configuração:** `SKILL_SOURCE_KIND` (`json` | `html` | `fixture`). O adaptador é escolhido uma vez no boot; a interface é a mesma, então o resto do sistema ignora qual está ativo. **Decisão adiada consciente:** a descoberta do dono decide o padrão; até lá o padrão de desenvolvimento é `fixture` e o de produção é declarado como `[a confirmar]`.
 
@@ -449,24 +502,64 @@ SkillSource
 
 ### 7.3 Ingestão: quando e como
 
-- **Quando:** no boot da API (se o catálogo estiver vazio ou com mais de 6 h) e a cada **6 h** por job `@nestjs/schedule`; execução manual via `POST /api/v1/admin/ingest`; uma única ingestão por vez garantida por `UNIQUE (status) WHERE status='running'` em `ingest_run` (lock no banco, sem dependência extra).
-- **Como (idempotente, upsert por `source_key`):**
-  1. cria `ingest_run(status='running')`; 2. itera páginas com `SKILL_SOURCE_RPS` (default 1 req/s) e timeout de 10 s por requisição, retry 2× com backoff exponencial; teto de 200 páginas; 3. `UPSERT` em `skill` (`last_seen_at=now()`, `raw` atualizado, `search_doc = to_tsvector('english', name || ' ' || summary)`); 4. grava `skill_metric_snapshot` para as skills cujo valor mudou; 5. marca `is_active=false` o que não foi visto **nesta** execução, mas só se a execução terminou `ok` e `items_seen ≥ 80%` do total ativo — evita zerar o catálogo por uma resposta parcial; 6. atualiza `category`; 7. fecha o run com `status` e contadores.
-- **Falha no meio:** o run fica `failed`/`partial`, o catálogo anterior permanece válido e `is_active` **não** é tocado. A resposta passa a informar `data.age_seconds` real.
-- **Custo de rede:** 4 ciclos/dia × ~N páginas; com 10³ skills e página de 50, são ~20 requisições por ciclo — ordens de grandeza abaixo de qualquer rate limit razoável, e nada no caminho do usuário.
+- **Quando:** no boot da API (se o catálogo estiver vazio ou com mais de 6 h) e a cada **6 h** por job `@nestjs/schedule`; execução manual via `POST /api/v1/admin/ingest` (**#49**: com 1–20 `source_keys` explícitas, síncrona e para as chaves pedidas — o ciclo de 720 é do agendador, não da rota); uma única ingestão por vez garantida pela trava do processo (`IngestService`) **e** por `UNIQUE (status) WHERE status='running'` em `ingest_run` (lock no banco, sem dependência extra) — a segunda execução recebe `409 CONFLICT`.
+- **Como (rodízio, idempotente, upsert por `source_key`)** — uma execução **gira uma fatia**, não varre o catálogo. Números ratificados em `03-plano-app.md` §F2.10 (D3):
+
+| Número | O que fixa |
+| --- | --- |
+| **720** / ciclo | `source_key` pedidas por execução: a 1 req/s (`SKILL_SOURCE_RPS=1`), ~12 min por ciclo, **~3% de *duty cycle*** |
+| **6 h** | intervalo entre ciclos (4 por dia, ~2.880 requisições/dia); o que é *hot* é revisitado no ciclo seguinte |
+| **hot ≤ 360** slots | o que apareceu em `search_request.result_ids` dos últimos **7 d**, da requisição mais recente para a mais antiga: é a demanda real e vem primeiro |
+| **inéditas ≤ 720 − hot** | chaves que a fonte publica e o catálogo não tem como linha **ativa** (`source_key` que `selectUnseenKeys` não encontra): ocupam a cota de descoberta **antes** do cold, em ordem de `source_key COLLATE "C"` — nunca famintas enquanto existirem (F1 do parecer da #46) |
+| **cold 7–14 d** | o resto das ativas, mais antigas primeiro; **TTL 14 d** é a validade da entrada, e vencida gira antes |
+| **desativação 28 d** | skill não vista em 28 d vira `is_active = false`. **Nunca** "não vista neste ciclo" |
+| **`source_stale` 12 h** | snapshot acima de 12 h marca `degraded=true` (§7.4); com ciclos de 6 h sobra uma execução perdida de folga |
+
+  Passos:
+  1. fecha run órfão (`started_at < agora − 2 h` → `failed`/`STALE_RUN`) e monta o ciclo **nesta prioridade** (`planCycle`, função pura): **hot** (`selectRotationKeys`, até 360 slots, requisição mais recente primeiro) → **inéditas** (`listKeys()` menos o que `selectUnseenKeys` confirma que já é linha ativa, em ordem de `source_key COLLATE "C"`, ocupando a cota de descoberta que sobra do hot) → **cold** (o resto das ativas, vencidas primeiro, as mais antigas antes), tudo cortado em **720 chaves distintas**. A seleção recebe `now` **por parâmetro**; não lê relógio. `listKeys()` é chamado **sempre que existe cota de descoberta** — e, com hot ≤ 360 num ciclo de 720, ela sempre existe: é assim que o catálogo deixa de travar nas primeiras 720 linhas. Só há um caso sem enumeração: `hot ∪ cold` vazio **com** catálogo ativo (seletor quebrado), que fecha `items_requested = 0` / `EMPTY_CATALOG`;
+  2. abre `ingest_run(status='running')` com `items_requested` = **tamanho do ciclo** (e `started_at` = `now` do ciclo). Falha ao montar o ciclo (sitemap fora do ar) abre e fecha o run como `failed`/`SOURCE_FETCH_FAILED` com `items_requested = 0` — a falha não pode ficar sem rastro em `ingest_run`;
+  3. pede **exatamente essas chaves** a `fetchSkills(keys)`, a `SKILL_SOURCE_RPS` (default 1 req/s) e timeout de 10 s por requisição: uma chave que falha é ausência daquela chave, não falha do run;
+  4. `UPSERT` em `skill` (`last_seen_at = started_at`, `is_active = true`, `raw` atualizado, `search_doc = to_tsvector('english', name || ' ' || summary)`);
+  5. grava `skill_metric_snapshot` para as skills cujo valor mudou;
+  6. **expurgo por idade:** `is_active = false` para quem não é visto desde `started_at − 28 d`. É caminho **separado** da cobertura do ciclo: com 720 slots para 20.000 skills, não ver uma skill num ciclo é o normal, e desativá-la apagaria o catálogo em quatro ciclos;
+  7. atualiza `category`; 8. fecha o run com `status` e contadores.
+- **Status do run** (`running -> ok | partial | failed`), com `E = items_requested`:
+
+| Condição | Status | `error_code` |
+| --- | --- | --- |
+| a fonte lança antes de entregar / o repositório lança | `failed` | `SOURCE_FETCH_FAILED` / `REPOSITORY_FAILED` |
+| nenhuma chave no ciclo (`items_requested = 0`) | `partial` | `EMPTY_CATALOG` |
+| `items_requested > 0` e `items_seen = 0` (a fonte respondeu vazio, sem erro) | `partial` | `LOW_CYCLE_COVERAGE` |
+| o ciclo viu **< 80%** de `E` (guarda de 80%) | `partial` | `LOW_CYCLE_COVERAGE` |
+| gravou **< 50%** de `E` | `partial` | `LOW_UPSERT_RATIO` |
+| caso contrário | `ok` | — |
+
+  `EMPTY_CATALOG` é sobre o **ciclo** sem chave (`E = 0`), nunca sobre a fonte muda: pedir 720 e receber zero é cobertura zero do ciclo. A guarda de 80% mede **`items_seen` contra `items_requested`**, não contra o total de ativos: um ciclo que cobre 720 de 20.000 (3,6%) é o rodízio funcionando. Ela decide o **status**; o expurgo por idade (passo 6) roda mesmo em `partial`, mas **só** com `status ≠ failed` **e** `items_seen > 0` — fonte que devolve zero não pode auto-desativar o catálogo.
+- **Falha no meio:** o run fica `failed`/`partial`, o catálogo anterior permanece válido e `is_active` **não** é tocado por cobertura. A resposta passa a informar `data.age_seconds` real.
+- **Origem da rodada em `ingest_run.adapter` (Fase 5 da auditoria):** o valor gravado é o nome do adaptador (`html`, `fixture`) quando quem dispara é o operador (`POST /admin/ingest`) ou o agendador, e **`<adaptador>+live`** (`html+live`) quando é o enriquecimento ao vivo de uma busca vazia (`backend/src/catalog/live-enricher.service.ts`). Sem o sufixo, as duas origens gravavam a mesma linha (`adapter='html'`, `items_requested=12`) e `SELECT adapter, count(*) FROM ingest_run GROUP BY 1` não dizia de onde vieram. É sufixo, e não coluna nova, porque `adapter` é `TEXT` sem enum nem `CHECK`, não entra no contrato (§5.1 — `IngestRun` não expõe o adaptador) e **ninguém ramifica em cima do valor gravado**: quem escolhe o adaptador é o token `CATALOG_ADAPTER` (`SKILL_SOURCE_KIND`), não a coluna. O nome da fonte fica como prefixo, então `adapter LIKE 'html%'` continua agrupando as duas origens.
+- **Custo de rede:** 4 ciclos/dia × 720 requisições = **~2.880 req/dia**, ~3% de *duty cycle* a 1 req/s — ordens de grandeza abaixo de qualquer rate limit razoável, e nada no caminho do usuário.
+- **Primeiro ciclo:** com o catálogo vazio o rodízio não tem o que selecionar; a fonte enumera as chaves (`listKeys()`, o `sitemap.xml`) e o ciclo pede até 720 delas. Sem esse caminho, `SKILL_SOURCE_KIND=html` num banco novo ficaria vazio para sempre.
+- **Descoberta contínua (prioridade hot → inéditas → cold):** a cota de descoberta é reservada **antes** do cold, então a fonte é lida (`listKeys()`) em **todo** ciclo, não só no catálogo vazio. O hot — demanda real — tem prioridade e nunca é cortado; as inéditas vêm em seguida, em ordem de `source_key COLLATE "C"`, e **nunca são famintas enquanto existirem**; o cold preenche o que sobrar. A aritmética, a 4 ciclos/dia:
+  - **backfill** (catálogo novo, hot saturado em 360): **360 hot + 360 inéditas por ciclo** = 1.440 inéditas/dia → 20.000 em **~14 dias**;
+  - **depois do backfill** (inéditas esgotadas): **360 hot + 360 cold** por ciclo = 1.440 cold/dia → passada completa em **7–14 dias** (14 no pior caso com hot saturado; sem hot, o ciclo inteiro — 720/ciclo, 2.880/dia — gira o cold e a passada cai para **~7 dias**), dentro da janela da D3;
+  - **bootstrap** (catálogo vazio): `countActiveSkills() = 0`, todas as chaves enumeradas são inéditas e o ciclo pede até **720** delas.
 
 ### 7.4 Cache e fallback
 
 | Situação | Comportamento | Efeito visível |
 | --- | --- | --- |
-| Catálogo fresco (≤ 6 h) | Serve do Postgres | `data.source="cache"`, `degraded=false` |
-| Catálogo velho (> 6 h, ingestão falhando) | Serve mesmo assim | `degraded=true`, `degraded_reason="source_stale"`, `warnings[0]` explica; UI mostra faixa "catalog may be outdated" |
+| Catálogo fresco (≤ 12 h) | Serve do Postgres | `data.source="cache"`, `degraded=false` |
+| Catálogo velho (> 12 h, ingestão falhando) | Serve mesmo assim | `degraded=true`, `degraded_reason="source_stale"`, `warnings[0]` explica; UI mostra faixa "catalog may be outdated"; `search_degraded_total{reason="source_stale"}` conta a resposta |
 | skills.sh inacessível e **sem** catálogo | `503 SOURCE_UNAVAILABLE` | UI: "Data source unavailable, try again later" — **nunca** inventa resultado |
 | Provedor de LLM com timeout/erro | Ranking determinístico + explicação por template ("Top result for your request: 1.200 stars, 8.000 installs, no reported vulnerabilities") | `llm.status="unavailable"`, busca continua útil |
 | LLM devolve ids inválidos 2× | Mesmo fallback de template | `llm.status="invalid_ids"`, `flags:["explanation_fallback"]` |
 | Circuit breaker aberto (3 falhas em 60 s) | Pula a LLM por 60 s, sem tentar | `llm.status="unavailable"`, métrica `llm_fallback_total{reason="circuit_open"}` |
 
 Cache de resultado de busca: `search_hash = sha256(intent_normalizado + catalog_snapshot + limit)`; hit só dentro de 10 min — o suficiente para a demo repetida, sem mascarar mudança de catálogo.
+
+**Por que 12 h e não 6 h (issue #48):** o limiar acompanha o **ciclo do rodízio**, não a página. A ingestão vê 720 chaves a cada 6 h e o ciclo completo do cold leva **7–14 dias** (§7.3); marcar o catálogo como velho a cada ciclo puniria o rodízio funcionando. Em 12 h sobra **uma execução perdida de folga**: duas falhas seguidas (12 h sem `ok`) é sinal de que a ingestão parou, não de que a fatia daquele ciclo era pequena. `SOURCE_STALE_AFTER_MS` em `backend/src/search/constants.ts` é essa promessa; `data.age_seconds` mede o snapshot da última ingestão `ok`, nunca `ingest_run.items_seen` (que vale ~720 e não diz o tamanho do catálogo).
+
+Staleness também é métrica (§9.1): `catalog_snapshot_age_seconds` é a idade que a última busca ou replay viu, e `search_degraded_total{reason}` conta as respostas degradadas pelo motivo do contrato — nenhum label de alta cardinalidade (`search_id`, query) entra ali.
 
 ### 7.5 `SKILL.md`
 
@@ -523,16 +616,36 @@ Barreiras, em ordem de execução:
 
 | Escopo | Limite default | Implementação | Resposta |
 | --- | --- | --- | --- |
-| Por cliente (`sha256(ip + salt)`) | 10 buscas/min e 60/dia | Token bucket em memória, janela deslizante | `429 RATE_LIMITED` + `Retry-After` |
+| Por cliente (`sha256(salt:ip)`) | 10 buscas/min e 60/dia | Contador de hits por janela (`@nestjs/throttler`), em memória | `429 RATE_LIMITED` + `Retry-After` |
 | Global de chamadas à LLM | 500/dia (`LLM_DAILY_CALL_BUDGET`) | Contador no processo + `llm_cache` | Degrada para template, `llm.status="unavailable"` |
 | Chamadas ao skills.sh | 1 req/s, 4 ciclos/dia, só no ingestor | `SKILL_SOURCE_RPS` + agendador | `ingest_run` `partial`, sem impacto no usuário |
-| `POST /admin/ingest` | 1 por 5 min | Lock em `ingest_run` | `409` |
+| `POST /admin/ingest` | 1 execução por vez, 1–20 chaves por request (#49) | Trava no processo (`IngestService`) + índice parcial `UNIQUE (status) WHERE status='running'` | `409 CONFLICT` |
 
 O rate limit é **de custo**, não de segurança de dados: sem ele, um único script consome o orçamento de tokens do dono.
 
 ### 8.5 Logs sem PII
 
 Proibido em log: texto da consulta, IP em claro, header `authorization`/`cookie`, corpo de request/response, prompt ou resposta da LLM. Permitido: `query_hash`, `query_len`, `client_hash`, `request_id`, `category`, `llm_status`, `latency_ms`, `status`, `result_count`. Redação aplicada no middleware e conferida por teste automatizado (um log com campo proibido quebra o teste).
+
+**Falha do provedor é `warn`, não `debug` (Fase 3 da auditoria).** Com `LOG_LEVEL=info` — o de dev e
+o de prod — a busca respondia `llm.status="unavailable"` sem uma linha sequer dizendo por quê, e o
+caminho de **conteúdo vazio** (`200` sem texto em `choices[0].message.content`) não logava em nível
+nenhum. `openai-compat.ts` passa a emitir **uma** linha `warn` por falha, com estes campos (e nada
+mais):
+
+| Campo | O que diz |
+| --- | --- |
+| `step` | `intent` ou `explain` — qual das duas portas falhou |
+| `reason` | vocabulário fechado: `timeout`, `http_error`, `network`, `deadline_exhausted`, `empty_content`, `unknown` |
+| `httpStatus` | status HTTP do provedor (`401`, `429`, `502`…), `null` quando não houve resposta |
+| `errorCode` | código do axios (`ECONNABORTED`, `ENOTFOUND`) ou nome do erro — **nunca** a mensagem |
+| `elapsedMs` / `timeoutMs` | quanto durou e qual era o teto **efetivo** da etapa (o `min()` acima) |
+| `model` | modelo configurado no momento da falha |
+
+A mensagem do provedor fica de fora de propósito: um `401` cita a chave recebida, e a chave não é
+logável (regra 4 do `AGENTS.md`). O corpo da requisição também não entra — o diagnóstico que faltava
+é "qual falha, com qual teto, em quanto tempo", não o payload. `llm_calls_total{status,…}` (§9.1)
+continua sendo a métrica; o log é o rastro por requisição.
 
 ---
 
@@ -547,6 +660,8 @@ Instrumentação na primeira versão (não depois): sem isso, C7 (5%) vira traba
 | `http_requests_total` | counter | `route`, `method`, `status` | Requisições (exigência §3.6 do edital) |
 | `http_request_duration_seconds` | histogram | `route`, `method` | p95 do endpoint — tempo de resposta |
 | `search_requests_total` | counter | `result` (`ok`,`empty`,`degraded`,`error`) | Volume e qualidade da busca |
+| `search_degraded_total` | counter | `reason` (`source_stale`,`llm_unavailable`) | Por que a resposta degradou — distingue catálogo velho de LLM fora do ar (#48) |
+| `catalog_snapshot_age_seconds` | gauge | — | Idade do snapshot vista pela última busca; envelhece junto com `data.age_seconds` e dispara `source_stale` acima de 12 h (#48) |
 | `search_stage_duration_seconds` | histogram | `stage` (`validate`,`intent`,`retrieve`,`rank`,`explain`,`total`) | Mostra onde o tempo vai (LLM vs banco) |
 | `search_results_count` | histogram | — | Distribuição de resultados por busca |
 | `llm_calls_total` | counter | `status` (`ok`,`timeout`,`http_error`,`invalid_json`,`invalid_ids`) | Saúde do provedor |
@@ -600,7 +715,7 @@ Instrumentação na primeira versão (não depois): sem isso, C7 (5%) vira traba
 ### ADR-003 — `SkillSource` com adaptadores `json`/`html`/`fixture` selecionados por configuração
 
 **Contexto.** Não se sabe se o skills.sh expõe API JSON, e o dono fará a descoberta. O código não pode ficar refém dessa resposta, e o CI não pode depender de rede.
-**Decisão.** Uma interface (`list_categories`, `fetch_catalog`, `fetch_document`) e três implementações; `SKILL_SOURCE_KIND` escolhe. Normalização no adaptador; o domínio só conhece `SkillRecord`. `fixture` é o modo de teste/CI e a rede de segurança da demo.
+**Decisão.** Uma interface (`list_categories`, `listKeys`, `fetchSkills`, `fetchDocument`) e três implementações; `SKILL_SOURCE_KIND` escolhe. Normalização no adaptador; o domínio só conhece `SkillRecord`. `fixture` é o modo de teste/CI e a rede de segurança da demo.
 **Alternativas.** Escrever direto contra uma API assumida: descartada (retrabalho garantido). Scraping como único caminho: descartada (frágil e possivelmente bloqueado por termos de uso `[a confirmar]`).
 **Consequências.** Um contrato a manter e um adaptador a escrever quando a descoberta chegar. Testes de parser com HTML salvo. Se o site for renderizado no cliente, `html` não serve sem Playwright — bloqueio registrado, não improvisado.
 
@@ -632,6 +747,13 @@ Instrumentação na primeira versão (não depois): sem isso, C7 (5%) vira traba
 **Alternativas.** (a) **Manter FastAPI:** descartada — backend e frontend em linguagens diferentes, sem tipos compartilhados, e a decisão do dono já é a troca. (b) **Express puro:** descartada — DI, validação e documentação viram código manual, com mais superfície de erro para o mesmo escopo. (c) **Fastify + Nest** (`@nestjs/platform-fastify`): adiada, não descartada — o ganho de throughput é irrelevante no host de 2 GB; trocar o adapter continua possível sem tocar no domínio.
 **Consequências.** O backend de `backend/` é reescrito **antes de F2.3**, e até lá `03-plano-app.md` passa a descrever o esqueleto NestJS (F2.2). `nock.disableNetConnect()` substitui `pytest-socket` como prova de que nenhum teste abre socket; Prisma substitui Alembic (`prisma migrate` no deploy e no CI); o build ganha o passo `prisma generate`, que precisa rodar antes do `tsc`. Ganho: **um só idioma** no monorepo e contratos tipados ponta a ponta (os tipos de `Intent`/`ResultItem` podem ser compartilhados com a SPA), com uma única matriz de lint/teste. Custo: nenhum código Python do backend é aproveitado e o ranking (`backend/src/ranking`) tem de ser portado como função pura testada em Jest. Pesos, fórmula, gates e estimativas de `docs/00`–`docs/04` **não mudam**.
 
+### ADR-008 — Categoria só existe quando uma fonte a publica
+
+**Contexto.** A SPA oferecia um `<select>` de categoria e, com `GET /api/v1/categories` respondendo `[]`, mostrava o seletor com uma única opção ("Todas as categorias") e a linha "nenhuma categoria disponível — você ainda pode buscar sem uma". A Fase 4 da auditoria mostrou que **não é bug de consulta**: nenhum adaptador publica categorias — `backend/src/catalog/html-source.ts` e `fixture-source.ts` devolvem `[]` com `supports_categories: false`, e `normaliseSkill` fixa `category_slug: null`. É **feature sem fonte**, e a mensagem prometia uma transitoriedade que não existe.
+**Decisão.** Com `categories === []` **e sem falha de carregamento**, a tela de busca não renderiza o rótulo nem o `<select>` de categoria — nem uma linha de texto sobre categorias. O estado vazio de categorias (`STR.states.empty.noCategories`) só aparece quando o `GET /categories` **falhou**: ali a ausência é transitória e a frase é verdadeira. É decisão de desenho, não de dado: nada sai do contrato.
+**Alternativas.** (a) Manter o seletor com a mensagem: descartada — é o que a auditoria apontou, e um `<select>` de uma opção não é controle, é ruído. (b) Devolver uma lista fixa de categorias no backend para o seletor "funcionar": descartada — inventaria dado de catálogo (regra 6) e faria todo filtro escolhido cair em `422 UNKNOWN_CATEGORY`, porque `category` é validada contra a tabela `category` (§6.2). (c) Remover `GET /categories` do contrato: descartada — a rota é a promessa de que a categoria volta quando houver fonte, e o contrato é congelado por teste.
+**Consequências.** O filtro de categoria é, hoje, **422 por construção** (nenhum `slug` existe em `category`), e por isso a UI não o oferece. Quando uma fonte passar a publicar categorias, o seletor **volta sozinho**: a condição é `categories.length > 0`, sem flag de configuração e sem código novo. O caso de falha mantém o seletor e a mensagem — `frontend/src/test/screens/states.test.tsx` prova os dois.
+
 ---
 
 ## 11. Questões abertas com o dono (priorizadas)
@@ -655,7 +777,7 @@ Instrumentação na primeira versão (não depois): sem isso, C7 (5%) vira traba
 | R1 / C1 — app com frontend, backend e persistência | SPA + NestJS + Postgres com catálogo, histórico e cache | URL pública, 3 telas, migrations |
 | R5 / C5 — testes em camadas | Unitário (ranking, adaptadores com fixtures), integração (Postgres real, ingestão idempotente), contrato (`openapi.yaml`), teste do provedor de LLM com *fake* | `backend/test/`, cobertura do `ranking` e do `search` |
 | R6 / C7 — métricas, logs, dashboard | §9, nomes fechados desde a v1 | `/metrics`, Loki, 4 painéis |
-| R4 / C6 — segredos | `LLM_API_KEY`, `DATABASE_URL`, `IP_HASH_SALT` no Infisical; nada no bundle | `gitleaks`, `.env` 600 |
+| R4 / C6 — segredos | `LLM_API_KEY`, `DATABASE_URL`, `IP_HASH_SALT`, `ADMIN_TOKEN` no Infisical; nada no bundle | `gitleaks`, `.env` 600 |
 | R8 / C2 — serviços AWS integrados | ECR (imagem), S3 (`tfstate` + backup), EC2, CloudWatch mínimo — sem exceção à Opção 1 | `terraform state list` |
 | Custo/complexidade de `docs/01` §5.3 | Nenhum serviço extra (sem Redis, sem fila, sem vector DB) | `compose.yaml` com 4 serviços de app |
 

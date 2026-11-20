@@ -12,3 +12,28 @@ allowBuilds:
   prisma: true
   # Telemetria de uso do Prisma. Não precisamos e não deve sair da máquina.
   '@scarf/scarf': false
+  # Dependencia de dev do Scalar UI (Vue): o postinstall troca o shim entre
+  # Vue 2 e Vue 3. Dev-only, nunca entra na imagem de runtime.
+  vue-demi: true
+minimumReleaseAgeExclude:
+  - '@scalar/agent-chat@0.12.53'
+  - '@scalar/api-client@3.26.0'
+  - '@scalar/api-reference@1.79.0'
+  - '@scalar/asyncapi-to-markdown@0.2.9'
+  - '@scalar/blocks@0.7.2'
+  - '@scalar/code-highlight@0.4.14'
+  - '@scalar/components@0.35.0'
+  - '@scalar/icons@0.7.9'
+  - '@scalar/json-magic@0.20.0'
+  - '@scalar/oas-utils@0.20.22'
+  - '@scalar/openapi-to-markdown@1.7.7'
+  - '@scalar/openapi-upgrader@0.4.10'
+  - '@scalar/schemas@0.18.0'
+  - '@scalar/sidebar@0.12.10'
+  - '@scalar/snippetz@0.10.18'
+  - '@scalar/themes@0.20.1'
+  - '@scalar/types@0.29.0'
+  - '@scalar/use-hooks@0.4.26'
+  - '@scalar/use-toasts@0.10.7'
+  - '@scalar/validation@0.6.8'
+  - '@scalar/workspace-store@0.72.0'

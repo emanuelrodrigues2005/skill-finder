@@ -261,7 +261,7 @@ independentes: o nginx da SPA só proxia `/api/` e, no profile `prod`, a API pub
 pnpm --dir backend openapi:generate && git diff --exit-code openapi.yaml
 make openapi-check
 curl -fsS -o /dev/null -w '%{http_code}\n' localhost:8080/docs          # 200 (dev)
-curl -sS localhost:8080/docs-json | jq '.paths | keys | length'          # 8
+curl -sS localhost:8080/docs-json | jq '.paths | keys | length'          # 10
 grep -n 'docs' frontend/nginx.conf                                        # nada de /docs
 grep -ci 'api_key\|authorization' openapi.yaml                            # 0
 ```

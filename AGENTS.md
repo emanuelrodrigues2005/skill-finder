@@ -19,6 +19,28 @@ Fonte de verdade: `Makefile` (`make up`, `down`, `logs`, `migrate`, `seed`, `tes
 
 Sem internet nesta máquina, `pnpm install` falha — instale quando houver rede.
 
+**Verificação roda em ext4, nunca em `/mnt/c`.** O checkout vive em `/mnt/c`, que no
+WSL é 9p — cada leitura atravessa a ponte com o Windows. Medido neste repositório
+(65.681 arquivos em `node_modules`): `jest --listTests` leva **124 s** e uma suíte de
+4 testes leva **451 s** em `/mnt/c`, contra **5,5 s** da mesma suíte em ext4. 95% do
+tempo era espera de I/O, não CPU — foi isso que fez cada rodada custar ~15 min.
+
+Use `bash scripts/dev/verify.sh [escopo]`: espelha `backend/` + `openapi.yaml` para
+`~/cloud-verify` e roda lá. A cadeia completa cai de ~15 min para **~30 s**.
+Escopos: `typecheck`, `openapi`, `unit`, `e2e`, `docs`, ou vazio para tudo.
+
+- **Filho de agente roda UM escopo** (`verify.sh docs`), nunca a cadeia inteira; a
+  verificação completa é do orquestrador, no fim da issue.
+- `verify.sh --native` roda no `/mnt/c` — só para comparar, nunca no fluxo.
+- O espelho é descartável: `--delete` a cada execução. Nada é escrito no checkout.
+- **Import de valor dentro de `backend/src/` é relativo, nunca `@/`.** O alias `@/`
+  (`tsconfig.json` → `paths`) só é resolvido pelo `tsc` e pelo Jest
+  (`moduleNameMapper`); `ts-node` **não** o resolve em runtime, e
+  `scripts/generate-openapi.ts` roda por ts-node — então um import de valor via
+  `@/` derruba o `openapi:generate` no CI com `MODULE_NOT_FOUND`. Import `type`
+  pode usar `@/`, porque o compilador o apaga. Quebrou uma vez na F2.10; a regra
+  existe para não quebrar de novo.
+
 ## Regras que não se deduzem do código
 
 1. **O ranking é determinístico.** A ordem sai de `backend/src/ranking`, uma função pura: sem I/O,
@@ -35,7 +57,10 @@ Sem internet nesta máquina, `pnpm install` falha — instale quando houver rede
    `backend/test/fixtures/`. O modo degradado de dev/CI é `LLM_ENABLED=false` — o nome
    `LLM_PROVIDER=fake` de versões anteriores **não existe** em `backend/src/config/env.schema.ts`;
    o provedor falso de teste entra por injeção de dependência na F2.5.
-6. **Interface em inglês, documentação em português.**
+6. **Interface em português (pt-BR), documentação em português.** Rótulos, mensagens de erro e
+   estados vazios da SPA; prosa em `docs/` e neste arquivo. O texto que **vem do catálogo** (`name`,
+   `summary`, `SKILL.md`, rótulo de categoria) não é traduzido: é dado da fonte, mostrado como
+   publicado.
 7. **Degradação é visível.** Com a LLM fora do ar, a resposta traz `degraded: true` e a intenção
    vem do fallback por palavras-chave — a tela nunca mostra lista vazia sem explicação.
 
@@ -223,7 +248,7 @@ conhecido, nunca com segredo no diff. Merge é decisão do dono.
 | Vocabulário do domínio, invariantes e mapa das pastas | `CONTEXT.md` |
 | Produto, histórias de usuário, regra de ranking | `docs/app/01-spec-produto.md` |
 | Componentes, contrato da API, modelo de dados, segurança, ADRs | `docs/app/02-arquitetura.md` |
-| O que construir agora, sub-fases F2.0–F2.9, gates | `docs/app/03-plano-app.md` |
+| O que construir agora, sub-fases F2.0–F2.10, gates | `docs/app/03-plano-app.md` |
 | Índice das issues por milestone e riscos | `tasks/plan.md` |
 | Fases do projeto acadêmico (EC2, Terraform, CI/CD, demo) | `docs/04-plano-de-execucao.md` |
 | Requisitos e pesos do professor | `docs/00-edital-projeto-2.md` |

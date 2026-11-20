@@ -12,6 +12,25 @@ import { z } from 'zod';
 
 export const DEFAULT_LLM_BASE_URL = 'https://opencode.ai/inference/go/openai/v1';
 export const DEFAULT_LLM_MODEL = 'deepseek-v4.1-flash';
+/**
+ * Teto de tempo **somado** das chamadas de LLM numa busca (F2.10): intenção
+ * (`min(3000, restante)`) + explicação (`min(4000, restante)`). Estourado, o
+ * passo pendente cai no fallback e a resposta degrada; com menos de 800 ms
+ * restantes a explicação nem é tentada.
+ */
+export const DEFAULT_LLM_TOTAL_DEADLINE_MS = 7_000;
+
+/**
+ * Teto de tempo de **uma rodada** de enriquecimento ao vivo (ms).
+ *
+ * A rodada roda em segundo plano (fase 1 da auditoria de latência: ela não está
+ * mais no caminho da resposta), então este teto não protege o request — protege o
+ * processo, porque a rodada pendurada seguraria o single-flight e nada mais seria
+ * enriquecido. 60 s cobrem o sitemap (2–3 s) mais 12 chaves a 1 req/s (~12 s) com
+ * folga para fonte lenta.
+ */
+export const DEFAULT_LIVE_ENRICH_BUDGET_MS = 60_000;
+
 /** Default do `compose.yaml` para a árvore limpa validar sem `.env`; proibido em prod. */
 export const DEV_DEFAULT_DB_PASSWORD = 'skillsdev';
 
@@ -48,11 +67,38 @@ const baseEnvSchema = z.object({
   LLM_API_KEY: z.string().min(1).optional(),
   LLM_ENABLED: booleanFromEnv.default(true),
   LLM_TIMEOUT_S: z.coerce.number().positive().default(8),
+  // F2.10: orçamento total de latência da LLM numa busca. `positive()` porque um
+  // teto de 0 ms faria toda busca degradar sem tentar, em silêncio.
+  LLM_TOTAL_DEADLINE_MS: z.coerce.number().int().positive().default(DEFAULT_LLM_TOTAL_DEADLINE_MS),
 
   // --- catalog source (skills.sh) ---
-  SKILL_SOURCE_KIND: z.enum(['json', 'html', 'fixture']).default('fixture'),
+  // #47: `json` saiu — não existe endpoint JSON público (`/api/` é proibido pelo
+  // robots do site; D3 em `docs/app/amostras/README.md`). As fontes reais são o
+  // adaptador `html` e a fixture congelada.
+  SKILL_SOURCE_KIND: z.enum(['html', 'fixture']).default('fixture'),
   SKILL_SOURCE_BASE_URL: z.string().min(1).optional(),
   SKILL_SOURCE_RPS: z.coerce.number().positive().default(1),
+  //
+  // Enriquecimento ao vivo: quando a busca local nao devolve nada, enumera o
+  // sitemap, filtra as chaves pelo slug e ingere ate N delas. Desligado por padrao
+  // porque custa requisicoes contra a fonte. A rodada NAO entra mais no caminho da
+  // resposta (fase 1 da auditoria de latencia): ela roda em segundo plano, entao o
+  // teto de tempo protege o processo, nao o request.
+  LIVE_ENRICH_ENABLED: booleanFromEnv.default(false),
+  LIVE_ENRICH_MAX_KEYS: z.coerce.number().int().positive().default(12),
+  //
+  // Cota entre rodadas do enriquecimento ao vivo. O single-flight impede duas
+  // rodadas simultaneas, mas nao uma atras da outra: sem este intervalo, cada
+  // busca vazia abriria uma rodada de ate 12 requisicoes contra a fonte, a partir
+  // de input publico (amplificacao). 60 s limita a 12 req/min por processo.
+  LIVE_ENRICH_MIN_INTERVAL_MS: z.coerce.number().int().nonnegative().default(60_000),
+  // Orcamento de UMA rodada. `positive()` porque um teto de 0 ms abandonaria toda
+  // rodada antes de pedir a primeira chave — enriquecimento que nunca enriquece.
+  LIVE_ENRICH_BUDGET_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_LIVE_ENRICH_BUDGET_MS),
 
   // --- deterministic ranking weights (the LLM never orders anything) ---
   RANK_W_STARS: z.coerce.number().min(0).default(0.5),
@@ -66,6 +112,17 @@ const baseEnvSchema = z.object({
   // --- search history privacy ---
   SEARCH_LOG_STORE_TEXT: booleanFromEnv.default(false),
   IP_HASH_SALT: z.string().min(1).optional(),
+
+  // --- admin ingestion (#49) ---
+  // Token do header `X-Admin-Token` de `POST /admin/ingest` (§5.1, §8.1): é o
+  // único endpoint que **escreve** no catálogo, então a rota falha fechada —
+  // sem token configurado ela responde 401, nunca fica aberta. Em dev é
+  // opcional (quem opera local define no `.env`); em prod o boot recusa.
+  // `.min(32)`: a rota nao tem rate limit de tentativas, entao um token de
+  // dicionario seria brute-forcavel online - a comparacao tempo-constante
+  // protege contra oraculo de BYTES, nao contra espaco de busca pequeno.
+  // Gere com `openssl rand -hex 32`.
+  ADMIN_TOKEN: z.string().min(32).optional(),
 
   // --- compose-only (docker-compose derives DATABASE_URL from these) ---
   POSTGRES_USER: z.string().min(1).optional(),
@@ -109,6 +166,12 @@ export const envSchema = baseEnvSchema
     if (!value.IP_HASH_SALT) {
       missing.push('IP_HASH_SALT');
     }
+    // #49: sem `ADMIN_TOKEN` a rota de ingestão responderia 401 para sempre (o
+    // guard falha fechado) — em prod isso é uma API que não pode mais popular o
+    // catálogo. Recusar no boot é melhor do que descobrir no primeiro run.
+    if (!value.ADMIN_TOKEN) {
+      missing.push('ADMIN_TOKEN');
+    }
     for (const key of missing) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -135,9 +198,14 @@ export const envSchema = baseEnvSchema
     llmApiKey: value.LLM_API_KEY,
     llmEnabled: value.LLM_ENABLED,
     llmTimeoutS: value.LLM_TIMEOUT_S,
+    llmTotalDeadlineMs: value.LLM_TOTAL_DEADLINE_MS,
     skillSourceKind: value.SKILL_SOURCE_KIND,
     skillSourceBaseUrl: value.SKILL_SOURCE_BASE_URL,
     skillSourceRps: value.SKILL_SOURCE_RPS,
+    liveEnrichEnabled: value.LIVE_ENRICH_ENABLED,
+    liveEnrichMaxKeys: value.LIVE_ENRICH_MAX_KEYS,
+    liveEnrichMinIntervalMs: value.LIVE_ENRICH_MIN_INTERVAL_MS,
+    liveEnrichBudgetMs: value.LIVE_ENRICH_BUDGET_MS,
     rankWStars: value.RANK_W_STARS,
     rankWVulns: value.RANK_W_VULNS,
     rankWInstalls: value.RANK_W_INSTALLS,
@@ -145,6 +213,7 @@ export const envSchema = baseEnvSchema
     rateLimitSearchPerDay: value.RATE_LIMIT_SEARCH_PER_DAY,
     searchLogStoreText: value.SEARCH_LOG_STORE_TEXT,
     ipHashSalt: value.IP_HASH_SALT,
+    adminToken: value.ADMIN_TOKEN,
     postgres: {
       user: value.POSTGRES_USER,
       password: value.POSTGRES_PASSWORD,

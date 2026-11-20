@@ -3,6 +3,7 @@ import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 
+import { AdminModule } from './admin/admin.module';
 import { ERROR_CODES } from './common/errors/error-codes';
 import { ApiError, HttpExceptionFilter } from './common/errors/http-exception.filter';
 import { pinoHttpOptions } from './common/logging/pino-options';
@@ -11,6 +12,7 @@ import { MetricsModule } from './common/metrics/metrics.module';
 import { AppConfigModule, AppConfigService } from './config/config.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { SearchModule } from './search/search.module';
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * 60_000;
@@ -21,6 +23,12 @@ const DAY_MS = 24 * 60 * 60_000;
     PrismaModule,
     MetricsModule,
     HealthModule,
+    // Os cinco endpoints públicos de §5.1 (F2.6).
+    SearchModule.forRoot(),
+    // As duas rotas `x-internal` de §5.1 (#49): execução da ingestão com o
+    // serviço no ar. Só o `AdminTokenGuard` as abre, e em prod o boot recusa
+    // sem `ADMIN_TOKEN`.
+    AdminModule,
     LoggerModule.forRootAsync({
       imports: [AppConfigModule],
       inject: [AppConfigService],
@@ -30,8 +38,11 @@ const DAY_MS = 24 * 60 * 60_000;
       imports: [AppConfigModule],
       inject: [AppConfigService],
       useFactory: (config: AppConfigService) => ({
-        // Dois throttlers nomeados de §8.4 (10/min e 60/dia). O guard entra no
-        // `POST /api/v1/search` na F2.6; aqui só existe a configuração.
+        // Dois throttlers nomeados de §8.4 (10/min e 60/dia). O guard que os
+        // aplica é o `SearchThrottlerGuard`, montado na rota `POST /search`
+        // (#13) — **não** `APP_GUARD`: limitar `/healthz`, `/readyz` e
+        // `/metrics` faria o probe falhar e o container reiniciar em loop (D1).
+        // Um endpoint novo só entra no limite se declarar o `@UseGuards`.
         throttlers: [
           {
             name: 'search-minute',

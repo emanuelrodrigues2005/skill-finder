@@ -27,6 +27,19 @@ describe('env schema (§3)', () => {
     expect(env.rateLimitSearchPerMin).toBe(10);
     expect(env.rateLimitSearchPerDay).toBe(60);
     expect(env.searchLogStoreText).toBe(false);
+    // Em dev o token é opcional: sem ele a rota de admin falha **fechada** (401),
+    // e é isso que os casos abaixo fixam.
+    expect(env.adminToken).toBeUndefined();
+  });
+
+  it('exposes LLM_TOTAL_DEADLINE_MS with the ratified 7000 ms default', () => {
+    // Plano F2.10: teto de tempo *somado* das chamadas de LLM numa busca. A
+    // intenção recebe min(3000, restante) e a explicação min(4000, restante).
+    expect(loadEnv({ ENV: 'dev' }).llmTotalDeadlineMs).toBe(7000);
+    expect(loadEnv({ ENV: 'dev', LLM_TOTAL_DEADLINE_MS: '9000' }).llmTotalDeadlineMs).toBe(9000);
+    expect(() => loadEnv({ ENV: 'dev', LLM_TOTAL_DEADLINE_MS: '0' })).toThrow(
+      /LLM_TOTAL_DEADLINE_MS/,
+    );
   });
 
   it('treats empty strings from .env.example as absent', () => {
@@ -76,10 +89,25 @@ describe('env schema (§3)', () => {
         DATABASE_URL: 'postgresql://u:p@postgres:5432/skills',
         LLM_ENABLED: 'false',
         IP_HASH_SALT: 'sal-de-teste',
+        ADMIN_TOKEN: 'token-de-operador-com-32-caracteres',
       });
 
       expect(env.llmApiKey).toBeUndefined();
       expect(env.llmEnabled).toBe(false);
+    });
+
+    it('without ADMIN_TOKEN (a rota de ingestão não pode existir sem token)', () => {
+      // Issue #49: `ADMIN_TOKEN` é o header `X-Admin-Token` de
+      // `POST /admin/ingest`. Em prod, subir sem ele deixaria a única rota de
+      // escrita do catálogo dependendo de um default — por isso o boot recusa.
+      expect(() =>
+        loadEnv({
+          ENV: 'prod',
+          DATABASE_URL: 'postgresql://u:p@postgres:5432/skills',
+          LLM_ENABLED: 'false',
+          IP_HASH_SALT: 'sal-de-teste',
+        }),
+      ).toThrow(/ADMIN_TOKEN/);
     });
 
     it('without IP_HASH_SALT (hash de IPv4 sem sal é IP em claro)', () => {
@@ -115,6 +143,7 @@ describe('env schema (§3)', () => {
         DATABASE_URL: 'postgresql://u:p@postgres:5432/skills',
         LLM_ENABLED: 'false',
         IP_HASH_SALT: 'sal-de-teste',
+        ADMIN_TOKEN: 'token-de-operador-com-32-caracteres',
       });
 
       expect(env.env).toBe('prod');
@@ -141,6 +170,7 @@ describe('env schema (§3)', () => {
         DATABASE_URL: 'postgresql://skills:S3nh4-real@postgres:5432/skills?schema=public',
         LLM_ENABLED: 'false',
         IP_HASH_SALT: 'sal-de-teste',
+        ADMIN_TOKEN: 'token-de-operador-com-32-caracteres',
       });
 
       expect(env.env).toBe('prod');

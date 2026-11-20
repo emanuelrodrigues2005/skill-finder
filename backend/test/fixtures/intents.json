@@ -1,0 +1,92 @@
+[
+  {
+    "query": "review pull requests for security issues in python",
+    "intent": {
+      "category": "security",
+      "keywords": ["pull request", "security", "python"],
+      "filters": { "exclude_with_vulnerabilities": true },
+      "language": "en",
+      "confidence": 0.86
+    }
+  },
+  {
+    "query": "skill to write unit tests for a nestjs controller",
+    "intent": {
+      "category": "testing",
+      "keywords": ["unit test", "nestjs", "controller"],
+      "filters": { "exclude_with_vulnerabilities": false },
+      "language": "en",
+      "confidence": 0.81
+    }
+  },
+  {
+    "query": "quero uma skill para documentar uma api em portugues",
+    "intent": {
+      "category": "docs",
+      "keywords": ["documentar", "api"],
+      "filters": { "exclude_with_vulnerabilities": false },
+      "language": "pt",
+      "confidence": 0.74
+    }
+  },
+  {
+    "query": "agent that migrates a postgres database with zero downtime",
+    "intent": {
+      "category": "data",
+      "keywords": ["postgres", "migration", "zero downtime"],
+      "filters": { "exclude_with_vulnerabilities": false },
+      "language": "en",
+      "confidence": 0.79
+    }
+  },
+  {
+    "query": "infra helper for terraform plan on aws",
+    "intent": {
+      "category": "ops",
+      "keywords": ["terraform", "aws", "plan"],
+      "filters": { "exclude_with_vulnerabilities": false },
+      "language": "en",
+      "confidence": 0.83
+    }
+  },
+  {
+    "query": "frontend skill for react accessibility audit",
+    "intent": {
+      "category": "dev",
+      "keywords": ["react", "accessibility", "audit"],
+      "filters": { "exclude_with_vulnerabilities": false },
+      "language": "en",
+      "confidence": 0.77
+    }
+  },
+  {
+    "query": "me ajuda a escolher qualquer coisa util",
+    "intent": {
+      "category": null,
+      "keywords": ["escolher", "util"],
+      "filters": { "exclude_with_vulnerabilities": false },
+      "language": "pt",
+      "confidence": 0.41
+    }
+  },
+  {
+    "query": "debug a flaky jest suite in a monorepo",
+    "intent": {
+      "category": "testing",
+      "keywords": ["flaky", "jest", "monorepo"],
+      "filters": { "exclude_with_vulnerabilities": false },
+      "language": "en",
+      "confidence": 0.88
+    }
+  },
+  {
+    "query": "scan dependencies for known cves before release",
+    "intent": {
+      "category": "security",
+      "keywords": ["dependencies", "cve", "release"],
+      "filters": { "exclude_with_vulnerabilities": true },
+      "language": "en",
+      "confidence": 0.84
+    }
+  }
+]
