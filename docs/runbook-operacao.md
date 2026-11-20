@@ -4,8 +4,9 @@ Procedimentos de execução, implantação e remoção do Skill Finder na EC2 do
 `docs/00-edital-projeto-2.md` §3.7 cobra como "procedimentos de execução, implantação e remoção" e o
 desenho de `docs/01-analise-requisitos-e-arquitetura.md` §4.2 assume.
 
-Vale para toda a página: WSL com AWS CLI v2 e Terraform ≥ 1.10 (`terraform version`), key pair em
-`~/.ssh/projeto2`, `infra/terraform.tfvars` preenchido e credenciais de sessão exportadas:
+Vale para toda a página: WSL com AWS CLI v2 e Terraform ≥ 1.10 (`terraform version`), a chave privada
+do key pair **`vockey`** em `~/.ssh/labsuser.pem` (`chmod 400`), `infra/terraform.tfvars` preenchido
+e credenciais de sessão exportadas:
 
 ```bash
 source ~/.local/bin/academy-env
@@ -51,6 +52,9 @@ cp infra/terraform.tfvars.example infra/terraform.tfvars
 default. `allowed_ssh_cidrs` vazio mantém a porta 22 fechada; para abrir, use o CIDR da sua rede com
 máscara `/32`. `terraform.tfvars` é ignorado pelo Git.
 
+O `key_name` tem default **`vockey`**, e é o único par que existe na conta do lab: nada de criar
+`projeto2` nem baixar `.pem` novo — a privada correspondente é o `labsuser.pem` de *AWS Details*.
+
 ### 1.3 init, plan e apply
 
 O backend é **parcial**: o nome do bucket chega por `-backend-config` a cada `init` e nunca é
@@ -77,6 +81,16 @@ configuration is valid.`, um plano com as 5 saídas (`host_public_ip`, `ecr_regi
 Não use `-auto-approve`: o plano mostra o que será criado antes de o crédito ser gasto, e a sessão
 pode expirar no meio (`docs/02` §2.6).
 
+Mudou o `user_data`? Ele só roda em instância nova: o provider atualiza o atributo, mas o cloud-init
+não reexecuta num host que já bootou. Force a troca e a sessão de bootstrap acontece de novo —
+
+```bash
+terraform apply -replace=aws_instance.app
+```
+
+— e o volume de dados é reanexado ao host novo (o `/var/lib/docker` vem junto: as imagens já
+baixadas não são perdidas).
+
 ### 1.4 IP público
 
 ```bash
@@ -90,23 +104,30 @@ Esperado: um IPv4 público. **O IP muda a cada `stop`/`start` da instância** (n
 desenho): toda URL abaixo depende de `$IP` e fica inválida depois de religar a máquina. Releia o
 output — §4.2 — antes de qualquer comando com `$IP`.
 
-### 1.5 Código no host e `/opt/app/.env`
+### 1.5 Compose e `/opt/app/.env`
 
-O host não tem o repositório: o código chega como arquivo (`git archive`) e é extraído em
-`/opt/app`, que é onde o `user_data` já criou o diretório.
+O host não tem o repositório e **não precisa dele**: o código roda dentro da imagem publicada no
+ECR (§1.6). Para `/opt/app` vão só os dois arquivos de composição e o `.env` — `/opt/app` já existe
+porque o `user_data` o criou.
 
 ```bash
-git archive --format=tar.gz -o /tmp/skill-finder.tar.gz HEAD
-scp -i ~/.ssh/projeto2 /tmp/skill-finder.tar.gz "ubuntu@$IP:/tmp/"
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'sudo mkdir -p /opt/app && sudo tar -xzf /tmp/skill-finder.tar.gz -C /opt/app && sudo chown -R ubuntu:ubuntu /opt/app && ls /opt/app'
+IP="$(cd infra && terraform output -raw host_public_ip)"
+git archive --format=tar.gz -o /tmp/compose.tar.gz HEAD compose.yaml infra/deploy/compose.prod.yaml
+scp -i ~/.ssh/labsuser.pem /tmp/compose.tar.gz "ubuntu@$IP:/tmp/"
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'sudo mkdir -p /opt/app && sudo tar -xzf /tmp/compose.tar.gz -C /opt/app && sudo chown -R ubuntu:ubuntu /opt/app && ls -R /opt/app'
 ```
 
-Esperado: `compose.yaml`, `backend`, `frontend` listados.
+Esperado: `compose.yaml` e `infra/deploy/compose.prod.yaml`. Nenhum `backend/`, nenhum `frontend/`:
+o que o host executa vem do registry, não do checkout.
 
-O `.env` é lido pelo compose (`env_file`) e é o que faz a API passar no schema de produção:
+O `.env` é lido pelo compose (`env_file`) e é o que faz a API passar no schema de produção. As
+últimas quatro linhas não são segredo: são a interpolação de `infra/deploy/compose.prod.yaml`, e o
+registry vem de `terraform output` para o id da conta não ser escrito no repositório.
 
 ```bash
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'umask 077 && cat > /opt/app/.env' <<EOF
+ECR_REGISTRY="$(cd infra && terraform output -raw ecr_registry)"
+IMAGE_TAG="$(git rev-parse --short HEAD)"
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'umask 077 && cat > /opt/app/.env' <<EOF
 POSTGRES_USER=skills
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
 POSTGRES_DB=skills
@@ -116,8 +137,12 @@ LLM_ENABLED=true
 LLM_API_KEY=troque-pela-chave-do-provedor
 SKILL_SOURCE_KIND=html
 WEB_PORT=80
+ECR_REGISTRY=$ECR_REGISTRY
+ECR_API_REPOSITORY=skill-finder-api
+ECR_WEB_REPOSITORY=skill-finder-web
+IMAGE_TAG=$IMAGE_TAG
 EOF
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'chmod 600 /opt/app/.env && stat -c "%a %U" /opt/app/.env'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'chmod 600 /opt/app/.env && stat -c "%a %U" /opt/app/.env'
 ```
 
 Esperado: `600 ubuntu`. O `chmod 600` é obrigatório — o arquivo tem a senha do banco, o
@@ -132,20 +157,38 @@ serviço; com `ENV=prod` o boot **recusa** subir sem `DATABASE_URL`, `IP_HASH_SA
 (`backend/src/config/env.schema.ts`). `WEB_PORT=80` é o que publica o nginx na porta 80 — sem ele o
 stack sobe na 8081 e `http://$IP/` não responde.
 
-### 1.6 Subir o stack e migrar
+### 1.6 Puxar as imagens do ECR, subir e migrar
+
+O `IMAGE_TAG` sai do `.env` (§1.5) e é o mesmo SHA nos dois repositórios: `pull` e `up` leem a
+imagem do registry, nunca constroem no host.
 
 ```bash
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod up -d --build'
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod ps'
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod exec -T api npm run --silent prisma:deploy'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod pull'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --no-build'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod ps'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod exec -T api npm run --silent prisma:deploy'
 ```
 
-Esperado: `ps` com `api` e `web` em `running (healthy)` (o `postgres` também, `healthy`), e
-`prisma:deploy` aplicando as migrations pendentes ou respondendo `No pending migrations to apply.`
+Esperado: `pull` baixando `skill-finder-api:<sha>`, `skill-finder-web:<sha>` e `postgres:16-alpine`;
+`up -d --no-build` subindo os três; `ps` com `api` e `web` em `running (healthy)` (o `postgres`
+também, `healthy`); `prisma:deploy` aplicando as migrations pendentes ou respondendo
+`No pending migrations to apply.`
 
-O `--build` acontece no host e precisa de rede: são duas imagens construídas do zero
-(`pnpm install --frozen-lockfile`). Em `t3.small` isso leva alguns minutos e é o passo mais pesado
-do runbook.
+O `pull` não pede senha nem AWS CLI. O `user_data` instala o `amazon-ecr-credential-helper` e escreve
+`/home/ubuntu/.docker/config.json` com `credHelpers` para o registry da conta; o helper pede o token
+ao ECR com a credencial do `LabInstanceProfile` (o `LabRole` tem
+`AmazonECRContainerRegistryReadOnly`) e a renova a cada `pull`. Consequência de projeto: nenhum
+segredo de registry mora no host e nada vence em 12 h.
+
+```bash
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cat /home/ubuntu/.docker/config.json'
+```
+
+Esperado: `credHelpers` com `7943…amazonaws.com` → `ecr-login`.
+
+`--no-build` não é opcional: o `compose.yaml` da raiz declara `build:` para `api` e `web`, e sem a
+flag o host tentaria construir as duas imagens (`pnpm install --frozen-lockfile` do monorepo em
+`t3.small`, 2 GB) em vez de usar o que veio do registry.
 
 ### 1.7 Smoke
 
@@ -158,7 +201,7 @@ curl -fsS -o /dev/null -w '%{http_code}\n' "http://$IP/"
 Esperado: `200` em `/healthz` e `/readyz` (os dois têm proxy explícito na borda —
 `frontend/nginx.conf`) e `200` na raiz com a SPA. Um `502` aqui significa API fora do ar, quase
 sempre `.env` inválido — o erro exato do schema aparece em
-`ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod logs api | tail -20'`.
+`ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod logs api | tail -20'`.
 
 ### 1.8 Primeira ingestão
 
@@ -167,7 +210,7 @@ A imagem `runtime` **não** tem `scripts/` nem `ts-node` (`backend/Dockerfile`),
 autenticada por `X-Admin-Token`:
 
 ```bash
-TOKEN="$(ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'sed -n "s/^ADMIN_TOKEN=//p" /opt/app/.env')"
+TOKEN="$(ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'sed -n "s/^ADMIN_TOKEN=//p" /opt/app/.env')"
 curl -fsS -X POST "http://$IP/api/v1/admin/ingest" \
   -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
   -d '{"source_keys":["vercel-labs/skills/find-skills","anthropics/skills/webapp-testing"]}' | head -c 400; echo
@@ -180,56 +223,82 @@ são várias.
 
 ## 2. Implantar
 
-Uma versão nova de código com a infraestrutura de pé: código no host, `up -d --build`, migração,
-smoke. Nada de `terraform apply` aqui — infraestrutura só muda na §1.
+Uma versão nova de código com a infraestrutura de pé: a imagem nova no ECR, `IMAGE_TAG` trocado,
+`pull`, `up -d --no-build`, migração, smoke. Nada de `terraform apply` aqui — infraestrutura só
+muda na §1 — e nada de construir imagem no host.
 
-### 2.1 Código novo
+### 2.1 Publicar a imagem e apontar o `IMAGE_TAG`
+
+A imagem sai do CI (F4) ou, sem CI, da máquina de quem desenvolve. O contrato é um só: **tag = SHA
+do commit**, nos dois repositórios, e `latest` nunca entra.
+
+```bash
+SHA="$(git rev-parse --short HEAD)"
+aws ecr get-login-password --region us-east-1 \
+  | docker login --username AWS --password-stdin "$(cd infra && terraform output -raw ecr_registry)"
+docker build -t "skill-finder-api:$SHA" --target runtime backend
+docker build -t "skill-finder-web:$SHA" frontend
+docker tag "skill-finder-api:$SHA" "$(cd infra && terraform output -raw ecr_registry)/skill-finder-api:$SHA"
+docker tag "skill-finder-web:$SHA" "$(cd infra && terraform output -raw ecr_registry)/skill-finder-web:$SHA"
+docker push "$(cd infra && terraform output -raw ecr_registry)/skill-finder-api:$SHA"
+docker push "$(cd infra && terraform output -raw ecr_registry)/skill-finder-web:$SHA"
+```
+
+Esperado: dois `Pushed` e, em `aws ecr describe-images --repository-name skill-finder-api`, a tag com
+o SHA. O `docker login` acima é da máquina de build — o host não faz login nenhum (§1.6).
+
+O host só precisa saber qual SHA rodar, e isso mora no `IMAGE_TAG` do `.env`:
 
 ```bash
 IP="$(cd infra && terraform output -raw host_public_ip)"
-git archive --format=tar.gz -o /tmp/skill-finder.tar.gz HEAD
-scp -i ~/.ssh/projeto2 /tmp/skill-finder.tar.gz "ubuntu@$IP:/tmp/"
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'sudo tar -xzf /tmp/skill-finder.tar.gz -C /opt/app && sudo chown -R ubuntu:ubuntu /opt/app'
+SHA="$(git rev-parse --short HEAD)"
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" "sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=$SHA/' /opt/app/.env && grep -E '^(IMAGE_TAG|ECR_REGISTRY)=' /opt/app/.env"
 ```
 
-Esperado: nenhuma saída de erro. O que vai para o host é o commit `HEAD` — alteração não commitada
-fica de fora. O `tar` extrai por cima: alteração e remoção de arquivo no host só aparecem se você
-apagar `/opt/app/backend` e `/opt/app/frontend` antes — para um deploy limpo:
+Esperado: `IMAGE_TAG=<sha>` e `ECR_REGISTRY=<conta>.dkr.ecr.us-east-1.amazonaws.com`.
+
+### 2.2 Puxar, subir e migrar
 
 ```bash
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'rm -rf /opt/app/backend /opt/app/frontend && tar -xzf /tmp/skill-finder.tar.gz -C /opt/app'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod pull'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --no-build'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod exec -T api npm run --silent prisma:deploy'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod ps'
 ```
 
-### 2.2 Reconstruir e migrar
+Esperado: os serviços cuja imagem mudou são recriados (`Recreated`), os demais seguem `running`, e o
+`ps` volta com `api`/`web` `healthy`. `prisma:deploy` é idempotente — pode rodar em todo deploy. O
+`pull_policy: always` de `compose.prod.yaml` garante que `up` traga o digest do registry: tag igual e
+imagem local velha não passam.
 
-```bash
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod up -d --build'
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod exec -T api npm run --silent prisma:deploy'
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod ps'
-```
-
-Esperado: os serviços cuja imagem mudou são recriados (`Recreated`), os demais seguem
-`running`, e o `ps` volta com `api`/`web` `healthy`. `prisma:deploy` é idempotente — pode rodar em
-todo deploy.
-
-O `.env` **não** é tocado por esta seção. Mudou um segredo? Edite `/opt/app/.env`, confirme
-`chmod 600` e recrie a API:
-`docker compose --profile prod up -d --force-recreate api`.
+O `.env` **não** é tocado por esta seção além do `IMAGE_TAG`. Mudou um segredo? Edite
+`/opt/app/.env`, confirme `chmod 600` e recrie a API:
+`docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --force-recreate api`.
 
 ### 2.3 Smoke e diagnóstico
 
 ```bash
 curl -fsS "http://$IP/readyz"; echo
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod logs --tail=50 api'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod logs --tail=50 api'
 ```
 
 Esperado: `200` e log sem `Invalid environment configuration`. Se a imagem subiu mas a API morre no
 boot, o log traz o campo que falta (`DATABASE_URL`, `IP_HASH_SALT`, `ADMIN_TOKEN`, `LLM_API_KEY`).
 
-As imagens também são publicadas no ECR com tag = SHA do commit (`terraform output -json
-ecr_repository_urls`, rodando de dentro de `infra/`), mas o `compose.yaml` de hoje constrói a imagem
-no host em vez de declarar `image:` — então `docker compose pull` não traz nada do ECR. O deploy por
-`pull` é o caminho da F4, quando o workflow publica a imagem e o compose aponta para o repositório.
+### 2.4 Voltar um deploy (rollback)
+
+O ECR guarda as 5 imagens mais recentes de cada repositório (`infra/ecr.tf`), então voltar é apontar
+o `IMAGE_TAG` para o SHA anterior e repetir §2.2 — sem rebuild, sem `apply`:
+
+```bash
+SHA_ANTERIOR="<sha que está rodando hoje>"
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" "sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=$SHA_ANTERIOR/' /opt/app/.env"
+```
+
+Depois, `pull` + `up -d --no-build` + `prisma:deploy` (§2.2) e o smoke (§2.3). Se o SHA anterior já
+saiu da janela de 5 imagens, o rollback é republicar o commit antigo
+(`git switch --detach <sha>` e o bloco de build de §2.1) — migrations aplicadas **não** voltam: elas
+são para frente por desenho, e é por isso que a migration de cada release entra antes do smoke.
 
 ## 3. Destruir
 
@@ -240,7 +309,7 @@ Antes de destruir, salve o que o `destroy` leva junto: o volume EBS de dados (o 
 
 ```bash
 IP="$(cd infra && terraform output -raw host_public_ip)"
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod exec -T postgres pg_dump -U skills skills' > backup-$(date +%Y%m%d).sql
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod exec -T postgres pg_dump -U skills skills' > backup-$(date +%Y%m%d).sql
 ```
 
 ### 3.1 destroy
@@ -258,18 +327,21 @@ erro. Sem `-auto-approve`: a lista é a última chance de ver que a instância c
 ### 3.2 Varredura de órfãos
 
 `destroy` pode deixar recurso para trás (apply interrompido, criação fora do state). A varredura é
-por tag — o valor é o `project_name` do `terraform.tfvars`:
+por tag — o valor é o `project_name` do `terraform.tfvars`, em minúsculo (`project`, nunca
+`Project`): todo recurso do state carrega essa tag.
 
 ```bash
 aws ec2 describe-instances --filters "Name=tag:project,Values=skill-finder" \
   --query 'Reservations[].Instances[].[InstanceId,State.Name]' --output table
 aws ec2 describe-volumes --filters "Name=tag:project,Values=skill-finder" \
   --query 'Volumes[].[VolumeId,State,Size]' --output table
+aws ec2 describe-security-groups --filters "Name=tag:project,Values=skill-finder" \
+  --query 'SecurityGroups[].[GroupId,GroupName]' --output table
 ```
 
-Esperado: **duas tabelas vazias**. Qualquer linha é órfão e continua consumindo crédito. Confira o
+Esperado: **três tabelas vazias**. Qualquer linha é órfão e continua consumindo crédito. Confira o
 id na tabela e remova com o comando abaixo — sem id, ele falha em vez de apagar outra coisa; repita a
-varredura e o comando até as duas tabelas voltarem vazias (`delete-volume` apaga um volume por vez):
+varredura e o comando até as tabelas voltarem vazias (`delete-volume` apaga um volume por vez):
 
 ```bash
 aws ec2 terminate-instances --instance-ids \
@@ -278,18 +350,25 @@ aws ec2 terminate-instances --instance-ids \
 aws ec2 delete-volume --volume-id \
   "$(aws ec2 describe-volumes --filters "Name=tag:project,Values=skill-finder" \
      --query 'Volumes[0].VolumeId' --output text)"
+aws ec2 delete-security-group --group-id \
+  "$(aws ec2 describe-security-groups --filters "Name=tag:project,Values=skill-finder" \
+     --query 'SecurityGroups[0].GroupId' --output text)"
 ```
+
+Um security group só é removível depois que a última instância que o usa sumiu — se o
+`delete-security-group` falhar com `DependencyViolation`, aguarde o `terminated` e repita.
 
 ### 3.3 Confirmar state vazio e bucket preservado
 
 ```bash
 (cd infra && terraform state list)
-aws s3 ls "s3://$TF_STATE_BUCKET/projeto2/"
+aws s3 ls --recursive "s3://$TF_STATE_BUCKET"
 ```
 
-Esperado: `state list` sem nenhuma linha e o `s3 ls` ainda listando `terraform.tfstate`. Bucket
-apagado por engano é state perdido — o `bootstrap-state.sh` recria o bucket, não o histórico; o
-versionamento do S3 é o que permite voltar a uma versão anterior do arquivo.
+Esperado: `state list` sem nenhuma linha e o `s3 ls` ainda listando o `terraform.tfstate` sob o
+prefixo que `infra/backend.tf` declara em `key`. Bucket apagado por engano é state perdido — o
+`bootstrap-state.sh` recria o bucket, não o histórico; o versionamento do S3 é o que permite voltar a
+uma versão anterior do arquivo.
 
 ## 4. Encerrar sessão
 
@@ -326,7 +405,7 @@ Esperado: um IP novo (ou o mesmo, por sorte) e `200` em `/healthz`. Os container
 `restart: unless-stopped` e o Docker sobe no boot; se `ps` não mostrar `healthy` em ~2 min:
 
 ```bash
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod up -d'
+ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --no-build'
 ```
 
 ### 4.3 Fim do lab: credenciais, lock preso

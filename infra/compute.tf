@@ -1,5 +1,6 @@
 locals {
   data_volume_device = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${replace(aws_ebs_volume.data.id, "-", "")}"
+  ecr_registry       = split("/", aws_ecr_repository.app["api"].repository_url)[0]
 
   user_data = <<-EOT
     #!/usr/bin/env bash
@@ -7,7 +8,8 @@ locals {
     export DEBIAN_FRONTEND=noninteractive
 
     apt-get update -y
-    apt-get install -y --no-install-recommends docker.io docker-compose-v2 e2fsprogs util-linux
+    apt-get install -y --no-install-recommends \
+      docker.io docker-compose-v2 e2fsprogs util-linux amazon-ecr-credential-helper
 
     systemctl stop docker.socket docker || true
 
@@ -29,6 +31,20 @@ locals {
 
     systemctl enable --now docker
     usermod -aG docker ubuntu
+
+    # O ECR nao responde a pull anonimo e o host nao tem AWS CLI. O helper resolve o
+    # pull pedindo o token pelo instance profile (IMDSv2) a cada requisicao: nenhum
+    # segredo e escrito no disco e nada precisa ser renovado a cada 12 h.
+    install -d -m 700 -o ubuntu -g ubuntu /home/ubuntu/.docker
+    cat > /home/ubuntu/.docker/config.json <<EOF
+    {
+      "credHelpers": {
+        "${local.ecr_registry}": "ecr-login"
+      }
+    }
+    EOF
+    chown ubuntu:ubuntu /home/ubuntu/.docker/config.json
+    chmod 600 /home/ubuntu/.docker/config.json
 
     mkdir -p /opt/app
     chown ubuntu:ubuntu /opt/app

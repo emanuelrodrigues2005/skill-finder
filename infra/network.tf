@@ -54,6 +54,6 @@ resource "aws_security_group" "app" {
 
   tags = {
     Name    = "${var.project_name}-app"
-    Project = var.project_name
+    project = var.project_name
   }
 }

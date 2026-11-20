@@ -195,7 +195,7 @@ Três contratos explícitos isolam as mudanças de arquitetura:
 
 1. **UI ↔ API:** OpenAPI gerado pelo backend; a SPA consome só o que está no contrato, e o teste de API usa o mesmo contrato.
 2. **API ↔ Banco:** schema só muda por migration versionada; nenhum `CREATE TABLE` em código de aplicação.
-3. **IaC ↔ Pipeline:** o pipeline lê `terraform output -json` e usa apenas quatro saídas — `host_public_ip` (ou `alb_dns_name`), `ecr_repository_url`, `state_bucket`, `target_port`. **Trocar a borda (IP → ALB → ECS) muda uma saída, não o workflow.** É esse *seam* que torna a recomendação da §5 reversível a custo baixo.
+3. **IaC ↔ Pipeline:** o pipeline lê `terraform output -json` e usa apenas cinco saídas — `host_public_ip` (ou `alb_dns_name`), `ecr_registry`, `ecr_repository_urls`, `state_bucket`, `target_port`. **Trocar a borda (IP → ALB → ECS) muda uma saída, não o workflow.** É esse *seam* que torna a recomendação da §5 reversível a custo baixo.
 
 ### 3.4 Capacidades deliberadamente fora do desenho
 
@@ -255,7 +255,7 @@ flowchart LR
 
 **(d) O que o Terraform cria:** provider e *lockfile*; backend S3 (`use_lockfile = true` quando a versão suportar, dispensando DynamoDB); bucket de estado com versionamento e bloqueio de acesso público; *security group* (80 aberto; 22 restrito — ver §4.2g); `aws_instance` com `user_data` (instala Docker e Compose plugin, cria `/opt/app`, registra um serviço `systemd` de `compose up`); volume EBS de dados; repositório ECR com *lifecycle policy* de 5 imagens; *key pair* (criada ou reaproveitada, ver `docs/02` §10); `outputs` (`host_public_ip`, `ecr_repository_url`, `state_bucket`). **Não cria** role, policy, ALB, RDS.
 
-**(e) Onde o pipeline faz deploy:** `build` empurra a imagem para o ECR com tag = SHA; `deploy` executa `terraform apply` (quando `infra/` mudou) e, em seguida, SSH na instância → `docker compose pull && docker compose up -d && docker compose exec -T api pnpm prisma migrate deploy`. O runner descobre o IP pela saída do Terraform, nunca por valor fixo.
+**(e) Onde o pipeline faz deploy:** `build` empurra a imagem para o ECR com tag = SHA; `deploy` executa `terraform apply` (quando `infra/` mudou) e, em seguida, SSH na instância → `docker compose pull && docker compose up -d --no-build && docker compose exec -T api npm run --silent prisma:deploy`. O runner descobre o IP pela saída do Terraform, nunca por valor fixo.
 
 **(f) Aderência aos 8 requisitos**
 
