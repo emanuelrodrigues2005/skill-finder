@@ -63,6 +63,13 @@ Escopos: `typecheck`, `openapi`, `unit`, `e2e`, `docs`, ou vazio para tudo.
    publicado.
 7. **Degradação é visível.** Com a LLM fora do ar, a resposta traz `degraded: true` e a intenção
    vem do fallback por palavras-chave — a tela nunca mostra lista vazia sem explicação.
+8. **Linux/WSL primeiro.** Todo comando de shell roda por `wsl.exe -e bash -lc '…'`, no checkout
+   em `/mnt/c/Users/Lima02/Documents/bcc/cloud`. O agente **não** usa PowerShell nativo para
+   `docker`, `aws`, `terraform`, `gh`, `git`, `infisical` ou teste — o toolchain do projeto vive no
+   WSL, e um comando rodado no Windows encontra outra versão, outro daemon ou nenhum binário.
+   PowerShell só quando o alvo é comprovadamente só-Windows (ex.: `gh` no host, se o do WSL não
+   estiver autenticado). Credenciais e contas (`~/.local/bin/academy-env`, `~/.docker/config.json`,
+   `infisical login`) existem **apenas** no WSL: um comando no Windows não as vê.
 
 ## Subagentes: quem escreve e quem devolve
 
