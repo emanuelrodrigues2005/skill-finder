@@ -86,6 +86,10 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      # O `gate` nao usa estes dois: so prova que existem, para um run sem
+      # credencial do Infisical reprovar aqui e nao depois do build inteiro.
+      INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+      INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
       REQUESTED_TAG: ${{ inputs.image_tag }}
       WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
       DISPATCHED_SHA: ${{ github.sha }}
@@ -93,7 +97,8 @@ jobs:
       - name: Mask credentials
         run: |
           set -uo pipefail
-          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+            INFISICAL_CLIENT_ID INFISICAL_CLIENT_SECRET; do
             value="${!name:-}"
             if [ -n "$value" ]; then
               echo "::add-mask::$value"
@@ -147,6 +152,19 @@ jobs:
             echo "::error::variavel DOCKERHUB_USERNAME vazia; o build nao saberia onde publicar as imagens"
             exit 1
           fi
+          for name in INFISICAL_CLIENT_ID INFISICAL_CLIENT_SECRET; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::secret ${name} vazio; o deploy no host nao autenticaria no Infisical"
+              {
+                echo "## Credencial do Infisical ausente"
+                echo ""
+                echo "\`${name}\` esta vazio. Sem ele o job \`deploy\` morreria depois do build inteiro."
+                echo "Grave a machine identity (Universal Auth) e dispare de novo:"
+                echo '`gh secret set INFISICAL_CLIENT_ID` e `gh secret set INFISICAL_CLIENT_SECRET`.'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          done
           {
             echo "sha=${sha}"
           } >> "$GITHUB_OUTPUT"
@@ -330,6 +348,13 @@ jobs:
             fi
           done
 
+      - name: Checkout the deployed commit
+        # O deploy nao precisa do repositorio para nada, exceto o `compose.yaml` e o
+        # override, que vao no payload do SSM.
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
       - name: Resolve the host
         id: target
         run: |
@@ -428,10 +453,43 @@ jobs:
             printf 'INFISICAL_ENV=%q\n' "$INFISICAL_ENV"
             printf 'SHA=%q\n' "$SHA"
             printf 'DOCKERHUB_USER=%q\n' "$DOCKERHUB_USER"
+            # Os dois arquivos do compose vao no payload: o host pode ter a versao de
+            # um commit anterior — o override antigo exigia uma variavel de registry
+            # que nao existe mais e o `compose pull` morria nela. gzip+base64 mantem
+            # o comando dentro do limite do SSM.
+            printf 'COMPOSE_GZ=%q\n' "$(gzip -9 -c compose.yaml | base64 -w 0)"
+            printf 'COMPOSE_PROD_GZ=%q\n' "$(gzip -9 -c infra/deploy/compose.prod.yaml | base64 -w 0)"
             cat <<'REMOTE'
           # O AWS-RunShellScript executa como root: `apt-get` e o instalador da CLI
           # abaixo rodam sem `sudo`.
+          #
+          # `umask 077`: o login da CLI grava a sessao em `~/.infisical` do root; o
+          # `trap` faz o logout seja qual for o desfecho, e o mesmo trap apaga o
+          # script intermediario.
+          umask 077
+          step=/tmp/skill-finder-deploy-step.sh
+          logged_in=0
+          cleanup() {
+            local rc=$?
+            if [ "$logged_in" = 1 ]; then
+              infisical logout > /dev/null 2>&1 || true
+            fi
+            rm -f "$step" /tmp/infisical-setup.sh
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
+          mkdir -p /opt/app/infra/deploy
           cd /opt/app
+          printf '%s' "$COMPOSE_GZ" | base64 -d | gzip -dc > compose.yaml
+          printf '%s' "$COMPOSE_PROD_GZ" | base64 -d | gzip -dc > infra/deploy/compose.prod.yaml
+          for arquivo in compose.yaml infra/deploy/compose.prod.yaml; do
+            if [ ! -s "$arquivo" ]; then
+              echo "ERRO: ${arquivo} vazio depois do payload do SSM; nada foi implantado" >&2
+              exit 1
+            fi
+          done
+          echo "compose: $(sha256sum compose.yaml infra/deploy/compose.prod.yaml | cut -c1-12 | tr '\n' ' ')"
 
           # O `.env` da VM saiu do fluxo: os segredos vêm do Infisical e o compose
           # roda com `--env-file /dev/null`, então um resto de execução anterior não
@@ -464,6 +522,7 @@ jobs:
             echo "ERRO: Universal Auth nao devolveu token; confira a machine identity e o papel read no projeto" >&2
             exit 1
           fi
+          logged_in=1
           export INFISICAL_TOKEN="$token"
 
           # Não são segredo e por isso não estão no Infisical: o registry público, a
@@ -471,7 +530,6 @@ jobs:
           export DOCKERHUB_USER IMAGE_TAG="$SHA" WEB_PORT=80 SKILL_SOURCE_KIND=html
           export POSTGRES_USER=skills POSTGRES_DB=skills
 
-          step=/tmp/skill-finder-deploy-step.sh
           cat > "$step" <<'STEP'
           set -euo pipefail
           cd /opt/app

@@ -6,8 +6,8 @@
 #   1. arquivos que o workflow consome
 #   2. invariantes do próprio deploy.yml (gate, SSM, sem SSH, sem tag móvel)
 #   3. ferramentas locais
-#   4. sessão do Academy, ECR, host de pé e agente SSM online
-#   5. secrets do repositório no GitHub
+#   4. sessão do Academy, host de pé e agente SSM online
+#   5. secrets e variables do repositório (Docker Hub e Infisical)
 #
 # Todo item que falta sai com o comando que resolve; o código de saída é 1 quando
 # algo impede o deploy, para o comando poder ser usado num `&&`.
@@ -75,6 +75,16 @@ if [ -f "$WORKFLOW" ]; then
   regra "concurrency declarada" '^concurrency:' presente "dois deploys simultâneos corrompem o host"
   regra "permissions explícitas" '^permissions:' presente "sem bloco, o token herda o default do repositório"
   regra "credencial mascarada antes de usar" '::add-mask::' presente "segredo em log é vazamento"
+  regra "token do Docker Hub mascarado" 'add-mask::\$\{DOCKERHUB_TOKEN\}' presente "o token de push não pode aparecer no log"
+  regra "credenciais do Infisical no loop de mascaramento" 'INFISICAL_CLIENT_ID INFISICAL_CLIENT_SECRET' presente "sem a máscara, id e secret aparecem no log do run"
+  regra "prova da tag no Docker Hub" 'docker manifest inspect' presente "sem registry AWS, a tag publicada se prova pelo manifesto"
+  # `SECRET` case-sensitive não serve de padrão: `AWS_SECRET_ACCESS_KEY` contém
+  # "ECR". Os alvos são os identificadores do registry antigo.
+  regra "sem o registry antigo da AWS" '(ecr_registry|aws ecr|amazon-ecr-login|ECR_REGISTRY)' ausente "o pull é anônimo do Docker Hub; sobrou resíduo do registry anterior"
+  regra "compose sem .env velho" 'env-file /dev/null' presente "sem a flag, um /opt/app/.env antigo entra na interpolação"
+  regra "compose.yaml e o override no payload do SSM" 'COMPOSE_GZ=' presente "o host pode ter o compose de um commit anterior; o deploy não pode depender dele"
+  regra "umask 077 no script remoto" 'umask 077' presente "a sessão da CLI ficaria legível no home do root"
+  regra "logout do Infisical no fim do comando" 'infisical logout' presente "a sessão do root persistiria no host entre deploys"
   regra "smoke de /healthz" '/healthz' presente "o requisito do §3.3 é a disponibilidade verificada"
   regra "smoke de /readyz" '/readyz' presente "sem ele o smoke não vê o banco fora"
   regra "smoke da ingestão sem token (401)" '"401"' presente "a rota admin não pode aceitar chamada anônima"
@@ -145,12 +155,6 @@ else
   fi
 
   if [ "$credencial" = ok ]; then
-    if aws ecr describe-repositories --repository-names "${PROJECT_NAME}-api" "${PROJECT_NAME}-web" >/dev/null 2>&1; then
-      ok "repositórios ${PROJECT_NAME}-api e ${PROJECT_NAME}-web no ECR"
-    else
-      falta "ECR sem os dois repositórios — a infra da F3 não está de pé (runbook §1 ou provision=true)"
-    fi
-
     instancias="$(aws ec2 describe-instances \
       --filters "Name=tag:project,Values=${PROJECT_NAME}" "Name=instance-state-name,Values=running" \
       --query 'Reservations[].Instances[].[InstanceId,PublicIpAddress]' --output text 2>/dev/null || true)"
@@ -170,22 +174,31 @@ else
       fi
     fi
   else
-    aviso "ECR, host e SSM não checados: a credencial falhou antes"
+    aviso "host e SSM não checados: a credencial falhou antes"
   fi
 
-  echo "5. secrets do repositório"
+  echo "5. secrets e variables do repositório"
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    nomes="$(gh secret list --json name --jq '.[].name' 2>/dev/null || true)"
-    if [ -z "$nomes" ]; then
+    # Lista vazia é resposta legítima: o repositório sem nenhum secret precisa reprovar,
+    # não virar "não consegui listar". Só o erro do `gh` (sem papel admin) é aviso.
+    if ! nomes="$(gh secret list --json name --jq '.[].name' 2>/dev/null)"; then
       aviso "não consegui listar os secrets (o papel no repositório precisa ser admin)"
     else
-      for secret in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+      for secret in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+        DOCKERHUB_TOKEN INFISICAL_CLIENT_ID INFISICAL_CLIENT_SECRET; do
         if printf '%s\n' "$nomes" | grep -qx "$secret"; then
           ok "secret $secret"
         else
           falta "secret $secret no GitHub — gh secret set $secret"
         fi
       done
+    fi
+    if ! variaveis="$(gh variable list --json name --jq '.[].name' 2>/dev/null)"; then
+      aviso "não consegui listar as variables (mesmo papel admin)"
+    elif printf '%s\n' "$variaveis" | grep -qx 'DOCKERHUB_USERNAME'; then
+      ok "variable DOCKERHUB_USERNAME"
+    else
+      falta "variable DOCKERHUB_USERNAME no GitHub — gh variable set DOCKERHUB_USERNAME --body <usuario>"
     fi
   else
     aviso "gh ausente ou sem login: 'gh auth login' libera a checagem dos secrets"

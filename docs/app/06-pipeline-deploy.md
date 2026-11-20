@@ -24,10 +24,10 @@ flowchart LR
 
 | job | `needs` | o que faz | quando roda |
 | --- | --- | --- | --- |
-| `gate` | — | `sts get-caller-identity`, resolve `sha`, exige `vars.DOCKERHUB_USERNAME`, CI verde e host de pé | sempre (a checagem de host é pulada com `provision=true`) |
+| `gate` | — | `sts get-caller-identity`, resolve `sha`, exige `vars.DOCKERHUB_USERNAME` e os secrets do Infisical presentes, CI verde e host de pé | sempre (a checagem de host é pulada com `provision=true`) |
 | `build` | `gate` | `docker build --target runtime` das duas imagens, `push` no Docker Hub com tag = SHA do commit e `docker manifest inspect` da tag | `skip_build != true` |
 | `provision` | `gate` | `terraform init/validate/plan/apply` com as variáveis que o `tfvars` (ignorado pelo Git) daria | `provision == true` |
-| `deploy` | `gate`, `build`, `provision` | resolve o host, espera o agente SSM, garante a CLI do Infisical, autentica a machine identity, `secrets-manager run` sobre `compose pull`, `up -d --no-build`, `npm run --silent prisma:deploy` e a ingestão pelo endpoint admin | `gate` verde e nenhuma dependência falhou |
+| `deploy` | `gate`, `build`, `provision` | resolve o host, espera o agente SSM, grava `compose.yaml` e o override **vindos do payload**, garante a CLI do Infisical, autentica a machine identity e roda `secrets-manager run` sobre `compose pull`, `up -d --no-build`, `npm run --silent prisma:deploy` e a ingestão pelo endpoint admin | `gate` verde e nenhuma dependência falhou |
 | `smoke` | `deploy` | `/healthz` JSON, `/readyz` JSON, `/` HTML e `POST /api/v1/admin/ingest` sem token → 401 | `deploy` verde |
 
 `provision` é o único job que mexe em infraestrutura, e está **desligado por padrão**: o caminho
@@ -100,8 +100,10 @@ listar o ambiente `prod` e injetar as variáveis no processo do compose.
 
 O disparo automático acontece a cada merge em `main` com CI verde. Como as credenciais AWS vencem em
 ~4 h, um merge fora da sessão do lab faz o `gate` reprovar com a mensagem de renovação — o deploy em
-si não fica pela metade, porque o `gate` roda antes de qualquer trabalho caro. As credenciais do
-Docker Hub e do Infisical não vencem: elas são revogáveis, e revogar é o rollback de credencial.
+si não fica pela metade, porque o `gate` roda antes de qualquer trabalho caro. Pelo mesmo motivo ele
+testa `DOCKERHUB_USERNAME` e os dois secrets do Infisical: faltando qualquer um, o run morreria no
+`deploy` depois de ~40 min de `build`, e o custo do erro é todo do runner. As credenciais do Docker
+Hub e do Infisical não vencem: elas são revogáveis, e revogar é o rollback de credencial.
 
 ## 4. Por que o desenho é este
 
@@ -134,13 +136,27 @@ se o manifesto não estiver lá. O `pull` do deploy continua sendo a prova final
 `pull_policy: always` do `infra/deploy/compose.prod.yaml`, o digest é sempre o do registry — tag
 igual com imagem local velha não passa.
 
+**Os dois arquivos do compose viajam no payload.** O `cd /opt/app` encontrava o `compose.yaml` e o
+`infra/deploy/compose.prod.yaml` de um deploy anterior — e o override daquele commit exigia
+`${ECR_REGISTRY:?}`, então o `compose pull` falhava em "required variable ECR_REGISTRY is missing a
+value" antes de baixar qualquer imagem. Cópia manual não resolve para sempre: o job `deploy` faz
+checkout do commit implantado e envia os dois arquivos dentro do comando do SSM, em `base64` de
+`gzip`; o host os escreve em `/opt/app` antes de qualquer `compose pull`, e a implantação deixa de
+depender do que sobrou no disco. O `gzip` existe porque o parâmetro `commands` do SSM tem limite de
+tamanho: os dois arquivos somam 7,3 KB e comprimidos levam o comando inteiro a ~12 KB, com folga.
+Depois de escrever, o script confere que cada arquivo ficou não vazio e publica os `sha256` curtos no
+log; se a decodificação sair vazia, o deploy para antes do `pull`.
+
 **Por que o Infisical roda no host, e não no runner.** O segredo tem de chegar ao processo que vai
 usar: em produção é o `docker compose` do host que precisa de `DATABASE_URL`, `POSTGRES_PASSWORD`,
 `ADMIN_TOKEN`, `IP_HASH_SALT` e `LLM_API_KEY` no ambiente, porque o `compose.yaml` passou a
 **interpolar do ambiente** em vez de ler `env_file`. Trazer os valores para o runner só para
 devolvê-los por SSM aumentaria a exposição (o payload do SSM fica no histórico de invocações) sem
 nenhum ganho. O host é o ponto de menor privilégio: a machine identity tem papel `read`, o token vale
-só enquanto o comando roda e nada é escrito em disco.
+só enquanto o comando roda, a sessão que a CLI grava em `~/.infisical` do `root` nasce com
+`umask 077` e o `trap` do script executa `infisical logout` em qualquer desfecho — sucesso, erro ou
+sinal — apagando junto o script intermediário de `/tmp`. Sem esse par, a sessão ficaria no host entre
+deploys.
 
 **O que o host instala.** A CLI do Infisical, pelo repositório oficial
 (`https://artifacts-cli.infisical.com/setup.deb.sh`), **somente se `infisical` não estiver no `PATH`**;
@@ -210,6 +226,9 @@ O `compose.yaml` da raiz não lê mais `/opt/app/.env`: as variáveis vêm do am
 compose com `--env-file /dev/null` para que um `.env` deixado por execuções anteriores **não** entre
 na interpolação (se o compose do host for antigo demais para a flag, o deploy segue e avisa no log).
 Se o arquivo existir, o deploy **avisa e não apaga** — remover é decisão do dono, depois de validar.
+O mesmo vale para os arquivos do compose: o host pode ter a versão de um commit anterior, e o payload
+os sobrescreve com a do commit que está sendo implantado — inclusive num rollback, que faz checkout da
+tag escolhida.
 
 Dois pontos de atenção na primeira execução:
 
@@ -231,8 +250,11 @@ bash scripts/dev/deploy-preflight.sh --offline  # só arquivos, invariantes do Y
 ```
 
 O código de saída é 1 quando falta algo, e cada pendência sai com o comando que resolve. O
-`deploy-preflight.sh` ainda confere os repositórios no ECR e os três secrets antigos: ele está
-**desatualizado** em relação a este pipeline (dívida registrada em §10).
+`deploy-preflight.sh` acompanha este pipeline: confere os seis secrets, a variable
+`DOCKERHUB_USERNAME`, o host, o agente SSM e as invariantes do `deploy.yml` — sem o registry antigo,
+`--env-file /dev/null`, token do Docker Hub mascarado, `docker manifest inspect`, compose no payload,
+`umask 077` e `infisical logout`. `--offline` roda só arquivos, invariantes e ferramentas. A dívida
+que fica é estrutural: o script espelha o `gate` escrevendo as regras à mão (§10).
 
 **Automático**: merge em `main` → CI verde → deploy. Nada a digitar.
 
@@ -293,8 +315,8 @@ dele.
 - Segredos mascarados com `::add-mask::` antes do primeiro uso, em cada job que os recebe
   (`AWS_*`, `DOCKERHUB_TOKEN`, `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`).
 - Menor privilégio por job: `build` só tem o token do Docker Hub; `gate` e `deploy` só as credenciais
-  AWS de sessão; `deploy` é o único que vê as credenciais do Infisical; `smoke` não tem segredo
-  nenhum.
+  AWS de sessão; `deploy` é o único que **usa** as credenciais do Infisical — o `gate` as recebe
+  apenas para reprovar cedo quando faltam (`[ -z ]`, nunca as usa); `smoke` não tem segredo nenhum.
 - Custo: ~6–12 min de runner por deploy, duas imagens pequenas, nenhum recurso AWS novo (o
   `provision` só roda sob demanda) e nenhum custo de Docker Hub ou Infisical no plano gratuito.
 
@@ -334,5 +356,29 @@ pendente de uma sessão do lab, e cada item vira evidência em `docs/evidencias/
    resultado (credencial mascarada).
 8. O `--env-file /dev/null` na versão de `docker-compose-v2` que o `user_data` instala (a flag existe
    no 2.40 local; se o host tiver versão anterior, o deploy avisa em vez de falhar).
-9. `deploy-preflight.sh` atualizado (ainda procura repositórios no ECR e os secrets antigos) e o
-   runbook §1.5 reescrito para o caminho sem `.env`, ou marcado como legado.
+9. `deploy-preflight.sh` na versão atual (seis secrets, `DOCKERHUB_USERNAME` e as invariantes) contra
+   um repositório real, e o runbook §1.5 reescrito para o caminho sem `.env`, ou marcado como legado.
+
+## 10. Dívida conhecida
+
+O que este pipeline ainda faz abaixo do padrão que ele mesmo documenta. Nenhum item bloqueia o deploy
+de hoje; todos têm o caminho de correção ao lado.
+
+1. **A CLI do Infisical não é pinada por hash.** A instalação usa `curl --proto '=https'
+   --tlsv1.2` sobre `https://artifacts-cli.infisical.com/setup.deb.sh`, mas o `.deb` que chega não é
+   conferido: um pacote novo do upstream entra no próximo host sem deploy nenhum. Correção:
+   baixar `infisical_<versão>_amd64.deb` de versão fixa, conferir o `sha256` contra um valor no
+   repositório e instalar com `apt-get install ./arquivo.deb`. O §9.5 prova que a instalação roda no
+   host real; hash nenhum é conferido hoje.
+2. **As credenciais da machine identity viajam no payload do SSM** em vez de morarem em
+   `/opt/app/.infisical` (§4.1). Enquanto a conta do Academy não permitir IAM nem
+   `ssm:GetParameter` com KMS, o caminho correto está documentado e não implementado — o residual é o
+   histórico de invocações do SSM.
+3. **A imagem é referenciada por tag, não por digest.** `pull_policy: always` fixa o digest **no
+   momento do pull**; se a tag do SHA for reescrita no Docker Hub, o mesmo commit implanta outra
+   imagem sem mudar uma linha do repositório. Correção: resolver o digest do manifesto no `build` e
+   escrever `image: <repo>@sha256:<digest>` (ou exportar `IMAGE_DIGEST`) no compose do host.
+4. **O `deploy-preflight.sh` reimplementa as invariantes do `gate`.** As regras de §2 são `grep` à
+   mão num script separado: o workflow pode ganhar uma invariante e o preflight continuar verde.
+   Correção: `actionlint` no CI para o YAML e um único `scripts/dev/deploy-preflight.sh` que lê as
+   regras de um arquivo de dados, em vez de duas listas para manter.
