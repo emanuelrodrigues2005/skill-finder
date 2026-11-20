@@ -45,7 +45,7 @@ resource "aws_security_group" "app" {
   }
 
   egress {
-    description = "Saida livre: pull do ECR, apt e chamada ao provedor de LLM."
+    description = "Saida livre: pull do Docker Hub, apt e chamada ao provedor de LLM."
     from_port   = 0
     to_port     = 0
     protocol    = "-1"

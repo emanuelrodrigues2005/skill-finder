@@ -3,14 +3,21 @@ output "host_public_ip" {
   value       = aws_instance.app.public_ip
 }
 
-output "ecr_registry" {
-  description = "Host do registry para docker login e para o compose de producao."
-  value       = split("/", aws_ecr_repository.app["api"].repository_url)[0]
+locals {
+  image_repository = {
+    api = "${var.dockerhub_user}/${var.project_name}-api"
+    web = "${var.dockerhub_user}/${var.project_name}-web"
+  }
 }
 
-output "ecr_repository_urls" {
-  description = "URL de cada repositorio, por servico."
-  value       = { for name, repo in aws_ecr_repository.app : name => repo.repository_url }
+output "dockerhub_user" {
+  description = "Usuario do Docker Hub que publica as imagens consumidas pelo host."
+  value       = var.dockerhub_user
+}
+
+output "image_repository" {
+  description = "Repositorio de cada servico, por nome, sem a tag."
+  value       = local.image_repository
 }
 
 output "state_bucket" {

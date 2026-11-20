@@ -8,17 +8,20 @@ name: skills-search
 # O schema (`backend/src/config/env.schema.ts`) ainda aborta o boot se
 # `NODE_ENV=production` com `ENV!=prod`.
 #
-# `env_file.required: false` mantém `docker compose config` válido sem `.env` (CI),
-# mas um stack funcional precisa de `.env` — copie de `.env.example`.
+# Segredo entra por **variável de ambiente**, nunca por um arquivo injetado no
+# container: em produção quem preenche o ambiente é o Infisical no host
+# (`infisical secrets-manager run -- docker compose …`, ver
+# `docs/app/06-pipeline-deploy.md`), e o `.env` deixa de existir na VM.
+# Em dev o compose continua lendo `./.env` sozinho, mas só para **interpolar** estas
+# linhas — o arquivo não é entregue inteiro ao container. Chave sem valor explícito
+# chega vazia e o schema aplica o default (`dropEmptyStrings`), que é o que mantém
+# `docker compose config` válido numa árvore limpa.
 #
 # Dois serviços de API porque o profile precisa escolher o `build.target`: `api`
 # mantém o nome que o upstream do nginx (`frontend/nginx.conf`: `api:8000`) espera,
 # e `api-dev` declara o alias `api` na rede do compose.
 
 x-api-base: &api-base
-  env_file:
-    - path: .env
-      required: false
   depends_on:
     postgres:
       condition: service_healthy
@@ -31,16 +34,44 @@ x-api-base: &api-base
   restart: unless-stopped
 
 x-api-env: &api-env
-  # Derivada das variáveis do Postgres; um banco gerenciado (F3) sobrescreve esta linha.
-  DATABASE_URL: postgresql://${POSTGRES_USER:-skills}:${POSTGRES_PASSWORD:-skillsdev}@postgres:5432/${POSTGRES_DB:-skills}?schema=public
+  # Um banco gerenciado sobrescreve esta linha pela própria `DATABASE_URL` do
+  # ambiente; o default derivado só existe para o stack `postgres` do compose.
+  DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-skills}:${POSTGRES_PASSWORD:-skillsdev}@postgres:5432/${POSTGRES_DB:-skills}?schema=public}
+  # Obrigatórias em prod (o schema recusa o boot sem elas); vazias em dev, onde o
+  # `.env` decide e a rota admin falha fechado sem `ADMIN_TOKEN`.
+  ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+  IP_HASH_SALT: ${IP_HASH_SALT:-}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  # Repasse do restante da configuração: valor vazio = ausente, e quem tem default é
+  # o schema. Declarar as chaves (em vez de entregar o arquivo inteiro ao container)
+  # é o que permite o ambiente do host ser a única fonte em produção.
+  LOG_LEVEL: ${LOG_LEVEL:-}
+  LLM_BASE_URL: ${LLM_BASE_URL:-}
+  LLM_MODEL: ${LLM_MODEL:-}
+  LLM_ENABLED: ${LLM_ENABLED:-}
+  LLM_TIMEOUT_S: ${LLM_TIMEOUT_S:-}
+  LLM_TOTAL_DEADLINE_MS: ${LLM_TOTAL_DEADLINE_MS:-}
+  SKILL_SOURCE_KIND: ${SKILL_SOURCE_KIND:-}
+  SKILL_SOURCE_BASE_URL: ${SKILL_SOURCE_BASE_URL:-}
+  SKILL_SOURCE_RPS: ${SKILL_SOURCE_RPS:-}
+  LIVE_ENRICH_ENABLED: ${LIVE_ENRICH_ENABLED:-}
+  LIVE_ENRICH_MAX_KEYS: ${LIVE_ENRICH_MAX_KEYS:-}
+  LIVE_ENRICH_MIN_INTERVAL_MS: ${LIVE_ENRICH_MIN_INTERVAL_MS:-}
+  LIVE_ENRICH_BUDGET_MS: ${LIVE_ENRICH_BUDGET_MS:-}
+  RANK_W_STARS: ${RANK_W_STARS:-}
+  RANK_W_VULNS: ${RANK_W_VULNS:-}
+  RANK_W_INSTALLS: ${RANK_W_INSTALLS:-}
+  RATE_LIMIT_SEARCH_PER_MIN: ${RATE_LIMIT_SEARCH_PER_MIN:-}
+  RATE_LIMIT_SEARCH_PER_DAY: ${RATE_LIMIT_SEARCH_PER_DAY:-}
+  SEARCH_LOG_STORE_TEXT: ${SEARCH_LOG_STORE_TEXT:-}
+  POSTGRES_USER: ${POSTGRES_USER:-skills}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-skillsdev}
+  POSTGRES_DB: ${POSTGRES_DB:-skills}
 
 services:
   postgres:
     image: postgres:16-alpine
     profiles: ["dev", "prod"]
-    env_file:
-      - path: .env
-        required: false
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-skills}
       POSTGRES_DB: ${POSTGRES_DB:-skills}
@@ -48,6 +79,7 @@ services:
       # validar sem `.env` e o entrypoint oficial do postgres aborta com senha vazia.
       # Quem impede esse default de chegar em produção é o backend: em ENV=prod o
       # `env.schema.ts` recusa boot se a senha da DATABASE_URL for este valor.
+      # O valor real em prod vem do Infisical, no ambiente do host.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-skillsdev}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
@@ -91,6 +123,10 @@ services:
     environment:
       <<: *api-env
       ENV: prod
+      # Fixado aqui para que um `NODE_ENV` do ambiente do host não flip o modo: a
+      # imagem de runtime já nasce com `production`, e o par (NODE_ENV, ENV) é
+      # conferido no boot.
+      NODE_ENV: production
     ports:
       # O nginx é a borda. Publicar em 0.0.0.0 tornaria o nginx contornável e
       # exporia `/metrics` e `/docs` direto na internet; com `127.0.0.1` o acesso

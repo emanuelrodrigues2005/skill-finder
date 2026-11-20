@@ -5,6 +5,9 @@ key_name              = "vockey"
 instance_profile_name = "LabInstanceProfile"
 data_volume_gb        = 20
 
+# Usuario do Docker Hub que publica as imagens publicas consumidas pelo host.
+dockerhub_user = "emanuelr05"
+
 # CIDR da sua rede de acesso SSH, no formato <rede>/32. Sem valor, o SSH fica fechado.
 allowed_ssh_cidrs = []
 

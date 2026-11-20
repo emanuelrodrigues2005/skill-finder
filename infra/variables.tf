@@ -37,3 +37,9 @@ variable "state_bucket" {
   description = "Bucket do state remoto, repetido aqui porque o bloco backend não aceita variável."
   type        = string
 }
+
+variable "dockerhub_user" {
+  description = "Usuário do Docker Hub que publica as imagens públicas consumidas pelo host."
+  type        = string
+  default     = "emanuelr05"
+}
