@@ -37,8 +37,26 @@ export interface SearchCatalogInput {
 }
 
 /**
+ * Teto de termos do `tsquery` (Fase 2 da auditoria da busca).
+ *
+ * OR sem teto é varredura: cada termo é um ramo novo que o GIN precisa visitar e
+ * o `ts_rank` precisa somar. Quatro é o que cabe de uma consulta curta sem
+ * transformar o operador em "case com qualquer palavra".
+ */
+export const MAX_FTS_TERMS = 4;
+
+/** Operador do `websearch_to_tsquery` que separa os termos (aceita `or`). */
+const FTS_OR = ' or ';
+
+/**
  * Texto que vai ao `tsquery` do `search_doc`: os termos em inglês da intenção,
- * unidos por espaço (issue #40).
+ * unidos por `or` (issue #40, corrigido na Fase 2 da auditoria).
+ *
+ * `websearch_to_tsquery` lê **espaço como AND** — unir os termos por espaço pedia
+ * que um único documento contivesse todos eles, o que devolve zero para qualquer
+ * consulta vinda do fallback lexical em português. `or` é o operador que a mesma
+ * função entende, e devolve o que a busca promete: a skill que casa com algum
+ * termo. O teto de {@link MAX_FTS_TERMS} segura a varredura.
  *
  * Vive na porta, e não em cada adaptador, porque é a mesma regra para todos: sem
  * termo em inglês (intenção degradada, provedor `disabled`) volta à consulta crua
@@ -46,11 +64,11 @@ export interface SearchCatalogInput {
  * imita exatamente esta semântica.
  */
 export function ftsTerms(input: Pick<SearchCatalogInput, 'query' | 'keywords'>): string {
-  const joined = input.keywords
+  const terms = input.keywords
     .map((keyword) => keyword.trim())
     .filter((keyword) => keyword.length > 0)
-    .join(' ');
-  return joined.length > 0 ? joined : input.query;
+    .slice(0, MAX_FTS_TERMS);
+  return terms.length > 0 ? terms.join(FTS_OR) : input.query;
 }
 
 /** Argumentos de `GET /api/v1/skills` (§5.4, §5.6). */

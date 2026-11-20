@@ -180,10 +180,11 @@ describe('PrismaSearchCatalogRepository — recuperação', () => {
     const values = prisma.calls[0]?.values ?? [];
 
     // O `tsquery` e o `ts_rank` falam a mesma expressão, e é a inglesa: o
-    // fragmento aparece duas vezes (no `@@` e no `ts_rank`).
+    // fragmento aparece duas vezes (no `@@` e no `ts_rank`). Os termos vão unidos
+    // por `or` (Fase 2): espaço é AND no `websearch_to_tsquery` e devolvia zero.
     expect(sql).toContain("websearch_to_tsquery('english'");
     expect(sql).toContain('ts_rank(s.search_doc');
-    expect(values.filter((value) => value === 'document api')).toHaveLength(2);
+    expect(values.filter((value) => value === 'document or api')).toHaveLength(2);
     // A consulta crua aparece uma vez só: no `ILIKE` do nome.
     expect(values.filter((value) => value === query)).toHaveLength(1);
     expect(sql).toContain("s.name ILIKE '%' ||");

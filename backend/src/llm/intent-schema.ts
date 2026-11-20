@@ -83,29 +83,65 @@ export class IntentPayloadError extends Error {
 /**
  * Palavras que não distinguem skills entre si. Curta de propósito: o fallback
  * lexical existe para a busca não morrer, não para competir com o modelo.
+ *
+ * Três grupos, todos pelo mesmo motivo: o `search_doc` é indexado em **inglês**
+ * e o fallback entrega as palavras **literais** da consulta. O que não tem
+ * tradução nem casamento no documento só consome um termo do `tsquery`:
+ *
+ *   - **português funcional** — artigo, preposição, conjunção, pronome. As de
+ *     duas letras (`de`, `a`, `o`, ...) já caem no filtro de comprimento mínimo
+ *     de {@link lexicalKeywords}; ficam aqui para a lista ser o conjunto
+ *     funcional inteiro, e não uma amostra dele;
+ *   - **português de pedido** — o verbo ou o substantivo com que o usuário
+ *     *pede* a skill (`preciso`, `quero`, `procurando`), não o que a descreve;
+ *   - **inglês funcional**, que já estava aqui.
  */
 const STOPWORDS = new Set([
-  'the',
-  'and',
-  'for',
-  'with',
-  'that',
-  'this',
-  'from',
-  'into',
-  'about',
-  'uma',
-  'uns',
-  'umas',
+  // português funcional
+  'a',
+  'as',
+  'com',
+  'como',
+  'da',
+  'das',
+  'de',
+  'do',
+  'dos',
+  'e',
+  'em',
+  'na',
+  'nas',
+  'no',
+  'nos',
+  'o',
+  'os',
   'para',
   'por',
-  'com',
   'que',
-  'dos',
-  'das',
-  'como',
+  'se',
+  'sem',
+  'um',
+  'uma',
+  'umas',
+  'uns',
+  // português de pedido
+  'agente',
   'meu',
   'minha',
+  'preciso',
+  'procurando',
+  'quero',
+  'revise',
+  // inglês funcional
+  'about',
+  'and',
+  'for',
+  'from',
+  'into',
+  'that',
+  'the',
+  'this',
+  'with',
 ]);
 
 /**

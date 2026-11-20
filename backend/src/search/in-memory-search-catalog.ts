@@ -56,11 +56,13 @@ export class InMemorySearchCatalog implements SearchCatalog {
 
   search(input: SearchCatalogInput): Promise<readonly SkillSummary[]> {
     // Mesma semântica do adaptador Postgres (issue #40): quem casa com o texto é
-    // o termo em inglês da intenção, não a consulta crua.
+    // o termo em inglês da intenção, não a consulta crua. `ftsTerms` separa os
+    // termos com `or` (Fase 2), que é operador do `tsquery` — não um termo: aqui
+    // o duplo casa por *algum* termo, como o `|` do Postgres.
     const terms = ftsTerms(input)
       .toLowerCase()
       .split(/\s+/)
-      .filter((term) => term.length > 0);
+      .filter((term) => term.length > 0 && term !== 'or');
     return Promise.resolve(
       this.skills
         .filter((skill) => input.category === null || skill.category === input.category)
