@@ -86,6 +86,12 @@ const baseEnvSchema = z.object({
   // teto de tempo protege o processo, nao o request.
   LIVE_ENRICH_ENABLED: booleanFromEnv.default(false),
   LIVE_ENRICH_MAX_KEYS: z.coerce.number().int().positive().default(12),
+  //
+  // Cota entre rodadas do enriquecimento ao vivo. O single-flight impede duas
+  // rodadas simultaneas, mas nao uma atras da outra: sem este intervalo, cada
+  // busca vazia abriria uma rodada de ate 12 requisicoes contra a fonte, a partir
+  // de input publico (amplificacao). 60 s limita a 12 req/min por processo.
+  LIVE_ENRICH_MIN_INTERVAL_MS: z.coerce.number().int().nonnegative().default(60_000),
   // Orcamento de UMA rodada. `positive()` porque um teto de 0 ms abandonaria toda
   // rodada antes de pedir a primeira chave — enriquecimento que nunca enriquece.
   LIVE_ENRICH_BUDGET_MS: z.coerce
@@ -198,6 +204,7 @@ export const envSchema = baseEnvSchema
     skillSourceRps: value.SKILL_SOURCE_RPS,
     liveEnrichEnabled: value.LIVE_ENRICH_ENABLED,
     liveEnrichMaxKeys: value.LIVE_ENRICH_MAX_KEYS,
+    liveEnrichMinIntervalMs: value.LIVE_ENRICH_MIN_INTERVAL_MS,
     liveEnrichBudgetMs: value.LIVE_ENRICH_BUDGET_MS,
     rankWStars: value.RANK_W_STARS,
     rankWVulns: value.RANK_W_VULNS,

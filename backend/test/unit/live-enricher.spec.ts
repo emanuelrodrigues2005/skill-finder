@@ -86,7 +86,7 @@ describe('matchKeysBySlug', () => {
  */
 function config(
   habilitado: boolean,
-  extras: { budgetMs?: number; rps?: number } = {},
+  extras: { budgetMs?: number; rps?: number; minIntervalMs?: number } = {},
 ): AppConfigService {
   return {
     env: {
@@ -94,6 +94,9 @@ function config(
       skillSourceKind: 'html',
       ...(extras.budgetMs === undefined ? {} : { liveEnrichBudgetMs: extras.budgetMs }),
       ...(extras.rps === undefined ? {} : { skillSourceRps: extras.rps }),
+      ...(extras.minIntervalMs === undefined
+        ? {}
+        : { liveEnrichMinIntervalMs: extras.minIntervalMs }),
     },
   } as unknown as AppConfigService;
 }
@@ -395,5 +398,37 @@ describe('CatalogLiveEnricher — origem da rodada', () => {
     // inventa um adaptador que não existe no `SKILL_SOURCE_KIND`.
     expect(liveAdapterName('html')).toBe('html+live');
     expect(liveAdapterName('fixture')).toBe('fixture+live');
+  });
+
+  // A cota usa `Date.now()` (o serviço não tem relógio injetado), então o fake
+  // timer é o seam: ele controla o intervalo entre rodadas sem esperar de verdade.
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('não abre uma segunda rodada antes do intervalo, e volta a abrir depois', async () => {
+    // Relógio controlado: `Date.now()` é o único relógio do serviço (não há campo
+    // de relógio injetado), então o fake timer é o seam do teste.
+    jest.useFakeTimers({ now: new Date('2026-11-20T12:00:00.000Z') });
+
+    const fonte = fonteContada(CHAVES);
+    const enricher = new CatalogLiveEnricher(
+      fonte,
+      repositorioQueRegistra().repo,
+      config(true, { budgetMs: 5_000, rps: 1, minIntervalMs: 60_000 }),
+    );
+
+    await enricher.enrich({ keywords: ['testing'] });
+    expect(fonte.listagens).toBe(1);
+
+    // 10 s depois: dentro do intervalo de 60 s -> cota barra, sem tocar a fonte.
+    jest.setSystemTime(new Date('2026-11-20T12:00:10.000Z'));
+    await expect(enricher.enrich({ keywords: ['testing'] })).resolves.toBe(0);
+    expect(fonte.listagens).toBe(1);
+
+    // 61 s depois da primeira: a cota libera e a rodada roda.
+    jest.setSystemTime(new Date('2026-11-20T12:01:01.000Z'));
+    await enricher.enrich({ keywords: ['testing'] });
+    expect(fonte.listagens).toBe(2);
   });
 });

@@ -128,6 +128,14 @@ export class CatalogLiveEnricher {
    */
   private inFlight: Promise<number> | null = null;
 
+  /**
+   * Instante (ms) em que a última rodada **começou**; `0` = nenhuma ainda.
+   *
+   * É o relógio da cota, não do orçamento: `runRound` mede a duração de uma rodada,
+   * este campo mede o intervalo entre duas.
+   */
+  private lastRoundAtMs = 0;
+
   constructor(
     private readonly source: SkillSource,
     private readonly repository: CatalogRepository,
@@ -158,6 +166,24 @@ export class CatalogLiveEnricher {
       );
       return Promise.resolve(0);
     }
+
+    // Cota: no máximo uma rodada a cada `LIVE_ENRICH_MIN_INTERVAL_MS`.
+    //
+    // O single-flight impede duas rodadas SIMULTÂNEAS, mas não impede uma atrás da
+    // outra em sequência: um usuário anônimo disparando buscas vazias abriria uma
+    // rodada por busca, cada uma com até 12 requisições contra o skills.sh. O
+    // parecer de segurança chamou isso de amplificação a partir de input público.
+    // Com 60 s de intervalo, o teto cai para 12 requisições externas por minuto por
+    // processo, independente de quantas buscas o cliente faça.
+    const agoraMs = Date.now();
+    const intervaloMs = this.config.env.liveEnrichMinIntervalMs;
+    if (this.lastRoundAtMs !== 0 && agoraMs - this.lastRoundAtMs < intervaloMs) {
+      this.logger.debug(
+        `enriquecimento ao vivo: cota em vigor (ultima rodada ha ${String(agoraMs - this.lastRoundAtMs)} ms, intervalo ${String(intervaloMs)} ms)`,
+      );
+      return Promise.resolve(0);
+    }
+    this.lastRoundAtMs = agoraMs;
 
     const round = this.runRound(request).finally(() => {
       // Só limpa a própria rodada: outra nunca abre enquanto esta não termina,
