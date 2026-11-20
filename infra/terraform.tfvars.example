@@ -1,7 +1,7 @@
 # Copie para terraform.tfvars (ignorado pelo Git) e preencha os valores locais.
 project_name          = "skill-finder"
 instance_type         = "t3.small"
-key_name              = "projeto2"
+key_name              = "vockey"
 instance_profile_name = "LabInstanceProfile"
 data_volume_gb        = 20
 

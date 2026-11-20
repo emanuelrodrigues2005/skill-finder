@@ -1,0 +1,13 @@
+# Override de producao, aplicado por cima do compose.yaml da raiz, que continua
+# sendo a fonte dos profiles, dos healthchecks e do resto da topologia. A imagem
+# vem do ECR: use `--no-build`, senao o host tenta construir a imagem declarada no
+# arquivo base em vez de usar a que veio do registry.
+#   docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod pull
+#   docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --no-build
+
+services:
+  api:
+    image: "${ECR_REGISTRY:?}/${ECR_API_REPOSITORY:-skill-finder-api}:${IMAGE_TAG:?}"
+
+  web:
+    image: "${ECR_REGISTRY:?}/${ECR_WEB_REPOSITORY:-skill-finder-web}:${IMAGE_TAG:?}"

@@ -12,6 +12,7 @@ variable "instance_type" {
 variable "key_name" {
   description = "Key pair já criado na F0, usado no acesso SSH à instância."
   type        = string
+  default     = "vockey"
 }
 
 variable "instance_profile_name" {
