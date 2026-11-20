@@ -121,7 +121,7 @@ dev/stop:
 # `_prisma_migrations`, então pode rodar em todo deploy. Sem `--no-deps`: o `run`
 # sobe o `postgres` e espera o healthcheck antes de aplicar a migration.
 migrate: lockfile
-	$(API_RUN) pnpm prisma:deploy
+	$(API_RUN) npm run --silent prisma:deploy
 
 # TODO(F2.3): virar `pnpm ingest:fixture` quando a ingestão existir.
 # `docker compose run` (não `exec`): o stack não precisa estar de pé, e o volume

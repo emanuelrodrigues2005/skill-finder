@@ -137,7 +137,7 @@ stack sobe na 8081 e `http://$IP/` não responde.
 ```bash
 ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod up -d --build'
 ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod ps'
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod exec -T api pnpm prisma:deploy'
+ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod exec -T api npm run --silent prisma:deploy'
 ```
 
 Esperado: `ps` com `api` e `web` em `running (healthy)` (o `postgres` também, `healthy`), e
@@ -204,7 +204,7 @@ ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'rm -rf /opt/app/backend /opt/app/frontend &
 
 ```bash
 ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod up -d --build'
-ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod exec -T api pnpm prisma:deploy'
+ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod exec -T api npm run --silent prisma:deploy'
 ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile prod ps'
 ```
 
