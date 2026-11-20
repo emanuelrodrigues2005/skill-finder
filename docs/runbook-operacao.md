@@ -70,9 +70,9 @@ Os comandos de Terraform entram e saem de `infra/`; o `cd ..` devolve ao reposit
 rodam os comandos de `docker`, `scp` e `git` das seções seguintes.
 
 Esperado: `Terraform has been successfully initialized!`, nenhuma saída de `fmt`, `Success! The
-configuration is valid.`, um plano com as 4 saídas (`host_public_ip`, `ecr_repository_url`,
-`state_bucket`, `target_port`) e **nenhum** `aws_iam_*`, e por fim `Apply complete! Resources: N
-added, 0 changed, 0 destroyed.`
+configuration is valid.`, um plano com as 5 saídas (`host_public_ip`, `ecr_registry`,
+`ecr_repository_urls`, `state_bucket`, `target_port`) e **nenhum** `aws_iam_*`, e por fim
+`Apply complete! Resources: N added, 0 changed, 0 destroyed.`
 
 Não use `-auto-approve`: o plano mostra o que será criado antes de o crédito ser gasto, e a sessão
 pode expirar no meio (`docs/02` §2.6).
@@ -226,8 +226,8 @@ ssh -i ~/.ssh/projeto2 "ubuntu@$IP" 'cd /opt/app && docker compose --profile pro
 Esperado: `200` e log sem `Invalid environment configuration`. Se a imagem subiu mas a API morre no
 boot, o log traz o campo que falta (`DATABASE_URL`, `IP_HASH_SALT`, `ADMIN_TOKEN`, `LLM_API_KEY`).
 
-As imagens também são publicadas no ECR com tag = SHA do commit (`terraform output -raw
-ecr_repository_url`, rodando de dentro de `infra/`), mas o `compose.yaml` de hoje constrói a imagem
+As imagens também são publicadas no ECR com tag = SHA do commit (`terraform output -json
+ecr_repository_urls`, rodando de dentro de `infra/`), mas o `compose.yaml` de hoje constrói a imagem
 no host em vez de declarar `image:` — então `docker compose pull` não traz nada do ECR. O deploy por
 `pull` é o caminho da F4, quando o workflow publica a imagem e o compose aponta para o repositório.
 
