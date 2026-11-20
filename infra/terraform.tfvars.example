@@ -1,0 +1,12 @@
+# Copie para terraform.tfvars (ignorado pelo Git) e preencha os valores locais.
+project_name          = "skill-finder"
+instance_type         = "t3.small"
+key_name              = "projeto2"
+instance_profile_name = "LabInstanceProfile"
+data_volume_gb        = 20
+
+# CIDR da sua rede de acesso SSH, no formato <rede>/32. Sem valor, o SSH fica fechado.
+allowed_ssh_cidrs = []
+
+# Nome impresso por scripts/bootstrap-state.sh ao final do bootstrap do bucket.
+state_bucket = "<nome-do-bucket-impresso-pelo-bootstrap>"
