@@ -79,7 +79,7 @@ flowchart LR
 | `LLMProvider` | `extract_intent()`, `explain()` | opencode → qualquer provedor OpenAI-compatible → `NullProvider` |
 | UI ↔ API | `openapi.yaml` gerado pelos decorators do `@nestjs/swagger` (`scripts/generate-openapi.ts`) | Reescrever a SPA sem tocar no backend |
 | API ↔ Banco | migrations Prisma (`prisma migrate`) | Trocar Postgres gerenciado (Opção 2 de `docs/01` §4.3) sem alterar código de domínio |
-| IaC ↔ Pipeline | as 4 saídas do Terraform (`host_public_ip`, `ecr_repository_url`, `state_bucket`, `target_port`) | Trocar a borda (IP → ALB) sem reescrever o workflow |
+| IaC ↔ Pipeline | as 5 saídas do Terraform (`host_public_ip`, `ecr_registry`, `ecr_repository_urls`, `state_bucket`, `target_port`) | Trocar a borda (IP → ALB) sem reescrever o workflow |
 
 ### 2.1 Componentes e responsabilidades
 

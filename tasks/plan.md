@@ -23,7 +23,7 @@ Todas **herdadas** — nenhuma é redecidida por este plano.
 
 | Decisão | Origem | O que fica fixo |
 | --- | --- | --- |
-| **Opção 1**: uma EC2 + Docker Compose, imagem no ECR, `tfstate` no S3, segredos no Infisical. ALB/RDS/ECS fora | `docs/01` §5.1; `docs/04` §3/F3 | a topologia do `user_data` e as **4 saídas do seam** |
+| **Opção 1**: uma EC2 + Docker Compose, imagem no ECR, `tfstate` no S3, segredos no Infisical. ALB/RDS/ECS fora | `docs/01` §5.1; `docs/04` §3/F3 | a topologia do `user_data` e as **5 saídas do seam** |
 | **ADR-007** — NestJS 11 + TypeScript strict, Prisma, Jest/Supertest/nock | `docs/app/02` §10 | stack e nomes de script (`pnpm --dir backend …`) |
 | **ADR-001** — a LLM interpreta e explica; o ranking é determinístico | `docs/app/02` §10 | fórmula `0,5·S + 0,3·P + 0,2·I`, penalidade de 10%/campo, desempate total, pesos em `RANK_W_*` |
 | **ADR-002** — busca lexical (`tsvector` + `pg_trgm`) na v1 | `docs/app/02` §10 | sem pgvector, sem serviço de embedding |
@@ -107,7 +107,7 @@ com vídeo de fallback; `gitleaks` e `fmt` limpos; checklist da §11 100%.
 | **A1** — skills.sh bloqueia acesso automatizado | Alto em C1 | decisão **D4**: *fixture-first*, sem rede no caminho da busca; limitação documentada |
 | **A6** — CI quebra por dependência externa | Alto em C4/C5 | `nock.disableNetConnect()`, fixture, `LLM_PROVIDER=fake`; `make offline-check` antes do CI |
 | **R01** — sessão do lab expira no meio do `apply` | Médio | `apply` no início da sessão; `preflight` no `deploy.yml` |
-| **R02/R12** — crédito acaba / professor exige RDS-ALB na véspera | Alto | `destroy` ao fim de cada sessão; *seam* das 4 saídas permite Opção 2 só na janela da demo |
+| **R02/R12** — crédito acaba / professor exige RDS-ALB na véspera | Alto | `destroy` ao fim de cada sessão; *seam* das 5 saídas permite Opção 2 só na janela da demo |
 | **R07** — teste *flaky* reprovando o pipeline | Médio | Postgres com `healthcheck`, relógio injetado, `TZ=UTC`, sem `sleep` |
 | **R08** — segredo vazado | Alto | `::add-mask::`, `gitleaks`, redação de `authorization` |
 | **Ordem real ≠ plano** — o contrato (F2.1) está aberto, mas o esqueleto foi entregue antes | Médio | o contrato passa a ser pré-requisito explícito da ingestão, dos endpoints e do frontend |
