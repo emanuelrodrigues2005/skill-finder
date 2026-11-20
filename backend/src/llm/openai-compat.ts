@@ -110,6 +110,51 @@ export function sessionIdFor(query: string): string {
 
 const MIN_ATTEMPT_MS = 250;
 
+/** As duas portas do cliente; é o `step` do log de falha. */
+type LlmStep = 'intent' | 'explain';
+
+/**
+ * Vocabulário **fechado** do motivo da falha.
+ *
+ * Fechado de propósito: é o que o operador filtra no log agora que a linha existe
+ * (antes ela era `debug` e não aparecia com `LOG_LEVEL=info`). A mensagem do
+ * provedor nunca entra aqui — um 401 cita a chave recebida (regra 4).
+ */
+type LlmFailureReason =
+  /** O teto efetivo da etapa estourou (``ECONNABORTED``/``ETIMEDOUT`` do axios). */
+  | 'timeout'
+  /** O provedor respondeu com erro: ver `httpStatus`. */
+  | 'http_error'
+  /** Não houve resposta: DNS, TLS, conexão recusada. */
+  | 'network'
+  /** O orçamento da busca acabou antes de a tentativa começar. */
+  | 'deadline_exhausted'
+  /** `200` sem texto em `choices[0].message.content`. */
+  | 'empty_content'
+  | 'unknown';
+
+/** O que se sabe de uma falha sem tocar no corpo da requisição nem no da resposta. */
+interface FailureFields {
+  readonly reason: LlmFailureReason;
+  readonly httpStatus: number | null;
+  /** Código do axios (`ECONNABORTED`, `ENOTFOUND`) ou nome do erro — nunca a mensagem. */
+  readonly errorCode: string | null;
+}
+
+/**
+ * Rodada sem tempo para começar outra tentativa.
+ *
+ * Tem nome próprio porque `reason: 'unknown'` esconderia o diagnóstico que a Fase
+ * 0 precisou: "o orçamento acabou antes de a chamada sair" é diferente de "o
+ * provedor não respondeu".
+ */
+class LlmDeadlineError extends Error {
+  constructor() {
+    super('LLM deadline exhausted before the request started');
+    this.name = 'LlmDeadlineError';
+  }
+}
+
 /**
  * Chave do cache de explicação (§6.3): `kind` próprio, a **versão do prompt** de
  * explicação e o conjunto ranqueado no slot de `candidate_ids` (é ele que
@@ -272,14 +317,53 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
       response_format: { type: 'json_object' },
     } as const;
 
+    const startedAtMs = this.options.now();
     try {
       const data = await this.postWithRetry(body, timeoutMs, deadlineAtMs, query);
-      return this.toResult(data, query, categories);
+      return this.toResult(data, query, categories, {
+        elapsedMs: this.options.now() - startedAtMs,
+        timeoutMs,
+      });
     } catch (error) {
       // Só o motivo, nunca a mensagem: um 401 pode citá-la com a chave dentro.
-      this.logger.debug(`intent call degraded: ${describeFailure(error)}`);
+      this.logProviderFailure('intent', failureFields(error), {
+        elapsedMs: this.options.now() - startedAtMs,
+        timeoutMs,
+      });
       return { intent: lexicalIntent(query), status: 'unavailable', model: null, tokens: null };
     }
+  }
+
+  /**
+   * Registra a falha do provedor em **`warn`**.
+   *
+   * Era `debug`: com `LOG_LEVEL=info` (o de dev e o de prod) a busca respondia
+   * `llm.status="unavailable"` e não havia uma linha sequer dizendo por quê — a
+   * Fase 0 da auditoria precisou recriar a API com `debug` para ver o motivo, e o
+   * caminho de conteúdo vazio não logava em nível nenhum.
+   *
+   * Os campos respondem "por que a LLM não respondeu": `reason` em vocabulário
+   * fechado, `httpStatus`/`errorCode` dizem qual falha foi, `elapsedMs`/`timeoutMs`
+   * mostram se o **teto efetivo** da etapa foi estourado (a suspeita da Fase 0), e
+   * `model` diz qual modelo estava em uso. Nada de header, corpo ou chave.
+   */
+  private logProviderFailure(
+    step: LlmStep,
+    failure: FailureFields,
+    timing: { readonly elapsedMs: number; readonly timeoutMs: number },
+  ): void {
+    this.logger.warn(
+      {
+        step,
+        reason: failure.reason,
+        httpStatus: failure.httpStatus,
+        errorCode: failure.errorCode,
+        elapsedMs: timing.elapsedMs,
+        timeoutMs: timing.timeoutMs,
+        model: this.options.model,
+      },
+      'llm call degraded',
+    );
   }
 
   /**
@@ -322,8 +406,12 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
       return skippedExplain('budget');
     }
 
+    // Qual teto estava em voo quando a falha veio: o log tem de mostrar o efetivo
+    // da tentativa que falhou, não o da etapa (o reparo usa outro).
+    let attemptTimeoutMs = explainStepTimeoutMs(remaining);
+    const startedAtMs = this.options.now();
     try {
-      const first = await this.explainOnce(request, explainStepTimeoutMs(remaining), false, deadlineAtMs);
+      const first = await this.explainOnce(request, attemptTimeoutMs, false, deadlineAtMs);
       if (first.kind === 'payload') {
         this.explainCache.set(cacheKey, first.result);
         return first.result;
@@ -338,14 +426,18 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
       if (retryRemaining < EXPLAIN_MIN_BUDGET_MS) {
         return rejectedExplain('invalid_ids');
       }
-      const repaired = await this.explainOnce(request, explainStepTimeoutMs(retryRemaining), true, deadlineAtMs);
+      attemptTimeoutMs = explainStepTimeoutMs(retryRemaining);
+      const repaired = await this.explainOnce(request, attemptTimeoutMs, true, deadlineAtMs);
       if (repaired.kind === 'payload') {
         this.explainCache.set(cacheKey, repaired.result);
         return repaired.result;
       }
       return rejectedExplain(repaired.reason);
     } catch (error) {
-      this.logger.debug(`explain call degraded: ${describeFailure(error)}`);
+      this.logProviderFailure('explain', failureFields(error), {
+        elapsedMs: this.options.now() - startedAtMs,
+        timeoutMs: attemptTimeoutMs,
+      });
       return {
         items: [],
         recommendation: null,
@@ -421,7 +513,7 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
       // Sem tempo para uma tentativa de tamanho util, falha agora em vez de
       // comecar uma chamada que nao tem como terminar dentro do prazo.
       if (budgetLeft < MIN_ATTEMPT_MS) {
-        throw new Error("LLM deadline exhausted before the request started");
+        throw new LlmDeadlineError();
       }
       const attemptTimeout = Math.min(timeoutMs, budgetLeft);
       try {
@@ -477,9 +569,19 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
     data: CompletionBody,
     query: string,
     categories: readonly string[],
+    timing: { readonly elapsedMs: number; readonly timeoutMs: number },
   ): IntentParserResult {
     const content = data?.choices?.[0]?.message?.content;
     if (typeof content !== 'string' || content.trim().length === 0) {
+      // `200` sem texto era o único caminho de degradação **silencioso** do
+      // cliente: a resposta saía `unavailable` e nada no log dizia que o provedor
+      // havia respondido. `model` já aqui vale o configurado, porque a chamada
+      // aconteceu — é o `model` da resposta que não veio.
+      this.logProviderFailure(
+        'intent',
+        { reason: 'empty_content', httpStatus: null, errorCode: null },
+        timing,
+      );
       return { intent: lexicalIntent(query), status: 'unavailable', model: null, tokens: null };
     }
     const { intent, status, keywordsEn } = parseIntentPayload(content, { query, categories });
@@ -552,15 +654,31 @@ function isRetryable(error: unknown): boolean {
   return status === 429 || status >= 500;
 }
 
-/** Descrição sem conteúdo sensível: código do axios ou HTTP status. */
-function describeFailure(error: unknown): string {
+/**
+ * Motivo da falha sem conteúdo sensível: código do axios ou HTTP status.
+ *
+ * O `reason` é a classificação que o operador filtra; `httpStatus` e `errorCode`
+ * são o detalhe. A mensagem do erro fica de fora de propósito — o 401 do provedor
+ * cita a chave recebida, e o log não é lugar para ela (regra 4).
+ */
+function failureFields(error: unknown): FailureFields {
+  if (error instanceof LlmDeadlineError) {
+    return { reason: 'deadline_exhausted', httpStatus: null, errorCode: error.name };
+  }
   if (!axios.isAxiosError(error)) {
-    return error instanceof Error ? error.name : 'unknown';
+    return {
+      reason: 'unknown',
+      httpStatus: null,
+      errorCode: error instanceof Error ? error.name : null,
+    };
   }
-  if (error.response !== undefined) {
-    return `http ${error.response.status}`;
-  }
-  return error.code ?? 'network';
+  const httpStatus = error.response?.status ?? null;
+  const reason: LlmFailureReason = isTimeout(error)
+    ? 'timeout'
+    : httpStatus === null
+      ? 'network'
+      : 'http_error';
+  return { reason, httpStatus, errorCode: error.code ?? null };
 }
 
 function sleep(ms: number): Promise<void> {
