@@ -2,7 +2,7 @@
 # check-frontend.sh — typecheck + lint + testes + build do frontend, num log so.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT="$ROOT/.logs/frontend-check.log"
+OUT="$ROOT/.logs/frontend-check.$$.log"
 mkdir -p "$ROOT/.logs"
 : > "$OUT"
 cd "$ROOT"

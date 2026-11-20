@@ -2,7 +2,7 @@
 # check-backend.sh — typecheck + lint + cadeia completa, num log so.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT="$ROOT/.logs/backend-check.log"
+OUT="$ROOT/.logs/backend-check.$$.log"
 mkdir -p "$ROOT/.logs"
 : > "$OUT"
 cd "$ROOT"
@@ -20,3 +20,4 @@ bash scripts/dev/verify.sh >>"$OUT" 2>&1
 echo "VERIFY=$?" >>"$OUT"
 
 grep -E '^(TYPECHECK|LINT|VERIFY)=|FALHAS=' "$OUT" | tail -6
+echo "log: $OUT"
