@@ -120,6 +120,27 @@ export default function SearchPage() {
   const isValid = trimmed.length >= QUERY_MIN_LENGTH && trimmed.length <= QUERY_MAX_LENGTH;
   const categoryInList = categories.some((item) => item.slug === category);
 
+  /**
+   * O seletor de categoria só existe quando há categoria para selecionar.
+   *
+   * Fase 4 da auditoria: **nenhuma fonte publica categorias hoje** — `html-source.ts` e
+   * `fixture-source.ts` devolvem `[]` com `supports_categories: false`, e `normaliseSkill`
+   * fixa `category_slug: null`. Com `[]` e sem falha, o `<select>` tinha uma única opção
+   * ("Todas as categorias") e a linha "nenhuma categoria disponível — você ainda pode buscar
+   * sem uma" ao lado: a mensagem promete uma categoria que não vai chegar, porque a ausência
+   * é da fonte, não do momento. Sem categoria, o rótulo e o `<select>` saem da tela juntos.
+   *
+   * As duas exceções são o motivo de a condição não ser `categories.length > 0`:
+   * `loadingCategories` mantém o seletor desabilitado enquanto a lista chega (sem salto de
+   * layout), e `categoriesFailure !== null` mantém o seletor com a mensagem de falha — ali
+   * "nenhuma categoria disponível" é verdade transitória, não ausência permanente.
+   *
+   * Quando uma fonte passar a publicar categorias, `categories.length > 0` sozinho traz o
+   * seletor de volta; não há flag a virar.
+   */
+  const categoryPickerVisible =
+    loadingCategories || categoriesFailure !== null || categories.length > 0;
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!isValid || submitting) return;
@@ -255,50 +276,54 @@ export default function SearchPage() {
           }}
         >
           <div style={{ flex: "1 1 16rem", minWidth: "12rem" }}>
-            <label
-              htmlFor="category"
-              style={{
-                display: "block",
-                fontFamily: font.family.mono,
-                fontSize: font.size.meta,
-                color: color.textMuted,
-                marginBottom: space.xs,
-              }}
-            >
-              {STR.search.categoryLabel}
-            </label>
-            <select
-              id="category"
-              name="category"
-              value={category}
-              onChange={(event) => handleCategoryChange(event.target.value)}
-              disabled={loadingCategories}
-              style={{
-                width: "100%",
-                padding: `${space.sm} ${space.md}`,
-                border: `1px solid ${color.hairline}`,
-                borderRadius: radius.sm,
-                background: color.surface,
-                color: color.text,
-                fontFamily: "inherit",
-                fontSize: font.size.body,
-              }}
-            >
-              <option value="">{STR.search.anyCategory}</option>
-              {/*
-                Ilha aceita e comentada: `label_en` NÃO é traduzido. O rótulo de categoria vem do
-                catálogo do skills.sh — é dado de terceiro, mostrado como publicado (AGENTS.md,
-                regra 6). Traduzi-lo aqui inventaria um rótulo que a fonte não tem, e o `value` é o
-                `slug` do contrato, que a busca envia de volta.
-              */}
-              {categories.map((item) => (
-                <option key={item.slug} value={item.slug}>
-                  {item.label_en}
-                </option>
-              ))}
-              {/* Rascunho restaurado de uma categoria que a lista de agora não trouxe. */}
-              {category !== "" && !categoryInList ? <option value={category}>{category}</option> : null}
-            </select>
+            {categoryPickerVisible ? (
+              <>
+                <label
+                  htmlFor="category"
+                  style={{
+                    display: "block",
+                    fontFamily: font.family.mono,
+                    fontSize: font.size.meta,
+                    color: color.textMuted,
+                    marginBottom: space.xs,
+                  }}
+                >
+                  {STR.search.categoryLabel}
+                </label>
+                <select
+                  id="category"
+                  name="category"
+                  value={category}
+                  onChange={(event) => handleCategoryChange(event.target.value)}
+                  disabled={loadingCategories}
+                  style={{
+                    width: "100%",
+                    padding: `${space.sm} ${space.md}`,
+                    border: `1px solid ${color.hairline}`,
+                    borderRadius: radius.sm,
+                    background: color.surface,
+                    color: color.text,
+                    fontFamily: "inherit",
+                    fontSize: font.size.body,
+                  }}
+                >
+                  <option value="">{STR.search.anyCategory}</option>
+                  {/*
+                    Ilha aceita e comentada: `label_en` NÃO é traduzido. O rótulo de categoria vem do
+                    catálogo do skills.sh — é dado de terceiro, mostrado como publicado (AGENTS.md,
+                    regra 6). Traduzi-lo aqui inventaria um rótulo que a fonte não tem, e o `value` é o
+                    `slug` do contrato, que a busca envia de volta.
+                  */}
+                  {categories.map((item) => (
+                    <option key={item.slug} value={item.slug}>
+                      {item.label_en}
+                    </option>
+                  ))}
+                  {/* Rascunho restaurado de uma categoria que a lista de agora não trouxe. */}
+                  {category !== "" && !categoryInList ? <option value={category}>{category}</option> : null}
+                </select>
+              </>
+            ) : null}
           </div>
 
           <button
@@ -321,13 +346,14 @@ export default function SearchPage() {
           </button>
         </div>
 
-        {/* Os dois estados que faltavam na tela de busca (issue #28): carregando e vazio. */}
+        {/* Carregando e vazio da lista de categorias (issue #28); o vazio agora só aparece
+            quando houve falha — com o catálogo sem categorias, o seletor nem é renderizado. */}
         {loadingCategories ? (
           <div style={{ marginTop: space.md }}>
             <LoadingState label={STR.states.loading.categories} />
           </div>
         ) : null}
-        {!loadingCategories && categoriesFailure === null && categories.length === 0 ? (
+        {!loadingCategories && categoriesFailure !== null && categories.length === 0 ? (
           <div style={{ marginTop: space.md }}>
             <EmptyState message={STR.states.empty.noCategories} />
           </div>

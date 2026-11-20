@@ -124,7 +124,7 @@ As escolhas de `docs/01` §6.1/§6.2 estão **mantidas**, exceto o backend, alte
 | `LLM_BASE_URL` | `https://opencode.ai/inference/go/openai/v1` | `.env` gerado pelo Infisical |
 | `LLM_MODEL` | `deepseek-v4.1-flash` | `.env` |
 | `LLM_API_KEY` | credencial do opencode | **Infisical** (`LLM_API_KEY`) |
-| `LLM_TIMEOUT_S` | timeout por chamada (default `8`) | `.env` |
+| `LLM_TIMEOUT_S` | teto da chamada de intenção (default `8`); **só baixa** o teto efetivo, nunca sobe (ver abaixo) | `.env` |
 | `LLM_ENABLED` | `true`/`false`; `false` força modo degradado (usado em teste) | `.env` |
 | `SKILL_SOURCE_KIND` | `json` \| `html` \| `fixture` | `.env` |
 | `SKILL_SOURCE_BASE_URL` | base do skills.sh `[a confirmar]` | `.env` |
@@ -135,6 +135,19 @@ As escolhas de `docs/01` §6.1/§6.2 estão **mantidas**, exceto o backend, alte
 | `IP_HASH_SALT` | sal para pseudonimizar IP no rate limit | **Infisical** |
 | `ADMIN_TOKEN` | token do header `X-Admin-Token` da ingestao manual (#49); **obrigatorio em prod**, sem ele o boot recusa | **Infisical** |
 | `DATABASE_URL` | conexão Postgres | **Infisical** |
+
+**Os tetos efetivos da LLM são do código, não do `.env` (§6.3, F2.10).** O teto de uma chamada é
+`min(teto da etapa, o que sobrou de LLM_TOTAL_DEADLINE_MS)`, com `INTENT_STEP_MAX_MS = 3_000` e
+`EXPLAIN_STEP_MAX_MS = 4_000` em `backend/src/llm/explain-parser.ts`:
+
+| Etapa | Teto efetivo | Papel de `LLM_TIMEOUT_S` |
+| --- | --- | --- |
+| Intenção (passo 4) | **3 000 ms** | entra no `min()`: **só baixa** (o default `8` não muda nada; `LLM_TIMEOUT_S=2` corta para 2 000 ms) |
+| Explicação (passo 7) | **4 000 ms** | **não alcança** — a etapa é limitada só por `EXPLAIN_STEP_MAX_MS` |
+
+Nenhum ajuste de `.env` **sobe** um teto: os três números do orçamento são o orçamento de latência da
+busca, e cada etapa tem a sua fatia fixa. O log de falha do provedor (§8.5) traz o `timeoutMs`
+efetivo, então a pergunta "foi o teto?" se responde pela linha do log, sem ler o `.env`.
 
 ---
 
@@ -523,6 +536,7 @@ SkillSource
 
   `EMPTY_CATALOG` é sobre o **ciclo** sem chave (`E = 0`), nunca sobre a fonte muda: pedir 720 e receber zero é cobertura zero do ciclo. A guarda de 80% mede **`items_seen` contra `items_requested`**, não contra o total de ativos: um ciclo que cobre 720 de 20.000 (3,6%) é o rodízio funcionando. Ela decide o **status**; o expurgo por idade (passo 6) roda mesmo em `partial`, mas **só** com `status ≠ failed` **e** `items_seen > 0` — fonte que devolve zero não pode auto-desativar o catálogo.
 - **Falha no meio:** o run fica `failed`/`partial`, o catálogo anterior permanece válido e `is_active` **não** é tocado por cobertura. A resposta passa a informar `data.age_seconds` real.
+- **Origem da rodada em `ingest_run.adapter` (Fase 5 da auditoria):** o valor gravado é o nome do adaptador (`html`, `fixture`) quando quem dispara é o operador (`POST /admin/ingest`) ou o agendador, e **`<adaptador>+live`** (`html+live`) quando é o enriquecimento ao vivo de uma busca vazia (`backend/src/catalog/live-enricher.service.ts`). Sem o sufixo, as duas origens gravavam a mesma linha (`adapter='html'`, `items_requested=12`) e `SELECT adapter, count(*) FROM ingest_run GROUP BY 1` não dizia de onde vieram. É sufixo, e não coluna nova, porque `adapter` é `TEXT` sem enum nem `CHECK`, não entra no contrato (§5.1 — `IngestRun` não expõe o adaptador) e **ninguém ramifica em cima do valor gravado**: quem escolhe o adaptador é o token `CATALOG_ADAPTER` (`SKILL_SOURCE_KIND`), não a coluna. O nome da fonte fica como prefixo, então `adapter LIKE 'html%'` continua agrupando as duas origens.
 - **Custo de rede:** 4 ciclos/dia × 720 requisições = **~2.880 req/dia**, ~3% de *duty cycle* a 1 req/s — ordens de grandeza abaixo de qualquer rate limit razoável, e nada no caminho do usuário.
 - **Primeiro ciclo:** com o catálogo vazio o rodízio não tem o que selecionar; a fonte enumera as chaves (`listKeys()`, o `sitemap.xml`) e o ciclo pede até 720 delas. Sem esse caminho, `SKILL_SOURCE_KIND=html` num banco novo ficaria vazio para sempre.
 - **Descoberta contínua (prioridade hot → inéditas → cold):** a cota de descoberta é reservada **antes** do cold, então a fonte é lida (`listKeys()`) em **todo** ciclo, não só no catálogo vazio. O hot — demanda real — tem prioridade e nunca é cortado; as inéditas vêm em seguida, em ordem de `source_key COLLATE "C"`, e **nunca são famintas enquanto existirem**; o cold preenche o que sobrar. A aritmética, a 4 ciclos/dia:
@@ -612,6 +626,26 @@ O rate limit é **de custo**, não de segurança de dados: sem ele, um único sc
 ### 8.5 Logs sem PII
 
 Proibido em log: texto da consulta, IP em claro, header `authorization`/`cookie`, corpo de request/response, prompt ou resposta da LLM. Permitido: `query_hash`, `query_len`, `client_hash`, `request_id`, `category`, `llm_status`, `latency_ms`, `status`, `result_count`. Redação aplicada no middleware e conferida por teste automatizado (um log com campo proibido quebra o teste).
+
+**Falha do provedor é `warn`, não `debug` (Fase 3 da auditoria).** Com `LOG_LEVEL=info` — o de dev e
+o de prod — a busca respondia `llm.status="unavailable"` sem uma linha sequer dizendo por quê, e o
+caminho de **conteúdo vazio** (`200` sem texto em `choices[0].message.content`) não logava em nível
+nenhum. `openai-compat.ts` passa a emitir **uma** linha `warn` por falha, com estes campos (e nada
+mais):
+
+| Campo | O que diz |
+| --- | --- |
+| `step` | `intent` ou `explain` — qual das duas portas falhou |
+| `reason` | vocabulário fechado: `timeout`, `http_error`, `network`, `deadline_exhausted`, `empty_content`, `unknown` |
+| `httpStatus` | status HTTP do provedor (`401`, `429`, `502`…), `null` quando não houve resposta |
+| `errorCode` | código do axios (`ECONNABORTED`, `ENOTFOUND`) ou nome do erro — **nunca** a mensagem |
+| `elapsedMs` / `timeoutMs` | quanto durou e qual era o teto **efetivo** da etapa (o `min()` acima) |
+| `model` | modelo configurado no momento da falha |
+
+A mensagem do provedor fica de fora de propósito: um `401` cita a chave recebida, e a chave não é
+logável (regra 4 do `AGENTS.md`). O corpo da requisição também não entra — o diagnóstico que faltava
+é "qual falha, com qual teto, em quanto tempo", não o payload. `llm_calls_total{status,…}` (§9.1)
+continua sendo a métrica; o log é o rastro por requisição.
 
 ---
 
@@ -712,6 +746,13 @@ Instrumentação na primeira versão (não depois): sem isso, C7 (5%) vira traba
 **Decisão.** Backend em **NestJS 11 (Express) + TypeScript strict**, com `class-validator`/`class-transformer` na borda, `zod` para validar env, Prisma como ORM e migration, `@nestjs/axios` + `axios-retry` para clientes externos, `prom-client` em `/metrics`, Jest + Supertest + `nock` nos testes e ESLint 9 (flat) + `tsc --noEmit` na qualidade. `openapi.yaml` passa a ser gerado pelos decorators do `@nestjs/swagger` (`scripts/generate-openapi.ts`). Contrato (§5), modelo (§4), TTLs (§4.2) e nomes de métrica (§9) **não mudam**.
 **Alternativas.** (a) **Manter FastAPI:** descartada — backend e frontend em linguagens diferentes, sem tipos compartilhados, e a decisão do dono já é a troca. (b) **Express puro:** descartada — DI, validação e documentação viram código manual, com mais superfície de erro para o mesmo escopo. (c) **Fastify + Nest** (`@nestjs/platform-fastify`): adiada, não descartada — o ganho de throughput é irrelevante no host de 2 GB; trocar o adapter continua possível sem tocar no domínio.
 **Consequências.** O backend de `backend/` é reescrito **antes de F2.3**, e até lá `03-plano-app.md` passa a descrever o esqueleto NestJS (F2.2). `nock.disableNetConnect()` substitui `pytest-socket` como prova de que nenhum teste abre socket; Prisma substitui Alembic (`prisma migrate` no deploy e no CI); o build ganha o passo `prisma generate`, que precisa rodar antes do `tsc`. Ganho: **um só idioma** no monorepo e contratos tipados ponta a ponta (os tipos de `Intent`/`ResultItem` podem ser compartilhados com a SPA), com uma única matriz de lint/teste. Custo: nenhum código Python do backend é aproveitado e o ranking (`backend/src/ranking`) tem de ser portado como função pura testada em Jest. Pesos, fórmula, gates e estimativas de `docs/00`–`docs/04` **não mudam**.
+
+### ADR-008 — Categoria só existe quando uma fonte a publica
+
+**Contexto.** A SPA oferecia um `<select>` de categoria e, com `GET /api/v1/categories` respondendo `[]`, mostrava o seletor com uma única opção ("Todas as categorias") e a linha "nenhuma categoria disponível — você ainda pode buscar sem uma". A Fase 4 da auditoria mostrou que **não é bug de consulta**: nenhum adaptador publica categorias — `backend/src/catalog/html-source.ts` e `fixture-source.ts` devolvem `[]` com `supports_categories: false`, e `normaliseSkill` fixa `category_slug: null`. É **feature sem fonte**, e a mensagem prometia uma transitoriedade que não existe.
+**Decisão.** Com `categories === []` **e sem falha de carregamento**, a tela de busca não renderiza o rótulo nem o `<select>` de categoria — nem uma linha de texto sobre categorias. O estado vazio de categorias (`STR.states.empty.noCategories`) só aparece quando o `GET /categories` **falhou**: ali a ausência é transitória e a frase é verdadeira. É decisão de desenho, não de dado: nada sai do contrato.
+**Alternativas.** (a) Manter o seletor com a mensagem: descartada — é o que a auditoria apontou, e um `<select>` de uma opção não é controle, é ruído. (b) Devolver uma lista fixa de categorias no backend para o seletor "funcionar": descartada — inventaria dado de catálogo (regra 6) e faria todo filtro escolhido cair em `422 UNKNOWN_CATEGORY`, porque `category` é validada contra a tabela `category` (§6.2). (c) Remover `GET /categories` do contrato: descartada — a rota é a promessa de que a categoria volta quando houver fonte, e o contrato é congelado por teste.
+**Consequências.** O filtro de categoria é, hoje, **422 por construção** (nenhum `slug` existe em `category`), e por isso a UI não o oferece. Quando uma fonte passar a publicar categorias, o seletor **volta sozinho**: a condição é `categories.length > 0`, sem flag de configuração e sem código novo. O caso de falha mantém o seletor e a mensagem — `frontend/src/test/screens/states.test.tsx` prova os dois.
 
 ---
 

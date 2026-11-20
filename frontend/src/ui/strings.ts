@@ -45,6 +45,12 @@ export const STR = {
     },
     empty: {
       default: "nenhuma skill correspondeu — tente palavras mais amplas",
+      /**
+       * Só aparece quando o carregamento de categorias **falhou** (Fase 4 da auditoria): ali a
+       * ausência é transitória e a frase é verdadeira. Com o catálogo sem categorias — o caso
+       * de hoje, porque nenhuma fonte as publica — o seletor inteiro sai da tela e esta
+       * mensagem junto: prometer uma categoria que a fonte nunca vai publicar é mentira.
+       */
       noCategories: "nenhuma categoria disponível — você ainda pode buscar sem uma",
       noSearch: "nenhuma busca ainda — descreva a skill que você precisa na tela de busca",
     },

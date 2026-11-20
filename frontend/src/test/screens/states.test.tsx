@@ -6,7 +6,7 @@
  * Os testes da #29 cobrem o caminho de erro das três telas; aqui ficam os estados que ainda não
  * tinham prova: carregando, vazio da busca, e as ações do vazio.
  */
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { delay, http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 
@@ -70,9 +70,43 @@ describe("estados por tela", () => {
     expect(screen.queryByText("Carregando categorias…")).toBeNull();
   });
 
-  it("Search: shows the empty state when the catalog has no categories", async () => {
+  /**
+   * Fase 4 da auditoria — o catálogo **não publica** categorias.
+   *
+   * `GET /api/v1/categories` responde `[]` porque nenhuma fonte as fornece
+   * (`html-source.ts` e `fixture-source.ts` devolvem `[]` com
+   * `supports_categories: false`, e `normaliseSkill` fixa `category_slug: null`).
+   * Não é falha transitória: é ausência permanente, e prometer "nenhuma categoria
+   * disponível — você ainda pode buscar sem uma" ao lado de um seletor vazio
+   * sugere que elas vão chegar. Sem categoria, o seletor inteiro sai da tela.
+   */
+  it("Search: hides the category picker when the catalog publishes no categories", async () => {
     server.use(
       http.get(apiUrl("/categories"), () => HttpResponse.json({ ...categoriesFixture, data: [] })),
+    );
+
+    renderAt("/");
+
+    // O `<select>` existe desabilitado enquanto a lista carrega: o estado que
+    // importa é o de depois da resposta.
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/categoria \(opcional\)/i)).toBeNull();
+    });
+    expect(screen.queryByRole("combobox", { name: /categoria \(opcional\)/i })).toBeNull();
+    expect(
+      screen.queryByText("nenhuma categoria disponível — você ainda pode buscar sem uma"),
+    ).toBeNull();
+    // A busca continua inteira: o formulário é o que importa.
+    expect(screen.getByLabelText(/o que você precisa que a skill faça/i)).toBeVisible();
+  });
+
+  it("Search: keeps the picker and explains when the categories fail to load", async () => {
+    // Falha de carregamento é o caso em que "nenhuma categoria disponível" é
+    // verdade **e** transitório: o seletor fica na tela e a mensagem aparece.
+    server.use(
+      http.get(apiUrl("/categories"), () =>
+        errorResponse(503, errorEnvelope("SOURCE_UNAVAILABLE")),
+      ),
     );
 
     renderAt("/");
@@ -80,6 +114,8 @@ describe("estados por tela", () => {
     expect(
       await screen.findByText("nenhuma categoria disponível — você ainda pode buscar sem uma"),
     ).toBeVisible();
+    expect(screen.getByLabelText(/categoria \(opcional\)/i)).toBeInTheDocument();
+    expect(screen.queryByText("Carregando categorias…")).toBeNull();
   });
 
   it("Results: shows the loading state while the replay is on its way", async () => {
