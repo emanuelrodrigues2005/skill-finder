@@ -63,6 +63,7 @@ import type { IntentParser, IntentParserResult } from '@/llm/intent-parser';
 import { EXPLAIN_PORT, INTENT_PARSER, LlmModule } from '@/llm/llm.module';
 import { OpenAICompatParser } from '@/llm/openai-compat';
 import { decodeSkillId, encodeSkillId } from '@/search/ids';
+import { LIVE_ENRICHER, type LiveEnricher, type LiveEnrichInput } from '@/search/live-enricher.port';
 import type { SearchCatalog, SearchCatalogInput } from '@/search/search-catalog.port';
 import type { SearchStore, StoredSearchInput, StoredSearchRow } from '@/search/search-store.port';
 import { SearchService } from '@/search/search.service';
@@ -386,6 +387,76 @@ class WrongOrderRecommendation implements ExplainParser {
   }
 }
 
+/**
+ * Enriquecimento que **dorme** antes de responder: é a rede lenta que, no defeito
+ * do commit `96db25c`, segurava a resposta por ~15 s e fazia o cliente desistir
+ * (`REQUEST_TIMEOUT_MS` em `frontend/src/api.ts`).
+ */
+class SleepingEnricher implements LiveEnricher {
+  readonly enabled = true;
+  calls = 0;
+  readonly inputs: LiveEnrichInput[] = [];
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private wake: (() => void) | null = null;
+
+  constructor(private readonly sleepMs: number) {}
+
+  enrich(input: LiveEnrichInput): Promise<number> {
+    this.calls += 1;
+    this.inputs.push(input);
+    return new Promise<number>((resolve) => {
+      this.wake = () => {
+        resolve(7);
+      };
+      this.timer = setTimeout(() => {
+        this.wake?.();
+      }, this.sleepMs);
+    });
+  }
+
+  /** Encerra a espera no fim do caso: o teste não paga os 5 s. */
+  stop(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.wake?.();
+  }
+}
+
+/** Porta que rejeita em segundo plano: a busca não pode morrer por causa dela. */
+class RejectingEnricher implements LiveEnricher {
+  readonly enabled = true;
+  calls = 0;
+
+  enrich(): Promise<number> {
+    this.calls += 1;
+    return Promise.reject(new Error('sitemap fora do ar'));
+  }
+}
+
+/** Porta que lança **antes** de devolver a promise — o pior caso, o síncrono. */
+class ThrowingEnricher implements LiveEnricher {
+  readonly enabled = true;
+  calls = 0;
+
+  enrich(): Promise<number> {
+    this.calls += 1;
+    throw new Error('enricher explodiu de forma sincrona');
+  }
+}
+
+/** Enriquecimento desligado na configuração: a busca nem tenta a rodada. */
+class DisabledEnricher implements LiveEnricher {
+  readonly enabled = false;
+  calls = 0;
+
+  enrich(): Promise<number> {
+    this.calls += 1;
+    return Promise.resolve(0);
+  }
+}
+
 interface Harness {
   service: SearchService;
   catalog: CatalogStub;
@@ -400,10 +471,15 @@ async function build(
     catalog?: CatalogStub;
     store?: StoreStub;
     explain?: ExplainParser;
+    live?: LiveEnricher;
   } = {},
 ): Promise<Harness> {
   const catalog = options.catalog ?? new CatalogStub();
   const store = options.store ?? new StoreStub();
+  // A porta do enriquecimento é `@Optional()`: só entra no módulo quando o caso
+  // pede um duplo. Sem ela, a busca roda como no caminho normal (nada a fazer).
+  const liveProvider =
+    options.live === undefined ? [] : [{ provide: LIVE_ENRICHER, useValue: options.live }];
 
   let builder = Test.createTestingModule({
     // `LLM_ENABLED=false` (o modo degradado de dev/CI) entra pelo módulo real:
@@ -422,6 +498,7 @@ async function build(
       { provide: SEARCH_STORE, useValue: store },
       { provide: AppConfigService, useValue: appConfig(options.config) },
       { provide: MetricsService, useValue: METRICS_STUB },
+      ...liveProvider,
     ],
   });
 
@@ -1144,6 +1221,96 @@ describe('SearchService.search (F2.6)', () => {
       for (const item of response.results) {
         expect(item.explanation.trim().length).toBeGreaterThan(0);
       }
+    });
+  });
+
+  /**
+   * Fase 1 da auditoria de latência: o enriquecimento ao vivo saiu do caminho da
+   * resposta. Antes (`96db25c`) a busca **esperava** a rodada inteira — ~15 s de
+   * rede contra os 15 s de timeout do cliente —, então a tela mostrava `TIMEOUT`
+   * com o servidor ainda ingerindo. Agora a rodada é disparada e a resposta sai;
+   * a busca seguinte é que encontra as linhas gravadas.
+   */
+  describe('live enrichment never blocks the answer (latency audit, phase 1)', () => {
+    it('answers while the enricher is still sleeping 5 s, and flags catalog_enriching', async () => {
+      const catalog = new CatalogStub();
+      catalog.skills = [];
+      const live = new SleepingEnricher(5_000);
+      const harness = await build({ catalog, parser: new OkIntentParser(), live });
+
+      const startedAt = Date.now();
+      const response = await harness.service.search(SEARCH_INPUT);
+      const elapsedMs = Date.now() - startedAt;
+      live.stop();
+
+      // O coração do defeito: 5 s de rede não podem custar 5 s de resposta.
+      expect(elapsedMs).toBeLessThan(1_000);
+      expect(live.calls).toBe(1);
+      // A rodada recebeu os termos em inglês da intenção e o teto da configuração.
+      expect(live.inputs[0]?.keywords).toEqual(['python', 'security']);
+      expect(live.inputs[0]?.limit).toBe(loadEnv({ ENV: 'dev' }).liveEnrichMaxKeys);
+      // Degradação visível (regra 7): o vazio explica que a rodada está em curso.
+      expect(response.warnings).toContain('catalog_enriching');
+      expect(response.warnings).toContain('no_results');
+      expect(response.results).toEqual([]);
+      expect(response.recommendation).toBeNull();
+    });
+
+    it('does not fire the enricher when the catalog already answered', async () => {
+      const live = new SleepingEnricher(5_000);
+      const harness = await build({ parser: new OkIntentParser(), live });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+      live.stop();
+
+      expect(live.calls).toBe(0);
+      expect(response.warnings).not.toContain('catalog_enriching');
+      expect(response.results.length).toBeGreaterThan(0);
+    });
+
+    it('does not fire the enricher when the configuration disables it', async () => {
+      const catalog = new CatalogStub();
+      catalog.skills = [];
+      const live = new DisabledEnricher();
+      const harness = await build({ catalog, parser: new OkIntentParser(), live });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(live.calls).toBe(0);
+      expect(response.warnings).not.toContain('catalog_enriching');
+      expect(response.warnings).toContain('no_results');
+    });
+
+    it('a rejecting enricher leaves the answer untouched (no unhandled rejection)', async () => {
+      const catalog = new CatalogStub();
+      catalog.skills = [];
+      const live = new RejectingEnricher();
+      const harness = await build({ catalog, parser: new OkIntentParser(), live });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+      // Deixa o `.catch` da rodada rodar: sem ele a rejeição subiria como
+      // unhandled rejection e derrubaria o processo do servidor.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(live.calls).toBe(1);
+      expect(response.results).toEqual([]);
+      expect(response.warnings).toContain('catalog_enriching');
+    });
+
+    it('an enricher that throws synchronously also leaves the answer untouched', async () => {
+      const catalog = new CatalogStub();
+      catalog.skills = [];
+      const live = new ThrowingEnricher();
+      const harness = await build({ catalog, parser: new OkIntentParser(), live });
+
+      // Se o `throw` sincrono escapasse, `search` rejeitaria em vez de responder.
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(live.calls).toBe(1);
+      expect(response.results).toEqual([]);
+      expect(response.warnings).toContain('no_results');
     });
   });
 });

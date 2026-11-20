@@ -13,7 +13,7 @@ import type {
   SearchData,
   SearchResponse,
 } from "../types";
-import { STR } from "../ui/strings";
+import { STR, warningLabel } from "../ui/strings";
 import { color, font, radius, space } from "../ui/tokens";
 
 type LoadState =
@@ -715,8 +715,16 @@ export default function ResultsPage() {
             {STR.results.warnings.heading}
           </h3>
           <ul style={{ color: color.textMuted, fontSize: font.size.small, margin: "0.35rem 0 0" }}>
+            {/*
+              O aviso é **texto de tela**: o token do contrato (`no_results`, `source_stale`,
+              `catalog_enriching`) nunca aparece sozinho como se fosse a frase. Ele continua no
+              DOM, em `<code>`, porque é o identificador que o suporte usa — regra 6 sem perder
+              o diagnóstico.
+            */}
             {warnings.map((warning, index) => (
-              <li key={`${index}-${warning}`}>{warning}</li>
+              <li key={`${index}-${warning}`}>
+                {warningLabel(warning)} <code>{warning}</code>
+              </li>
             ))}
           </ul>
         </section>

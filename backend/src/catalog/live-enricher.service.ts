@@ -23,6 +23,7 @@ import type { SkillSource } from "./skill-source";
 import type { CatalogRepository } from "./catalog-repository";
 import { ingest } from "./ingest";
 import type { AppConfigService } from "../config/config.module";
+import { DEFAULT_LIVE_ENRICH_BUDGET_MS } from "../config/env.schema";
 
 /** Limite de chaves por enriquecimento. Cada chave é 1 requisição a 1 req/s. */
 export const DEFAULT_LIVE_ENRICH_MAX_KEYS = 12;
@@ -90,6 +91,20 @@ export interface LiveEnrichRequest {
 export class CatalogLiveEnricher {
   private readonly logger = new Logger(CatalogLiveEnricher.name);
 
+  /**
+   * Rodada em andamento, para o **single-flight**.
+   *
+   * Duas buscas vazias simultâneas pediam duas rodadas e disputavam o índice
+   * parcial `UNIQUE (status) WHERE status='running'` de `ingest_run`: uma abria o
+   * run e a outra registrava `warn` de run concorrente. Com o campo preenchido, a
+   * segunda chamada devolve `0` na hora — quem chegou depois espera a rodada que
+   * já está no ar (e é ela que vai gravar as linhas das duas).
+   *
+   * Escrito de forma **síncrona** antes de qualquer `await` em `enrich`: é o que
+   * garante que duas chamadas no mesmo tick vejam a rodada da outra.
+   */
+  private inFlight: Promise<number> | null = null;
+
   constructor(
     private readonly source: SkillSource,
     private readonly repository: CatalogRepository,
@@ -105,21 +120,64 @@ export class CatalogLiveEnricher {
    * Ingere até `limit` chaves que casam com as palavras-chave.
    *
    * @returns quantas linhas foram gravadas; `0` quando nada casou, quando está
-   *   desligado ou quando a fonte falhou (falha aqui **não** derruba a busca: o
-   *   pior caso é a resposta vazia que já existia).
+   *   desligado, quando a fonte falhou ou quando **já existe uma rodada no ar**
+   *   (single-flight). **Nunca lança**: o pior caso permitido é a resposta vazia
+   *   que a busca já ia devolver.
    */
-  async enrich(request: LiveEnrichRequest): Promise<number> {
+  enrich(request: LiveEnrichRequest): Promise<number> {
     if (!this.enabled) {
-      return 0;
+      return Promise.resolve(0);
     }
+    if (this.inFlight !== null) {
+      // Diagnóstico sem dado do usuário: só o fato de a rodada anterior existir.
+      this.logger.debug(
+        'enriquecimento ao vivo: rodada ja em andamento, esta chamada nao abre outra',
+      );
+      return Promise.resolve(0);
+    }
+
+    const round = this.runRound(request).finally(() => {
+      // Só limpa a própria rodada: outra nunca abre enquanto esta não termina,
+      // mas a comparação deixa a invariante explícita.
+      if (this.inFlight === round) {
+        this.inFlight = null;
+      }
+    });
+    this.inFlight = round;
+    return round;
+  }
+
+  /**
+   * Executa uma rodada, com o orçamento de tempo como freio.
+   *
+   * Sem `AbortSignal` (a porta da fonte não aceita um), o freio é **deixar de
+   * pedir chaves**: cada chave custa ~`1/SKILL_SOURCE_RPS` na fonte, então o
+   * orçamento que sobra depois do sitemap define quantas ainda cabem. Nada é
+   * cancelado no meio — o que não couber simplesmente não é pedido.
+   */
+  private async runRound(request: LiveEnrichRequest): Promise<number> {
     const limit = Math.max(0, request.limit ?? DEFAULT_LIVE_ENRICH_MAX_KEYS);
     if (limit === 0 || request.keywords.length === 0) {
       return 0;
     }
 
     try {
+      // Orçamento calculado **dentro** do `try`: leitura de configuração
+      // degenerada (dublê sem `env`) vira rodada abandonada, nunca exceção.
+      const budgetMs = this.budgetMs();
+      const startedAtMs = Date.now();
+      const deadlineAtMs = startedAtMs + budgetMs;
+
       const todas = await this.source.listKeys();
-      const casadas = matchKeysBySlug(todas, request.keywords).slice(0, limit);
+      // Quantas chaves ainda cabem no orçamento (o sitemap já consumiu parte).
+      const cabem = Math.floor((deadlineAtMs - Date.now()) / this.perKeyMs());
+      if (cabem <= 0) {
+        this.logger.warn(
+          `enriquecimento ao vivo abandonado: orcamento de ${String(budgetMs)} ms esgotado antes de pedir chaves`,
+        );
+        return 0;
+      }
+      const casadas = matchKeysBySlug(todas, request.keywords).slice(0, Math.min(limit, cabem));
       if (casadas.length === 0) {
         // Diagnóstico sem dado do usuário: só quantas chaves o sitemap tinha.
         this.logger.debug(
@@ -136,6 +194,16 @@ export class CatalogLiveEnricher {
         startedAt: new Date(),
         keys: casadas,
       });
+      // A rodada é background: quem paga o atraso não é a resposta, mas o teto
+      // existe para ela não ficar pendurada. Se estourou, fica registrado (não
+      // há como cancelar um `fetchSkills` já em curso).
+      const elapsedMs = Date.now() - startedAtMs;
+      if (elapsedMs > budgetMs) {
+        this.logger.warn(
+          `enriquecimento ao vivo excedeu o orcamento de ${String(budgetMs)} ms ` +
+            `(${String(elapsedMs)} ms): a proxima rodada so abre quando esta terminar`,
+        );
+      }
       return outcome.items_upserted;
     } catch (error) {
       // Fonte fora do ar, sitemap mudado, run concorrente: a busca segue com o
@@ -145,5 +213,16 @@ export class CatalogLiveEnricher {
       );
       return 0;
     }
+  }
+
+  /** Teto da rodada; `??` cobre contextos que montam `env` parcial (dublês). */
+  private budgetMs(): number {
+    return this.config.env.liveEnrichBudgetMs ?? DEFAULT_LIVE_ENRICH_BUDGET_MS;
+  }
+
+  /** Intervalo médio entre requisições à fonte (`SKILL_SOURCE_RPS`, 1 por padrão). */
+  private perKeyMs(): number {
+    const rps = this.config.env.skillSourceRps;
+    return typeof rps === 'number' && rps > 0 ? 1_000 / rps : 1_000;
   }
 }

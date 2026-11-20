@@ -19,7 +19,7 @@
  *   o `why` do agente carrega `{{skill:<id>}}` e nunca é copiado direto para a
  *   resposta.
  */
-import { HttpStatus, Inject, Injectable, Optional } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger, Optional } from '@nestjs/common';
 
 import { ERROR_CODES } from '../common/errors/error-codes';
 import { ApiError } from '../common/errors/http-exception.filter';
@@ -127,6 +127,8 @@ const STRICT_FAILURE_STATUSES: ReadonlySet<LlmStatus> = new Set<LlmStatus>([
 
 @Injectable()
 export class SearchService {
+  private readonly logger = new Logger(SearchService.name);
+
   constructor(
     @Inject(SEARCH_CATALOG) private readonly catalog: SearchCatalog,
     @Inject(SEARCH_STORE) private readonly store: SearchStore,
@@ -184,7 +186,7 @@ export class SearchService {
     const ageMs = Math.max(0, now.getTime() - snapshot.getTime());
     const degradation = resolveDegradation(parsed.status, ageMs > SOURCE_STALE_AFTER_MS);
 
-    let candidates = await this.catalog.search({
+    const candidates = await this.catalog.search({
       query: input.query,
       // Issue #40: o `search_doc` é indexado em inglês, então o `tsquery` recebe os
       // termos em inglês da intenção. Sem eles (provedor `disabled`, intenção
@@ -196,24 +198,23 @@ export class SearchService {
       limit: Math.max(input.limit, CANDIDATE_POOL_SIZE),
     });
 
-    // Catálogo local insuficiente: enriquece ao vivo e tenta de novo. Só quando a
-    // lista voltou VAZIA — enriquecer com resultado na mão gastaria requisições
-    // contra a fonte sem mudar o que a pessoa vê.
+    // Catálogo local insuficiente: **dispara** o enriquecimento ao vivo e segue.
+    //
+    // Fase 1 da auditoria de latência (commit `96db25c`): aqui havia um `await`
+    // de ~12–15 s (sitemap + 12 chaves a 1 req/s) dentro do request, e o cliente
+    // desistia antes (`REQUEST_TIMEOUT_MS` em `frontend/src/api.ts`): a tela
+    // mostrava TIMEOUT com o servidor ainda ingerindo. Agora a rodada roda em
+    // segundo plano e a resposta sai com `warnings: ['catalog_enriching']`; a
+    // busca seguinte — da pessoa ou do retry — é que encontra as linhas gravadas.
+    //
+    // Só quando a lista voltou VAZIA: enriquecer com resultado na mão gastaria
+    // requisições contra a fonte sem mudar o que a pessoa vê.
+    let enriching = false;
     if (candidates.length === 0 && this.live !== undefined && this.live.enabled) {
-      const gravadas = await this.live.enrich({
-        keywords: searchKeywords(parsed),
-        limit: this.config.env.liveEnrichMaxKeys,
-      });
-      if (gravadas > 0) {
-        // Mesma entrada, catálogo novo: o FTS agora encontra as linhas gravadas.
-        candidates = await this.catalog.search({
-          query: input.query,
-          keywords: searchKeywords(parsed),
-          category: input.category,
-          limit: Math.max(input.limit, CANDIDATE_POOL_SIZE),
-        });
-      }
+      enriching = true;
+      this.fireLiveEnrichment(searchKeywords(parsed));
     }
+
     const { results, recommendation, warnings, explainStatus } = await this.rankAndExplain(
       input.query,
       candidates,
@@ -223,7 +224,10 @@ export class SearchService {
       // `resolveDegradation` também marca `disabled`/`unavailable`/`invalid_ids`/
       // `low_confidence`, então amarrar o aviso em `degradation.degraded` diria
       // "catálogo velho" com snapshot fresco (o default de dev/CI, sem LLM).
-      ageMs > SOURCE_STALE_AFTER_MS ? SEARCH_WARNINGS.sourceStale : null,
+      [
+        ...(ageMs > SOURCE_STALE_AFTER_MS ? [SEARCH_WARNINGS.sourceStale] : []),
+        ...(enriching ? [SEARCH_WARNINGS.catalogEnriching] : []),
+      ],
       {
         deadlineAtMs,
         catalogSnapshot,
@@ -336,7 +340,7 @@ export class SearchService {
       row.intent,
       storedOrder.length,
       // Mesmo critério da busca: frescor do snapshot, nunca o status da LLM.
-      ageMs > SOURCE_STALE_AFTER_MS ? SEARCH_WARNINGS.sourceStale : null,
+      ageMs > SOURCE_STALE_AFTER_MS ? [SEARCH_WARNINGS.sourceStale] : [],
       // Hit do cache de busca: o passo 7 não é tentado (nenhum provedor é
       // chamado numa leitura de permalink), e o texto volta do template.
       null,
@@ -420,6 +424,41 @@ export class SearchService {
   }
 
   /**
+   * Dispara uma rodada de enriquecimento ao vivo **sem esperar por ela**.
+   *
+   * Nenhum `await` aqui é deliberado: a rodada custa segundos na fonte (sitemap +
+   * N chaves a 1 req/s) e o request de busca tem orçamento de resposta muito
+   * menor — antes dessa mudança o cliente desistia com `TIMEOUT` enquanto o
+   * servidor continuava ingerindo. O que a pessoa ganha agora é a resposta; as
+   * linhas gravadas aparecem na busca seguinte.
+   *
+   * Dois cuidados, porque o enriquecimento **nunca** pode derrubar a resposta:
+   * - um `throw` síncrono da porta (acontece com dublê mal-comportado) é pego no
+   *   `try`;
+   * - uma promise rejeitada sem `.catch` vira unhandled rejection e derruba o
+   *   processo — daí o `.catch` que só registra.
+   *
+   * Quem evita rodadas concorrentes é o single-flight do `CatalogLiveEnricher`
+   * (o índice parcial `UNIQUE (status) WHERE status='running'` de `ingest_run`
+   * admite uma rodada por vez); o serviço não guarda estado para isso.
+   */
+  private fireLiveEnrichment(keywords: readonly string[]): void {
+    try {
+      void this.live
+        ?.enrich({ keywords, limit: this.config.env.liveEnrichMaxKeys })
+        .catch((error: unknown) => {
+          this.logger.warn(
+            `enriquecimento ao vivo falhou em segundo plano: ${describeError(error)}`,
+          );
+        });
+    } catch (error) {
+      this.logger.warn(
+        `enriquecimento ao vivo falhou antes de comecar: ${describeError(error)}`,
+      );
+    }
+  }
+
+  /**
    * Ranqueia, explica e monta o envelope comum a busca e permalink.
    *
    * O passo 7 (`explain`) só é tentado quando `budget` não é `null`, ou seja: na
@@ -431,7 +470,7 @@ export class SearchService {
     candidates: readonly SkillSummary[],
     intent: Intent,
     limit: number,
-    staleWarning: string | null,
+    extraWarnings: readonly string[],
     budget: ExplainBudget | null,
   ): Promise<{
     results: ResultItem[];
@@ -517,9 +556,9 @@ export class SearchService {
       // só quando houve fallback, nunca numa resposta 100% do agente.
       warnings.push(SEARCH_WARNINGS.explanationFromTemplate);
     }
-    if (staleWarning !== null) {
-      warnings.push(staleWarning);
-    }
+    // Avisos de quem chamou (frescor do snapshot, rodada de enriquecimento em
+    // curso): entram depois dos avisos da resposta, na ordem em que foram dados.
+    warnings.push(...extraWarnings);
 
     return {
       results,
@@ -706,6 +745,11 @@ export class SearchService {
 /** Milissegundos inteiros desde `startedAt` (`latency_ms`). */
 function elapsedMs(startedAt: bigint): number {
   return Number((process.hrtime.bigint() - startedAt) / 1_000_000n);
+}
+
+/** Mensagem legível de um erro qualquer, para o log da rodada em segundo plano. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

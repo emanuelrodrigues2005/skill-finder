@@ -189,6 +189,20 @@ export const STR = {
 
     warnings: {
       heading: "Avisos",
+      /**
+       * Token de `warnings` → frase em pt-BR (regra 6). O contrato diz que o campo é
+       * `string[]` livre, mas o servidor manda **tokens** (`search/constants.ts`): a tela
+       * decide a frase por eles. Token fora do mapa cai em `unknown` — nunca fica em branco.
+       */
+      labels: {
+        no_results: "nenhuma skill correspondeu à busca",
+        explanation_from_template:
+          "a explicação de pelo menos um item veio do template determinístico",
+        source_stale: "o snapshot do catálogo está além da janela de ingestão",
+        catalog_enriching:
+          "o catálogo está sendo atualizado ao vivo com a fonte — repita a busca em instantes",
+      } satisfies Readonly<Record<string, string>>,
+      unknown: "aviso do servidor",
     },
 
     expired: {
@@ -260,3 +274,17 @@ export const STR = {
       `Tente de novo em ${String(seconds)} segundo${seconds === 1 ? "" : "s"}.`,
   },
 } as const;
+
+/**
+ * Token de `warnings` → rótulo visível em pt-BR (regra 6).
+ *
+ * O mapa lá dentro é `satisfies Readonly<Record<string, string>>`, o que preserva o tipo
+ * literal de cada chave; indexar por `string` exige o cast local — o mesmo caminho de
+ * `DEGRADED_HEADLINE` em `ResultsPage.tsx`. Token que o bundle ainda não conhece (contrato
+ * à frente) não vira vazio nem some: cai em `unknown`, e a tela mostra o identificador em
+ * `<code>` ao lado do rótulo.
+ */
+export function warningLabel(token: string): string {
+  const labels: Readonly<Record<string, string | undefined>> = STR.results.warnings.labels;
+  return labels[token] ?? STR.results.warnings.unknown;
+}

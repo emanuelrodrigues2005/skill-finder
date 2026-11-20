@@ -162,6 +162,28 @@ export const nullFieldsSearchResponse = {
   warnings: [],
 } satisfies SearchResponse;
 
+/**
+ * Busca vazia que **disparou** o enriquecimento ao vivo (fase 1 da auditoria de latência).
+ *
+ * `warnings` é `string[]` livre no contrato e carrega **tokens** (`no_results`,
+ * `source_stale`, `catalog_enriching`): a tela traduz cada um (AGENTS.md, regra 6) e
+ * mantém o token visível como identificador de diagnóstico.
+ */
+export const enrichingSearchResponse = {
+  ...searchResponse,
+  llm: { status: "disabled", model: null, cached: false, tokens: null, explain_status: null },
+  data: {
+    source: "skills.sh",
+    catalog_snapshot: "2026-11-14T03:00:00Z",
+    age_seconds: 50000,
+    degraded: true,
+    degraded_reason: "source_stale",
+  },
+  results: [],
+  recommendation: null,
+  warnings: ["no_results", "source_stale", "catalog_enriching"],
+} satisfies SearchResponse;
+
 /** `GET /api/v1/categories`: as duas categorias que a tela de busca mostra no `<select>`. */
 export const categoriesFixture = {
   request_id: REQUEST_ID,

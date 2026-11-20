@@ -27,9 +27,17 @@ export interface LiveEnricher {
   /**
    * Ingere as chaves do sitemap que casam com os termos.
    *
+   * **A busca não espera esta promessa** (fase 1 da auditoria de latência): o
+   * `SearchService` dispara a rodada e responde com `warnings:
+   * ['catalog_enriching']`; quem lê as linhas gravadas é a busca seguinte. A
+   * implementação deve ser **single-flight** — duas chamadas simultâneas não
+   * podem abrir duas rodadas, porque o índice parcial `UNIQUE (status) WHERE
+   * status='running'` de `ingest_run` admite uma por vez.
+   *
    * @returns quantas linhas foram gravadas; `0` quando nada casou, quando está
-   *   desligado ou quando a fonte falhou. **Nunca lança**: o pior caso permitido é
-   *   a resposta vazia que a busca já ia devolver.
+   *   desligado, quando já existe rodada no ar ou quando a fonte falhou.
+   *   **Nunca lança**: o pior caso permitido é a resposta vazia que a busca já
+   *   ia devolver.
    */
   enrich(input: LiveEnrichInput): Promise<number>;
 }

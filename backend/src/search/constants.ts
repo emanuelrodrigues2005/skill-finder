@@ -57,6 +57,12 @@ export const SEARCH_WARNINGS = {
   explanationFromTemplate: 'explanation_from_template',
   /** Snapshot do catálogo além de {@link SOURCE_STALE_AFTER_MS}. */
   sourceStale: 'source_stale',
+  /**
+   * O catálogo local não tinha nada e uma rodada de enriquecimento ao vivo foi
+   * **disparada** (fase 1 da auditoria de latência). A busca não espera a rodada:
+   * o aviso é o que explica o vazio e convida a repetir a busca em instantes.
+   */
+  catalogEnriching: 'catalog_enriching',
 } as const;
 
 /** `details.reason` do 503 de catálogo vazio (§5.5). */

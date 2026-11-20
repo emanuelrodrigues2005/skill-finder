@@ -4,7 +4,7 @@
  * A tela recebe a resposta por dois caminhos: `location.state` (a busca recém-feita) e o
  * permalink `/results?search=<request_id>` (aba nova, URL colada). Os dois são exercitados aqui.
  */
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, screen, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 
@@ -13,6 +13,7 @@ import type { SearchResponse } from "../../types";
 import {
   degradedSearchResponse,
   emptySearchResponse,
+  enrichingSearchResponse,
   errorEnvelope,
   nullFieldsSearchResponse,
   REQUEST_ID,
@@ -152,5 +153,29 @@ describe("ResultsPage", () => {
       await screen.findByText("Algo deu errado do nosso lado. Tente de novo."),
     ).toBeVisible();
     expect(screen.getByLabelText("request_id")).toHaveValue(FAILED_REQUEST_ID);
+  });
+
+  it("traduz os avisos de `warnings` e mantém o token como diagnóstico", async () => {
+    serveReplay(enrichingSearchResponse);
+
+    renderResults();
+
+    const avisos = await screen.findByRole("region", { name: "Avisos" });
+
+    // Cada aviso é uma frase em pt-BR (regra 6), nunca o token cru.
+    expect(within(avisos).getByText(/o catálogo está sendo atualizado ao vivo/)).toBeVisible();
+    expect(within(avisos).getByText(/nenhuma skill correspondeu à busca/)).toBeVisible();
+    expect(within(avisos).getByText(/além da janela de ingestão/)).toBeVisible();
+
+    for (const token of ["no_results", "source_stale", "catalog_enriching"]) {
+      const code = within(avisos).getByText(token, { selector: "code" });
+      expect(code).toBeVisible();
+      const item = code.closest("li");
+      expect(item).not.toBeNull();
+      // O token continua acessível ao suporte, mas não é a prosa do aviso.
+      const texto = item?.textContent ?? "";
+      expect(texto.startsWith(token)).toBe(false);
+      expect(texto.length).toBeGreaterThan(token.length);
+    }
   });
 });

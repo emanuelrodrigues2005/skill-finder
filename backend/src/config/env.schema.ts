@@ -20,6 +20,17 @@ export const DEFAULT_LLM_MODEL = 'deepseek-v4.1-flash';
  */
 export const DEFAULT_LLM_TOTAL_DEADLINE_MS = 7_000;
 
+/**
+ * Teto de tempo de **uma rodada** de enriquecimento ao vivo (ms).
+ *
+ * A rodada roda em segundo plano (fase 1 da auditoria de latência: ela não está
+ * mais no caminho da resposta), então este teto não protege o request — protege o
+ * processo, porque a rodada pendurada seguraria o single-flight e nada mais seria
+ * enriquecido. 60 s cobrem o sitemap (2–3 s) mais 12 chaves a 1 req/s (~12 s) com
+ * folga para fonte lenta.
+ */
+export const DEFAULT_LIVE_ENRICH_BUDGET_MS = 60_000;
+
 /** Default do `compose.yaml` para a árvore limpa validar sem `.env`; proibido em prod. */
 export const DEV_DEFAULT_DB_PASSWORD = 'skillsdev';
 
@@ -70,9 +81,18 @@ const baseEnvSchema = z.object({
   //
   // Enriquecimento ao vivo: quando a busca local nao devolve nada, enumera o
   // sitemap, filtra as chaves pelo slug e ingere ate N delas. Desligado por padrao
-  // porque custa requisicoes contra a fonte e segundos na resposta.
+  // porque custa requisicoes contra a fonte. A rodada NAO entra mais no caminho da
+  // resposta (fase 1 da auditoria de latencia): ela roda em segundo plano, entao o
+  // teto de tempo protege o processo, nao o request.
   LIVE_ENRICH_ENABLED: booleanFromEnv.default(false),
   LIVE_ENRICH_MAX_KEYS: z.coerce.number().int().positive().default(12),
+  // Orcamento de UMA rodada. `positive()` porque um teto de 0 ms abandonaria toda
+  // rodada antes de pedir a primeira chave — enriquecimento que nunca enriquece.
+  LIVE_ENRICH_BUDGET_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_LIVE_ENRICH_BUDGET_MS),
 
   // --- deterministic ranking weights (the LLM never orders anything) ---
   RANK_W_STARS: z.coerce.number().min(0).default(0.5),
@@ -178,6 +198,7 @@ export const envSchema = baseEnvSchema
     skillSourceRps: value.SKILL_SOURCE_RPS,
     liveEnrichEnabled: value.LIVE_ENRICH_ENABLED,
     liveEnrichMaxKeys: value.LIVE_ENRICH_MAX_KEYS,
+    liveEnrichBudgetMs: value.LIVE_ENRICH_BUDGET_MS,
     rankWStars: value.RANK_W_STARS,
     rankWVulns: value.RANK_W_VULNS,
     rankWInstalls: value.RANK_W_INSTALLS,
