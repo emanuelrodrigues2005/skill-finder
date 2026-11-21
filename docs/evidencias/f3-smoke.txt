@@ -1,0 +1,137 @@
+# F3 — smoke do ciclo completo (issue #58)
+
+Data: 2026-11-20 (America/Fortaleza), 14:30 local / 17:30 UTC
+Host: EC2 `i-019f3ca0b69386a1a` (`t3.small`, us-east-1), IP público **98.82.7.23**
+Commit implantado: `9ef1902` (tag das duas imagens no ECR)
+Imagens: `skill-finder-api:9ef1902` (493 MB), `skill-finder-web:9ef1902` (74 MB)
+Stack: `docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --no-build`
+(`postgres` 16-alpine, `api` target `runtime`, `web` nginx — os três `healthy`)
+
+## 3.1 Convergência do state
+
+`terraform plan -var-file=terraform.tfvars` depois do `apply` da correção de `metadata_options`:
+
+```
+No changes. Your infrastructure matches the configuration.
+```
+
+## Deploy
+
+- Imagens construídas **fora** do host (t3.small, 2 GB: `pnpm install` do monorepo não cabe) e
+  publicadas no ECR com tag = SHA (`ecr describe-images` → `9ef1902` nos dois repositórios).
+- `docker compose … pull` a partir do ECR não foi usado: o host não tem AWS CLI, e sem ela o
+  `docker login` do ECR não acontece. O `apt` do Ubuntu 24.04 não traz `awscli` (sem universe) e o
+  instalador v2 da AWS, extraído por `python3 zipfile`, não executa (`Permission denied`, sem +x
+  preservado pela extração; `chmod 755` não resolveu). As imagens chegaram por
+  `docker save | gzip` → S3 → `curl` com URL pré-assinada → `docker load`, e o `docker tag` para o
+  nome do ECR. `compose.prod.yaml` continua apontando para o registry, que é o caminho da F4.
+- `docker compose … exec -T api pnpm prisma:deploy` **falha** no container `runtime`:
+
+```
+Downloading the pnpm 12.21.0 binary for linux-x64...
+Could not download the pnpm 12.21.0 binary: EACCES: permission denied,
+open '/opt/corepack/v1/pnpm/12.21.0/pnpm-native.db2097bff95c.tgz'
+```
+
+  O usuário 10001 não escreve em `/opt/corepack`, então o corepack tenta baixar o pnpm de novo e
+  não consegue. Migração aplicada pela CLI que já está na imagem:
+
+```
+docker compose … exec -T api node node_modules/prisma/build/index.js migrate deploy
+Prisma schema loaded from prisma/schema.prisma
+2 migrations found in prisma/migrations
+Applying migration `20261117013504_init`
+Applying migration `20261118123000_rotation_keys`
+All migrations have been successfully applied.
+```
+
+## Ingestão
+
+`POST /api/v1/admin/ingest` com `X-Admin-Token` (lido de `/opt/app/.env` no próprio host, nunca
+impresso) e `source_keys` de exemplo do runbook:
+
+```
+{"request_id":"881cab7feefa4be3aea2e1bef848dc00","status":"ok","items_requested":2,"items_seen":2,
+ "items_upserted":2,"items_deactivated":0,"error_code":null,"error_detail":null,
+ "started_at":"2026-11-20T17:27:08.909Z","finished_at":"2026-11-20T17:27:13.040Z"}
+http_code=202
+```
+
+## Smoke (5 verificações, via borda nginx em `http://98.82.7.23`)
+
+```
+=== 1 healthz ===
+{"status":"ok","info":{},"error":{},"details":{}}
+http_code=200 content_type=application/json; charset=utf-8
+
+=== 2 readyz ===
+{"status":"ok","info":{"postgres":{"status":"up","dependency":"postgres"}},"error":{},"details":{"postgres":{"status":"up","dependency":"postgres"}}}
+http_code=200 content_type=application/json; charset=utf-8
+
+=== 3 root ===
+http_code=200 content_type=text/html
+
+=== 4 ingest sem token ===
+http_code=401
+
+=== 5 categories ===
+{"request_id":"9051473b64779bd0f7ef9eede8008815","data":[],"data_snapshot":"2026-11-20T17:27:08.909Z"}
+http_code=200
+```
+
+Resultado: **4 de 5 verdes**. A #5 responde `200` mas com `data: []`.
+
+### Por que `categories` volta vazio
+
+A fonte usada foi a de produção (`SKILL_SOURCE_KIND=html`, `backend/src/catalog/html-source.ts:74`):
+`supports_categories: false`. O skills.sh não publica categoria por skill, então `category_slug` fica
+`null` para todas as linhas (`backend/src/catalog/normalise.ts:78`) e `GET /api/v1/categories`
+devolve lista vazia. Não é falha de deploy: as 2 skills foram ingeridas (`items_upserted: 2`) e
+`/healthz`, `/readyz`, a SPA e o 401 da rota admin respondem. O critério "`length >= 1`" só fecha com
+uma fonte que traga categoria (classificação por LLM ou fixture com categoria) — nenhuma das duas
+estava habilitada nesta execução (`LLM_ENABLED=false`, sem chave de provedor disponível).
+
+## Destroy e varredura (conta limpa)
+
+```
+terraform -chdir=infra destroy -var-file=terraform.tfvars
+Destroy complete! Resources: 8 destroyed.
+exit=0
+```
+
+Varredura depois do destroy:
+
+```
+=== instances (tag project=skill-finder) ===
+terminated
+=== instances (pending/running/stopping/stopped) ===
+(vazio)
+=== volumes ===
+(vazio)
+=== volumes (todos da conta) ===
+(vazio)
+=== security groups (skill-finder-app) ===
+(vazio)
+=== repositorios ECR ===
+(vazio)
+=== s3://bcc-cloud-tfstate-794399909334/projeto2/ ===
+2026-11-20 14:30:10        181 terraform.tfstate
+```
+
+Instância, volume e security group não existem mais; o `terminated` é o registro da instância já
+encerrada, que a API mantém por cerca de uma hora e não cobra. O bucket de state sobrevive com o
+`terraform.tfstate` (181 bytes, state vazio pós-destroy).
+
+Objeto temporário usado para transportar as imagens (`tmp-deploy/sf-images.tgz`) foi apagado do
+bucket antes do destroy; o prefixo não existe mais.
+
+## Observações de operação
+
+- A porta 22 nasce fechada (`allowed_ssh_cidrs` vazio, `infra/network.tf:35`), então o deploy rodou
+  por **SSM RunCommand** (`AWS-RunShellScript`), não por `scp`/`ssh` como o runbook descreve. O IP
+  público do host é lido por IMDSv2 (`http_tokens = "required"`).
+- O IP mudou de `54.211.25.239` para `98.82.7.23` durante o `apply` de `metadata_options`; todos os
+  comandos deste arquivo usam o IP novo.
+- O `.env` de produção foi gerado **no host** com `openssl rand -hex 32` (`POSTGRES_PASSWORD`,
+  `IP_HASH_SALT`, `ADMIN_TOKEN`), modo `600`, dono `root` — nenhum segredo passou por arquivo
+  versionado, log ou parâmetro de SSM.

@@ -1,0 +1,18 @@
+# Override de producao, aplicado por cima do compose.yaml da raiz, que continua
+# sendo a fonte dos profiles, dos healthchecks e do resto da topologia. As imagens
+# vem do Docker Hub em repositorio publico, entao o pull e anonimo: o host nao faz
+# `docker login` nem guarda credencial. Use `--no-build`, senao o host tenta
+# construir a imagem declarada no arquivo base em vez de usar a publicada.
+# `pull_policy: always` fecha a outra metade: sem ele, um `up -d` reaproveita a
+# imagem local e o SHA do `.env` deixa de ser o SHA que esta rodando.
+#   docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod pull
+#   docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --no-build
+
+services:
+  api:
+    image: "${DOCKERHUB_USER:?}/skill-finder-api:${IMAGE_TAG:?}"
+    pull_policy: always
+
+  web:
+    image: "${DOCKERHUB_USER:?}/skill-finder-web:${IMAGE_TAG:?}"
+    pull_policy: always

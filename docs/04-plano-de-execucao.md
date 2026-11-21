@@ -25,7 +25,7 @@
 | **F1** — Proposta e decisões | Congelar escopo e arquitetura e obter aprovação | **E1** | C1, C2, C8 | 0,5–1,0 | Proposta aprovada + Q1–Q6 respondidas ou padrão adotado + ADR-0001 escrito |
 | **F2** — Aplicação e testes | MVP (domínio, API, UI, migrations) rodando local com testes | **E2**, parte de E4 | **C1 (25%)**, **C5 (10%)** | 4,0–4,5 | `/healthz` local verde, 3 telas operáveis, cobertura do domínio ≥ 80%, teste de concorrência verde |
 | **F3** — Infraestrutura como código | Provisionar por Terraform, com estado remoto, e ver a app no ar | **E2**, **E4** | **C3 (15%)**, C1 | 1,5–2,0 | `fmt`/`validate` limpos, `apply` sem erro, app em HTTP, `ssh` OK, `destroy` sem órfãos |
-| **F4** — Pipeline CI/CD e ECR | Ciclar sem passo manual, com gate de testes explícito | **E3** | **C4 (15%)**, **C5 (10%)** | 1,0–1,5 | Workflow verde com 7 jobs, imagem com tag = SHA, execução vermelha com `build`/`deploy` `skipped` |
+| **F4** — Pipeline CI/CD e ECR | Ciclar sem passo manual, com gate de testes explícito | **E3** | **C4 (15%)**, **C5 (10%)** | 1,0–1,5 | CI verde com 8 jobs; `deploy.yml` com gate por `workflow_run`, imagem com tag = SHA e smoke que reprova o workflow |
 | **F5** — Observabilidade e segredos | Mostrar métrica, log e dashboard vivos; nenhum segredo rastreável | **E2**, **E5** | **C7 (5%)**, **C6 (5%)** | 0,5–1,0 | 4 painéis com dados, log de erro no Loki, `/grafana` protegido, `.env` gerado pelo cofre |
 | **F6** — Endurecimento e entrega | Fechar documentação, ensaiar a demo e entregar | **E5**, **E4** | **C8 (5%)** + protege C1–C4 | 0,5–1,0 | Docs completos, ciclo completo em < 15 min, demo de 3 min ensaiada, checklist da §11 marcado |
 | **Total** | | | | **8,0–12,0** | — |
@@ -61,7 +61,7 @@
 12. Executar K8/K9 com documento de confiança trivial local, **esperando `AccessDenied`**, e anotar "OIDC indisponível — confirmado", fechando o caminho de autenticação do pipeline (`docs/02` §8.1).
 
 *Key pair e higiene*
-13. Criar (ou importar) o key pair definitivo `projeto2` e manter a privada **fora** de `/mnt/c`, em `~/.ssh/projeto2` com `chmod 400` (`docs/02` §10).
+13. Confirmar o key pair **`vockey`**, o único que a conta do lab tem, e manter a privada (`labsuser.pem`, de *AWS Details*) **fora** de `/mnt/c`, em `~/.ssh/` com `chmod 400` (`docs/02` §10). Não criar `projeto2`: ele não existe na conta e a chave não teria par.
 14. Criar o `.gitignore` da raiz com `.env`, `*.tfstate*`, `*.auto.tfvars`, `*.pem`, `.terraform/`, `node_modules/`, `coverage/`.
 15. Criar `docs/evidencias/` e revisar `git status --short` para garantir que nada sensível entrou no índice.
 
@@ -72,14 +72,14 @@
 | 1 | Credencial de sessão viva | `aws sts get-caller-identity` → ARN `assumed-role/voclabs/...` |
 | 2 | Região coerente | `aws configure get region` e `echo $AWS_DEFAULT_REGION` → `us-east-1` |
 | 3 | Terraform atual | `terraform version` → número ≥ 1.10 (senão: backend S3 + DynamoDB, `docs/02` §7.3) |
-| 4 | Key pair utilizável | `aws ec2 describe-key-pairs --key-names projeto2` → 1 item; `stat -c %a ~/.ssh/projeto2` → `400` |
+| 4 | Key pair utilizável | `aws ec2 describe-key-pairs --key-names vockey` → 1 item; `stat -c %a ~/.ssh/labsuser.pem` → `400` |
 | 5 | IAM pré-existente lido | `aws iam get-role --role-name LabRole --query Role.Arn` e `aws iam get-instance-profile --instance-profile-name LabInstanceProfile` → valor, não erro |
 | 6 | ECR liberado | `aws ecr get-login-password --region us-east-1` → imprime token (nunca cole no log) |
 | 7 | S3 liberado | `aws s3 mb s3://bcc-cloud-teste-$RANDOM` e `aws s3 ls` sem erro; bucket removido depois |
 | 8 | RDS conhecido | `aws rds describe-db-subnet-groups` → resultado registrado (não bloqueia a Opção 1; alimenta o gatilho de §5.5 de `docs/01`) |
 | 9 | Registro completo | `docs/evidencias/sandbox.md` tem ao menos 8 linhas com data, comando e resultado |
 
-**Artefatos.** `docs/evidencias/sandbox.md`; `.gitignore`; `~/.ssh/projeto2` e `~/.ssh/projeto2.pub`; `~/.aws/credentials` (fora do repositório).
+**Artefatos.** `docs/evidencias/sandbox.md`; `.gitignore`; `~/.ssh/labsuser.pem` (chave do `vockey`); `~/.aws/credentials` (fora do repositório).
 
 **Riscos da fase.**
 
@@ -104,7 +104,7 @@
 *Conteúdo da proposta (E1)*
 1. Escrever em `README.md` §1 as seções **Problema**, **Funcionalidades**, **Arquitetura preliminar** e **Tecnologias selecionadas**, com pelo menos um parágrafo cada (é o conteúdo mínimo exigido pelo §6.1 do edital).
 2. Selecionar o tema e congelar **4 histórias** no formato "como X quero Y para Z", mais a regra de negócio não trivial, e listar ao lado o que ficou **fora de escopo**.
-3. Transportar para o README o diagrama de componentes de `docs/01` §3.2 e as **quatro saídas** do Terraform (`host_public_ip`, `ecr_repository_url`, `state_bucket`, `target_port`) — esse é o *seam* que permite trocar de borda sem reescrever o pipeline.
+3. Transportar para o README o diagrama de componentes de `docs/01` §3.2 e as **cinco saídas** do Terraform (`host_public_ip`, `ecr_registry`, `ecr_repository_urls`, `state_bucket`, `target_port`) — esse é o *seam* que permite trocar de borda sem reescrever o pipeline.
 4. Escrever `docs/adr/0001-arquitetura-opcao-1.md` com a decisão, as 5 justificativas de `docs/01` §5.1, os trade-offs aceitos (§5.3), o que ficou fora (§3.4) e os gatilhos de revisão (§5.5).
 5. Ligar cada suposição **P1** de `docs/01` §9 à tarefa da F0 que a fechou (A1, A2, A3, A6, A9, A14) e marcar as demais como "a validar em F3".
 
@@ -222,7 +222,7 @@
 8. Criar `infra/compute.tf` com `aws_instance` `t3.small`, `iam_instance_profile` vindo do `data`, `user_data` que instala Docker/Compose, cria `/opt/app` e habilita o serviço `systemd` de `compose up`.
 9. Criar `infra/storage.tf` com volume EBS `gp3` de dados, formatado e montado de forma idempotente no `user_data`.
 10. Criar `infra/ecr.tf` com repositório, `image_scanning_configuration` e *lifecycle policy* de 5 imagens.
-11. Criar `infra/outputs.tf` com **exatamente** as quatro saídas do *seam*: `host_public_ip`, `ecr_repository_url`, `state_bucket`, `target_port`.
+11. Criar `infra/outputs.tf` com **exatamente** as cinco saídas do *seam*: `host_public_ip`, `ecr_registry`, `ecr_repository_urls`, `state_bucket`, `target_port`.
 12. Criar `infra/terraform.tfvars.example` sem valores sensíveis e conferir `git status` (nenhum `.tfstate`, nenhum `.pem`).
 
 *Primeiro ciclo completo*
@@ -230,7 +230,7 @@
 14. Rodar `terraform init` e `terraform plan -out=plan.out`, lendo o plano linha a linha: contar recursos, conferir ausência de `aws_iam_*` e de destruição inesperada.
 15. Rodar `terraform apply plan.out` **sem** `-auto-approve`, cronometrando (meta < 10 min, `docs/02` §12).
 16. Construir as imagens de `api` e `web` com tag = SHA do commit, autenticar no ECR e publicar.
-17. Conectar por `ssh -i ~/.ssh/projeto2 ubuntu@<host_public_ip>`, criar `/opt/app/.env` com `chmod 600`, subir `docker compose --profile prod up -d` e rodar `docker compose exec -T api pnpm prisma migrate deploy`.
+17. Conectar por `ssh -i ~/.ssh/labsuser.pem ubuntu@<host_public_ip>`, criar `/opt/app/.env` com `chmod 600`, rodar `docker compose --profile prod pull` e `docker compose --profile prod up -d --no-build`, e por fim `docker compose exec -T api npm run --silent prisma:deploy`.
 18. Rodar o smoke manual: `curl -fsS http://<host_public_ip>/healthz`, `/readyz`, criar e listar um registro pela UI.
 19. Escrever `docs/runbook-operacao.md` com os quatro procedimentos: subir, implantar, destruir, encerrar sessão.
 20. Rodar `terraform destroy` como teste controlado e conferir a ausência de órfãos.
@@ -242,10 +242,10 @@
 | 1 | Código formatado e válido | `terraform fmt -check -recursive` = 0 e `terraform validate` = "Success! The configuration is valid." |
 | 2 | `apply` limpo a partir de diretório limpo | log de `terraform apply` sem erro, anexado em `docs/evidencias/f3-apply.txt` |
 | 3 | Idempotência | segundo `terraform plan` → "No changes." |
-| 4 | Estado remoto de fato | `aws s3 ls s3://<state_bucket>/projeto2/` lista `terraform.tfstate`; `terraform state list \| wc -l` ≥ 8 |
+| 4 | Estado remoto de fato | `aws s3 ls --recursive s3://<state_bucket>` lista `terraform.tfstate` sob o prefixo de `key` em `infra/backend.tf`; `terraform state list \| wc -l` ≥ 8 |
 | 5 | Nenhum IAM criado | `grep -rn 'resource "aws_iam' infra/` → vazio; `terraform state list \| grep aws_iam` → vazio |
 | 6 | App acessível | `curl -fsS http://<host_public_ip>/healthz` → 200 e a home da SPA carrega no navegador |
-| 7 | `ssh` funcionando | `ssh -i ~/.ssh/projeto2 -o BatchMode=yes ubuntu@<host_public_ip> 'docker compose -f /opt/app/compose.yaml ps'` → `api` e `web` `running (healthy)` |
+| 7 | `ssh` funcionando | `ssh -i ~/.ssh/labsuser.pem -o BatchMode=yes ubuntu@<host_public_ip> 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod ps'` → `api` e `web` `running (healthy)` |
 | 8 | Persistência no EBS | `stop`/`start` da instância e os dados continuam após o `compose up` |
 | 9 | `destroy` sem órfãos | depois de `terraform destroy` (exit 0): `aws ec2 describe-instances --filters "Name=tag:project,Values=<projeto>"` sem `running`/`stopped`; `aws ec2 describe-volumes` sem volume com a tag; `terraform plan` → "No changes" com state vazio |
 | 10 | Bucket de estado preservado | o bucket de *bootstrap* continua existindo depois do `destroy` (não pertence a este state) |
@@ -270,7 +270,7 @@
 
 **Objetivo.** Repetir a F3 sem passo manual: push/PR → lint, testes, build, push no ECR, deploy e smoke, com o *gate* de testes explícito no grafo de jobs.
 
-**Pré-requisitos.** F3 verde; repositório no GitHub com Actions habilitado; `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` e a chave privada SSH gravados como Actions Secrets; imagem já publicada manualmente na F3.
+**Pré-requisitos.** F3 verde; repositório no GitHub com Actions habilitado; `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` e `AWS_SESSION_TOKEN` gravados como Actions Secrets (as credenciais de sessão do lab — nada de chave SSH, o canal é o SSM); imagem já publicada manualmente na F3.
 
 **Tarefas.**
 
@@ -279,13 +279,15 @@
 2. Publicar como artefatos apenas o JUnit XML e o relatório de cobertura, com caminhos explícitos — nunca `tfstate`, `.env` ou `docker save` (`docs/01` §7.5).
 3. Adicionar o job `secrets` (`gitleaks`) reprovando o PR ao encontrar segredo no diff.
 
-*CD (com AWS)*
-4. Criar `.github/workflows/deploy.yml` com `workflow_dispatch`, `concurrency` para impedir dois deploys simultâneos e `permissions: contents: read`.
-5. Implementar o job `preflight` com `aws sts get-caller-identity` e mensagem explícita ("renove a sessão do lab"), executando **antes** de qualquer job com AWS.
-6. Implementar o job `build` com `docker buildx` e push para o ECR com tag = SHA do commit, sem `latest`.
-7. Implementar o job `tf-plan` (somente em PR) rodando `fmt -check`, `validate` e `plan -no-color`, com a saída no *summary*.
-8. Implementar o job `deploy`: `terraform apply` quando `infra/` mudou; depois SSH → `compose pull && up -d` e `docker compose exec -T api pnpm prisma migrate deploy`, lendo **apenas** `terraform output -json`.
-9. Implementar o job `smoke` que descobre a URL pelas saídas e verifica `/healthz`, `/readyz`, e criação+leitura de um registro pelo contrato, **falhando o workflow** em qualquer desvio.
+*CD (com AWS)* — implementado na issue #17; o desenho completo está em
+`docs/app/06-pipeline-deploy.md`.
+
+4. Criar `.github/workflows/deploy.yml` com gatilho `workflow_run` de `ci.yml` (concluído com sucesso, vindo de `push` em `main`), `workflow_dispatch` para o disparo manual e `concurrency` para impedir dois deploys simultâneos, com `permissions: contents: read` e `actions: read`.
+5. Implementar o job `gate` com `aws sts get-caller-identity` e mensagem explícita ("renove a sessão do lab"), executando **antes** de qualquer job com AWS; no dispatch manual ele também prova o CI verde do SHA pela API de Actions.
+6. Implementar o job `build` com `docker build --target runtime` e push para o ECR com tag = SHA do commit, sem `latest`, conferindo a tag depois no `describe-images`.
+7. Implementar o job `provision` (desligado por padrão, só com `provision=true`) rodando `init -backend-config`, `fmt -check`, `validate`, `plan -out` e `apply tfplan`, com as variáveis que o `terraform.tfvars` (ignorado pelo Git) daria no runner.
+8. Implementar o job `deploy`: resolve o host por tag, espera o agente SSM ficar `Online` e, por **SSM RunCommand** (`AWS-RunShellScript`; a porta 22 não existe no security group da F3), troca o `IMAGE_TAG` do `/opt/app/.env`, roda `compose pull` + `up -d --no-build`, `npm run --silent prisma:deploy` e a ingestão pelo endpoint admin.
+9. Implementar o job `smoke` na borda pública: `/healthz` e `/readyz` em JSON com `status: ok`, `/` em `text/html` com a SPA e `POST /api/v1/admin/ingest` **sem** token respondendo `401`, **falhando o workflow** em qualquer desvio.
 10. Publicar no `$GITHUB_STEP_SUMMARY` a URL, o digest da imagem e o SHA implantado.
 11. Configurar a proteção do branch padrão exigindo `lint`, `test-unit`, `test-integration` e `secrets` verdes.
 
@@ -297,11 +299,11 @@
 
 | # | Critério | Como provar |
 | --- | --- | --- |
-| 1 | Pipeline mínimo do edital | execução verde com `preflight, lint, test-unit, test-integration, build, deploy, smoke` — as 4 etapas do §3.3 do edital visíveis no histórico |
-| 2 | Gate provado | na execução vermelha, `build` e `deploy` aparecem `skipped` |
+| 1 | Pipeline mínimo do edital | execução verde com `gate, build, deploy, smoke` no `deploy.yml` e os 8 jobs do `ci.yml` acima dele — as 4 etapas do §3.3 do edital visíveis no histórico |
+| 2 | Gate provado | com `workflow_run`, CI vermelho **não gera** run de deploy; a prova é o run de CI vermelho (nenhum deploy nasce) e o `gate` vermelho no dispatch manual do mesmo commit |
 | 3 | Artefato por SHA | `aws ecr describe-images --repository-name <repo> --query 'imageDetails[].imageTags'` contém o SHA implantado |
-| 4 | Sem IP no repositório | `grep -rnE '([0-9]{1,3}\.){3}[0-9]{1,3}' .github/ infra/ \| grep -v '0\.0\.0\.0'` → vazio |
-| 5 | Deploy sem clique humano após o dispatch | log do job `deploy` mostra `apply`, `compose pull`, `up -d` e `prisma migrate deploy` |
+| 4 | Sem IP no repositório | `grep -rnE '([0-9]{1,3}\.){3}[0-9]{1,3}' .github/workflows/deploy.yml \| grep -vE '127\.0\.0\.1\|0\.0\.0\.0'` → vazio |
+| 5 | Deploy sem clique humano após o dispatch | log do job `deploy` mostra `compose pull`, `up -d --no-build`, `prisma:deploy` e a resposta da ingestão |
 | 6 | Smoke honesto | derrubar o banco no host e ver `smoke` (não `deploy`) reprovar o workflow |
 | 7 | Segredo fora do Git | `gitleaks` verde; `git log --all --full-history -- "*.env"` → vazio |
 | 8 | Credenciais mascaradas | log do workflow exibe `***` no lugar dos valores; busca pelo prefixo do segredo no log não retorna nada |
@@ -312,8 +314,8 @@
 
 | Risco | Mitigação |
 | --- | --- |
-| Token de sessão vence entre dispatch e deploy | `preflight` com mensagem clara; rodar o deploy cedo na sessão; atualizar os 3 secrets no início (§10) |
-| SSH dos runners bloqueado | Plano B *pull-based* (timer no host puxando do ECR via instance profile, `docs/01` §4.2h-4) |
+| Token de sessão vence entre dispatch e deploy | `gate` com mensagem clara antes de construir imagem; rodar o deploy cedo na sessão; atualizar os 3 secrets no início (§10) |
+| Porta 22 fechada no host (não há SSH) | o canal do deploy é o **SSM RunCommand**, o mesmo do ciclo da F3: sem chave no runner, sem porta aberta; o job espera o agente ficar `Online` e reprova com mensagem explícita |
 | CI lento demais | Cache de build, Dockerfile multi-stage e um único service container de Postgres |
 | `test-integration` *flaky* | `healthcheck` do Postgres antes dos testes, `retry` limitado e proibição de `sleep` |
 | `Error acquiring the state lock` | `terraform force-unlock <id>` só depois de confirmar que ninguém está aplicando (`docs/02` §7.4) |
@@ -452,7 +454,7 @@ flowchart TD
 | Aplicação | integrante A | `app/api/`, `tests/` | F2 | é o único que escreve em `app/api/` |
 | Interface | integrante B | `app/web/` | F2, depois de `openapi.yaml` congelado | só consome o contrato; não edita a API |
 | Infraestrutura | integrante C | `infra/` | F3, depois de `compose.yaml` existir | `infra/` é exclusivo; contrato é a topologia do compose |
-| Pipeline | integrante D | `.github/` | F4, depois de `infra/outputs.tf` existir | ninguém mais em `.github/`; contrato são as 4 saídas |
+| Pipeline | integrante D | `.github/` | F4, depois de `infra/outputs.tf` existir | ninguém mais em `.github/`; contrato são as 5 saídas |
 | Observabilidade | A ou B | `observability/` | F5 (em local antes do host) | pasta separada e dashboard em arquivo versionado |
 | Documentação | C ou D | `docs/`, `README.md` | de F1 a F6 | quem escreve em `docs/` não mexe em `app/` nem `infra/` |
 
@@ -559,7 +561,7 @@ Regras de convivência, em ordem de importância:
 - [ ] `terraform apply` conclui sem erro a partir de diretório limpo (log anexado)
 - [ ] Segundo `terraform plan` = "No changes."
 - [ ] App acessível: `curl -fsS http://<ip>/healthz` = 200 e a SPA carrega
-- [ ] `ssh -i ~/.ssh/projeto2 ubuntu@<ip>` funciona e `docker compose ps` mostra `api`/`web` healthy
+- [ ] `ssh -i ~/.ssh/labsuser.pem ubuntu@<ip>` funciona e `docker compose ps` mostra `api`/`web` healthy
 - [ ] `terraform state list` ≥ 8 recursos e nenhum `aws_iam_*`
 - [ ] `terraform destroy` exit 0, `describe-instances`/`describe-volumes` sem órfãos e `plan` seguinte limpo
 - [ ] Bucket de estado preservado e *bootstrap* documentado no runbook
@@ -568,9 +570,9 @@ Regras de convivência, em ordem de importância:
 **F4 — Pipeline completo**
 - [ ] *Ready:* F3 verde, Actions habilitado e 4 secrets gravados.
 - [ ] `ci.yml` roda em push e em PR
-- [ ] `deploy.yml` disparado por `workflow_dispatch`
-- [ ] Uma execução verde com os 7 jobs
-- [ ] Uma execução vermelha com `build`/`deploy` `skipped` capturada
+- [ ] `deploy.yml` com `workflow_run` do CI verde e `workflow_dispatch` para o disparo manual
+- [ ] Uma execução verde com os 8 jobs do CI e os jobs `gate`, `build`, `deploy`, `smoke`
+- [ ] Prova do gate: CI vermelho de propósito **não** gera deploy; `gate` vermelho no dispatch manual do mesmo commit
 - [ ] Imagem no ECR com tag = SHA do commit
 - [ ] `smoke` reprova o workflow quando a app está fora
 - [ ] `gitleaks` verde e nenhum IP no repositório
@@ -613,7 +615,7 @@ Regras de convivência, em ordem de importância:
 | R09 | State lock preso ou state corrompido | Média | Médio | `Error acquiring the state lock` | Confirmar que ninguém está aplicando; `terraform force-unlock <id>`; manter `use_lockfile`; nunca editar o state à mão |
 | R10 | Key pair bloqueado (`CreateKeyPair`/`ImportKeyPair` negados) | Baixa | Alto (deploy) | K3 retorna `AccessDenied` | Plano B de `docs/02` §10.3: SSM Session Manager ou deploy por `user_data` + pull, sem SSH; documentar a troca no runbook |
 | R11 | Tipo de instância indisponível | Baixa | Médio | K4 sem `t3.small`; `VcpuLimitExceeded`; erro no apply | Usar a variável `instance_type`; cair para `t3.micro` **com** `mem_limit` e retenção de 24 h, ou adiar a F5; registrar no ADR |
-| R12 | Professor exige mudança de arquitetura na véspera (Q2) | Baixa | Alto | Resposta "precisa de RDS/ALB" | Usar o *seam* das 4 saídas: criar ALB/RDS **só** na janela da demo e destruir no dia seguinte; o pipeline não muda |
+| R12 | Professor exige mudança de arquitetura na véspera (Q2) | Baixa | Alto | Resposta "precisa de RDS/ALB" | Usar o *seam* das 5 saídas: criar ALB/RDS **só** na janela da demo e destruir no dia seguinte; o pipeline não muda |
 | R13 | Recursos órfãos cobrando após erro no meio do `apply` | Média | Médio | `plan` mostra "to create" para recurso que já existe | `terraform import`/`state rm`; repetir `destroy`; tag `project` em tudo para localizar órfãos |
 
 ## 10. Rotina operacional recorrente
@@ -700,7 +702,7 @@ A lista completa está em `docs/01` §10 e **não é repetida aqui**. O que impo
 | **Q3** — Infisical em modo SaaS é aceito? | **F5** | Infisical Cloud |
 | **Q6** — cobertura mínima e papel dos testes no gate? | **F4** | Unitários + integração bloqueando o deploy; contrato como bônus |
 
-Se **Q2** vier depois da F3, o custo de mudar é baixo (o *seam* das quatro saídas); se **Q1** vier depois da F2, o custo é alto (refazer a camada de apresentação). Por isso Q1 e Q2 são as duas perguntas a levar para a **primeira** aula de acompanhamento.
+Se **Q2** vier depois da F3, o custo de mudar é baixo (o *seam* das cinco saídas); se **Q1** vier depois da F2, o custo é alto (refazer a camada de apresentação). Por isso Q1 e Q2 são as duas perguntas a levar para a **primeira** aula de acompanhamento.
 
 ## Referências
 

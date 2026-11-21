@@ -3,10 +3,18 @@
 # Nenhum segredo em ENV/ARG: tudo entra por variável de ambiente em runtime.
 #
 # pnpm: corepack com a MESMA versão de `packageManager` (package.json: pnpm@12.21.0)
-# em TODOS os estágios, inclusive no runtime — o compose roda `pnpm start` e o
-# Makefile roda `pnpm prisma:deploy` dentro do container. `corepack install -g`
-# baixa o pnpm no build e o deixa no `COREPACK_HOME` fixo, então o container não
-# tenta resolver versão (nem rede) no start e não depende do HOME do usuário.
+# em TODOS os estágios, inclusive no runtime. `corepack install -g` baixa o pnpm no
+# build e o deixa no `COREPACK_HOME` fixo, então o dev não resolve versão (nem rede)
+# no start e não depende do HOME do usuário.
+#
+# O runtime é a exceção: ali o pnpm não roda script nenhum. O `corepack install`
+# instala só o wrapper (sem lifecycle script e sem o `@pnpm/exe.*`), e o pnpm 12
+# re-resolve as dependências do projeto — e reinstala `node_modules` — antes de
+# executar um script, o que um `/app` somente leitura com uid 10001 não permite
+# (`make migrate` no dev continua pnpm: lá o lockfile está no lugar e `/app` é
+# gravável). A migração de produção é `npm run --silent prisma:deploy`, um comando
+# `node` sobre o CLI do Prisma, que é dependency; `scripts/dev/prisma-runtime-check.sh`
+# cobre o caminho na imagem `runtime`.
 
 FROM node:22-alpine AS base
 WORKDIR /app

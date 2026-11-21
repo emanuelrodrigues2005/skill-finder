@@ -35,3 +35,27 @@
 > 3. **K5** (`service-quotas` negado) não importa para a Opção 1: só seria usado para
 >    Auto Scaling/ALB. **K14** (sem DB subnet group) encerra a Opção 2 salvo criação manual —
 >    a arquitetura recomendada não depende de RDS.
+
+---
+
+## F3.1 — sessão validada e bucket de state criado (2026-11-20)
+
+Executado pelo dono, na sessão de laboratório iniciada em 2026-11-20T08:04:16-0800.
+
+```text
+Terraform v1.17.2  (linux_amd64)          # required_version = ">= 1.10": atendido
+conta    794399909334
+região   us-east-1                        # fixa pelo lab
+ARN      arn:aws:sts::794399909334:assumed-role/voclabs/user5696546=...
+bucket   bcc-cloud-tfstate-794399909334   # criado por scripts/bootstrap-state.sh
+  versionamento ........ Enabled
+  criptografia ......... AES256 (SSE-S3)
+  bloqueio público ..... BlockPublicAcls/IgnorePublicAcls/BlockPublicPolicy/RestrictPublicBuckets
+key pairs na conta ... vockey             # projeto2 NÃO existe: o Terraform usa vockey
+```
+
+K7 respondido: o `apply` da F3.4 criou a instância com `LabInstanceProfile` e ela subiu
+com o perfil anexado — o instance profile contém `LabRole`, como esperado.
+
+O bucket de state sobreviveu ao `terraform destroy` do gate F3.7, que é o desenho:
+ele é o registro do que o Terraform criou e não pertence ao state que guarda.

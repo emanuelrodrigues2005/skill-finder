@@ -23,6 +23,12 @@ produto da aplicação que será entregue: o **buscador de skills** (`Skill Find
 | [03-plano-app](app/03-plano-app.md) | como a F2 é executada: descoberta da fonte de dados, sub-fases F2.0–F2.9, gates |
 | [amostras](app/amostras/) | amostra real do skills.sh + decisão sobre a forma de acesso (F2.0) |
 
+## Operação
+
+| Documento | Para quê |
+| --- | --- |
+| [runbook-operacao](runbook-operacao.md) | subir, implantar, destruir e encerrar sessão na EC2 do lab — os "procedimentos de execução, implantação e remoção" do edital (§3.7) |
+
 Para agentes, a regra de sessão está em [`../AGENTS.md`](../AGENTS.md).
 
 ## As três coisas a fazer hoje

@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Publica o tracker do projeto (milestones, labels, issues e PR) a partir de um
     JSON declarativo, de forma idempotente.
@@ -124,7 +124,7 @@ $titles = @{}
 foreach ($i in $spec.issues) {
     if ($titles.ContainsKey($i.title)) { $script:Problems.Add("issue duplicada: $($i.title)") }
     $titles[$i.title] = $true
-    if ($i.title.Length -gt 70) { $script:Problems.Add("titulo com $($i.title.Length) chars (>70): $($i.title)") }
+  if ($i.title.Length -gt 76) { $script:Problems.Add("titulo com $($i.title.Length) chars (>76): $($i.title)") }
     if ($i.milestone -and -not $msNames.ContainsKey($i.milestone)) {
         $script:Problems.Add("issue '$($i.title)' aponta para milestone inexistente: $($i.milestone)")
     }

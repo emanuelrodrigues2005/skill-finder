@@ -1,0 +1,693 @@
+# Deploy do Skill Finder — issue #17 (F4).
+#
+# O gate de testes é o `workflow_run`: este workflow só nasce quando `ci.yml`
+# concluiu com `success` a partir de um `push` em `main`. Repetir lint/typecheck/
+# teste aqui custaria runner duas vezes para o mesmo resultado e criaria dois
+# veredictos possíveis para o mesmo commit. O único caminho que não passa por esse
+# grafo é o `workflow_dispatch`, e o job `gate` prova o CI verde dele via API antes
+# de qualquer passo caro.
+#
+# Sem OIDC: a conta do AWS Academy não deixa criar provider nem role, então
+# `configure-aws-credentials` com `role-to-assume` não tem onde assumir. As
+# credenciais são de sessão (~4 h, com `AWS_SESSION_TOKEN`) e chegam por `secrets`;
+# elas vencem no meio do lab, e é por isso que o `gate` chama
+# `sts get-caller-identity` antes de construir imagem. Elas servem só ao SSM e ao
+# `provision`: publicar imagem não fala com a AWS.
+#
+# Sem SSH: o security group da F3 abre só a 80, e a porta 22 nem existe na lista de
+# regras. O canal é o SSM RunCommand — o mesmo do ciclo da F3 —, então o runner não
+# guarda chave privada e o host não expõe shell na internet.
+#
+# As imagens são públicas no Docker Hub, e o pull no host é anônimo: nenhuma
+# credencial de registry fica na VM e o `pull_policy: always` do override de prod
+# fixa o digest. O SHA do commit é a tag; `latest` não é publicado.
+#
+# Os segredos da aplicação não passam pelo runner: o SSM só entrega o comando, e é
+# o host que busca os valores no Infisical (`secrets-manager run`) antes de subir o
+# compose. A exceção são as credenciais da machine identity (client-id e
+# client-secret), que viajam no payload do SSM por não existir outro canal sem SSH —
+# risco consciente e temporário, com o caminho correto em
+# `docs/app/06-pipeline-deploy.md` §4.
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'SHA ja publicado no Docker Hub (rollback). Vazio = SHA do ref disparado.'
+        required: false
+        type: string
+      skip_build:
+        description: 'Pula build+push e implanta a imagem que ja esta no Docker Hub.'
+        required: false
+        default: false
+        type: boolean
+      provision:
+        description: 'Roda terraform apply antes do deploy (infra derrubada).'
+        required: false
+        default: false
+        type: boolean
+
+# `contents: read` para o checkout; `actions: read` é o mínimo para o `gate` ler a
+# conclusão do CI de um dispatch manual. Nada escreve na API do GitHub.
+permissions:
+  contents: read
+  actions: read
+
+# Um deploy por ref, e sem cancelar o que está em curso: abortar entre `up -d` e
+# `prisma:deploy` deixa a stack meio atualizada, que é pior que esperar.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+# A sessão do Learner Lab só vale em us-east-1 (`infra/versions.tf`).
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: skill-finder
+  DOCKERHUB_USER: ${{ vars.DOCKERHUB_USERNAME }}
+
+jobs:
+  gate:
+    # `workflow_run` chega com qualquer conclusão; só o CI verde prossegue, e o
+    # filtro por `push` deixa de fora o CI de um PR que aponte para `main`.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      # O `gate` nao usa estes dois: so prova que existem, para um run sem
+      # credencial do Infisical reprovar aqui e nao depois do build inteiro.
+      INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+      INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+      REQUESTED_TAG: ${{ inputs.image_tag }}
+      WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+      DISPATCHED_SHA: ${{ github.sha }}
+    steps:
+      - name: Mask credentials
+        run: |
+          set -uo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+            INFISICAL_CLIENT_ID INFISICAL_CLIENT_SECRET; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Verify the lab session
+        run: |
+          set -uo pipefail
+          if ! account="$(aws sts get-caller-identity --query Account --output text 2>&1)"; then
+            echo "::error::credencial AWS recusada: ${account}"
+            {
+              echo "## Sessao do AWS Academy invalida"
+              echo ""
+              echo "Renove as credenciais em *AWS Details* e regrave os tres secrets:"
+              echo '`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "conta: ${account}"
+
+      - name: Prove the CI gate for a manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          sha="${REQUESTED_TAG:-$DISPATCHED_SHA}"
+          if ! [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::image_tag '${sha}' nao e um SHA de commit"
+            exit 1
+          fi
+          green="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=50" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length' 2>/dev/null || echo 0)"
+          if [ "${green:-0}" -lt 1 ]; then
+            echo "::error::nenhum run verde do CI para ${sha}; dispatch manual exige o mesmo gate do workflow_run"
+            exit 1
+          fi
+          echo "CI verde para ${sha}: ${green} run(s)"
+
+      - name: Resolve the deploy target
+        id: target
+        run: |
+          set -uo pipefail
+          sha="${REQUESTED_TAG:-${WORKFLOW_RUN_SHA:-$DISPATCHED_SHA}}"
+          if ! [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::tag de destino '${sha}' nao e um SHA de commit"
+            exit 1
+          fi
+          if [ -z "${DOCKERHUB_USER}" ]; then
+            echo "::error::variavel DOCKERHUB_USERNAME vazia; o build nao saberia onde publicar as imagens"
+            exit 1
+          fi
+          for name in INFISICAL_CLIENT_ID INFISICAL_CLIENT_SECRET; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::secret ${name} vazio; o deploy no host nao autenticaria no Infisical"
+              {
+                echo "## Credencial do Infisical ausente"
+                echo ""
+                echo "\`${name}\` esta vazio. Sem ele o job \`deploy\` morreria depois do build inteiro."
+                echo "Grave a machine identity (Universal Auth) e dispare de novo:"
+                echo '`gh secret set INFISICAL_CLIENT_ID` e `gh secret set INFISICAL_CLIENT_SECRET`.'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          done
+          {
+            echo "sha=${sha}"
+          } >> "$GITHUB_OUTPUT"
+          echo "sha: ${sha}"
+          echo "registry: docker.io/${DOCKERHUB_USER}"
+
+      - name: Fail fast when the host is missing
+        # Com `provision=true` a instância ainda pode não existir: quem resolve o
+        # host é o job `deploy`, depois do apply.
+        if: ${{ !inputs.provision }}
+        run: |
+          set -uo pipefail
+          found="$(aws ec2 describe-instances \
+            --filters "Name=tag:project,Values=${PROJECT_NAME}" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' --output text)"
+          if [ -z "$found" ]; then
+            echo "::error::nenhuma instancia 'running' com tag project=${PROJECT_NAME}"
+            {
+              echo "## Sem host"
+              echo ""
+              echo "Suba a infraestrutura (runbook §1) ou dispare este workflow com \`provision=true\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "instancias: ${found}"
+
+  build:
+    needs: gate
+    if: ${{ !inputs.skip_build }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Mask the registry token
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+            echo "::add-mask::${DOCKERHUB_TOKEN}"
+          fi
+
+      - name: Checkout the deployed commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push both images
+        # O SHA vem do `gate` (não de `github.sha`) para que um dispatch com
+        # `image_tag` publique a tag que o `deploy` vai puxar; no caminho automático
+        # os dois são o mesmo commit.
+        env:
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for part in "api:backend" "web:frontend"; do
+            repository="${part%%:*}"
+            context="${part##*:}"
+            image="${DOCKERHUB_USER}/skill-finder-${repository}:${SHA}"
+            docker build --target runtime -t "$image" "$context"
+            docker push "$image"
+          done
+
+      - name: Assert the SHA tag is in the registry
+        # A prova é o manifesto da tag no Docker Hub: o `build` não recebe credencial
+        # AWS, então não há API de registry para consultar. As tentativas cobrem a
+        # propagação do registro logo depois do push.
+        env:
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for repository in api web; do
+            image="${DOCKERHUB_USER}/skill-finder-${repository}:${SHA}"
+            found=0
+            for attempt in $(seq 1 12); do
+              if docker manifest inspect "$image" > /dev/null 2>&1; then
+                found=1
+                break
+              fi
+              sleep 5
+            done
+            if [ "$found" -ne 1 ]; then
+              echo "::error::tag ${image} nao encontrada no Docker Hub"
+              exit 1
+            fi
+            echo "tag publicada: ${image}"
+          done
+
+  provision:
+    needs: gate
+    if: ${{ inputs.provision }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      TF_IN_AUTOMATION: '1'
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+    steps:
+      - name: Mask credentials
+        run: |
+          set -uo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.17.2
+          terraform_wrapper: false
+
+      - name: Apply the infrastructure
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          # `infra/terraform.tfvars` e ignorado pelo Git: no runner nao existe, e as
+          # duas variaveis sem default chegam por `-var`. O bucket segue a regra de
+          # `scripts/bootstrap-state.sh` quando `vars.TF_STATE_BUCKET` nao esta setada.
+          bucket="${TF_STATE_BUCKET:-bcc-cloud-tfstate-${account}}"
+          cd infra
+          terraform init -input=false -no-color -backend-config="bucket=${bucket}"
+          terraform fmt -check -recursive
+          terraform validate -no-color
+          terraform plan -input=false -no-color \
+            -var="project_name=${PROJECT_NAME}" -var="state_bucket=${bucket}" \
+            -out=tfplan
+          terraform apply -input=false -no-color tfplan
+          terraform output -no-color
+
+  deploy:
+    needs: [gate, build, provision]
+    # `build` e `provision` podem ter sido pulados de propósito (rollback,
+    # `skip_build`, `provision=false`); `gate` nunca. `!cancelled()` mantém o
+    # cancelamento como cancelamento.
+    if: >-
+      !cancelled() && needs.gate.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.provision.result == 'success' || needs.provision.result == 'skipped')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      public_ip: ${{ steps.target.outputs.public_ip }}
+      # O `smoke` só enxerga o `needs` das suas dependências diretas: o SHA que ele
+      # publica no sumário tem de viajar de `gate` para `deploy` e de `deploy`
+      # para `smoke`.
+      sha: ${{ needs.gate.outputs.sha }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      SHA: ${{ needs.gate.outputs.sha }}
+      # Identificadores do projeto no Infisical, não segredos: o valor sai no log.
+      INFISICAL_PROJECT_ID: 2af53052-6e7a-4e59-a321-4525fa7fadae
+      INFISICAL_ENV: prod
+      INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+      INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+    steps:
+      - name: Mask credentials
+        run: |
+          set -uo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
+            INFISICAL_CLIENT_ID INFISICAL_CLIENT_SECRET; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Checkout the deployed commit
+        # O deploy nao precisa do repositorio para nada, exceto o `compose.yaml` e o
+        # override, que vao no payload do SSM.
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - name: Resolve the host
+        id: target
+        run: |
+          set -euo pipefail
+          found="$(aws ec2 describe-instances \
+            --filters "Name=tag:project,Values=${PROJECT_NAME}" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].[InstanceId,PublicIpAddress]' --output text)"
+          if [ -z "$found" ]; then
+            echo "::error::nenhuma instancia 'running' com tag project=${PROJECT_NAME}"
+            echo "Suba a infra (runbook §1) ou dispare com provision=true." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          line="$(printf '%s\n' "$found" | head -1)"
+          {
+            echo "instance_id=$(printf '%s' "$line" | cut -f1)"
+            echo "public_ip=$(printf '%s' "$line" | cut -f2)"
+          } >> "$GITHUB_OUTPUT"
+          printf 'host: %s\n' "$line"
+
+      - name: Wait for the SSM agent
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 24); do
+            status="$(aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=${INSTANCE_ID}" \
+              --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || true)"
+            if [ "$status" = "Online" ]; then
+              echo "SSM online em ${attempt} tentativa(s)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::agente SSM nao ficou Online em 240s na instancia ${INSTANCE_ID}"
+          echo "O canal do deploy e o SSM: confira o instance profile (LabInstanceProfile) e o servico amazon-ssm-agent." >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Prepare the SSM runner
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ssm-run.sh" <<'HELPER'
+          # ssm_run <titulo> <arquivo> <instancia> — envia o arquivo por
+          # AWS-RunShellScript, acompanha até o fim e devolve stdout/stderr no log.
+          # O script vai em base64 para não brigar com o JSON de `--parameters`.
+          ssm_run() {
+            local title="$1" script="$2" instance="$3"
+            local encoded parameters command_id status invocation
+            encoded="$(base64 -w 0 "$script")"
+            parameters="$(jq -nc --arg c "echo '${encoded}' | base64 -d | bash" '{commands: [$c]}')"
+            command_id="$(aws ssm send-command \
+              --document-name AWS-RunShellScript \
+              --instance-ids "$instance" \
+              --comment "$title" \
+              --timeout-seconds 900 \
+              --parameters "$parameters" \
+              --query 'Command.CommandId' --output text)"
+            echo "SSM ${title}: ${command_id}"
+            status="Pending"
+            for _ in $(seq 1 180); do
+              status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" \
+                --query 'Status' --output text 2>/dev/null || echo Pending)"
+              case "$status" in
+                Success|Failed|TimedOut|Cancelled) break ;;
+              esac
+              sleep 5
+            done
+            invocation="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" --output json 2>/dev/null || echo '{}')"
+            printf '%s' "$invocation" | jq -r '.StandardOutputContent // ""'
+            printf '%s' "$invocation" | jq -r '.StandardErrorContent // ""' >&2
+            if [ "$status" != "Success" ]; then
+              printf '::error::comando SSM %s terminou em %s\n' "$title" "$status"
+              return 1
+            fi
+          }
+          HELPER
+
+      - name: Deploy through SSM
+        # O trabalho acontece no host porque é lá que o Infisical entrega os segredos
+        # do `prod`: o runner nunca recebe `DATABASE_URL`, `ADMIN_TOKEN`,
+        # `IP_HASH_SALT` nem `LLM_API_KEY`. As credenciais da machine identity vão no
+        # comando (`printf %q` evita que um caractere especial quebre o script) e é
+        # isso que fica no histórico de invocações do SSM — risco documentado em
+        # `docs/app/06-pipeline-deploy.md` §4.
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/ssm-run.sh"
+          remote="$RUNNER_TEMP/deploy.sh"
+          {
+            printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+            printf 'INFISICAL_CLIENT_ID=%q\n' "$INFISICAL_CLIENT_ID"
+            printf 'INFISICAL_CLIENT_SECRET=%q\n' "$INFISICAL_CLIENT_SECRET"
+            printf 'INFISICAL_PROJECT_ID=%q\n' "$INFISICAL_PROJECT_ID"
+            printf 'INFISICAL_ENV=%q\n' "$INFISICAL_ENV"
+            printf 'SHA=%q\n' "$SHA"
+            printf 'DOCKERHUB_USER=%q\n' "$DOCKERHUB_USER"
+            # Os dois arquivos do compose vao no payload: o host pode ter a versao de
+            # um commit anterior — o override antigo exigia uma variavel de registry
+            # que nao existe mais e o `compose pull` morria nela. gzip+base64 mantem
+            # o comando dentro do limite do SSM.
+            printf 'COMPOSE_GZ=%q\n' "$(gzip -9 -c compose.yaml | base64 -w 0)"
+            printf 'COMPOSE_PROD_GZ=%q\n' "$(gzip -9 -c infra/deploy/compose.prod.yaml | base64 -w 0)"
+            cat <<'REMOTE'
+          # O AWS-RunShellScript executa como root: `apt-get` e o instalador da CLI
+          # abaixo rodam sem `sudo`.
+          #
+          # `umask 077`: o login da CLI grava a sessao em `~/.infisical` do root; o
+          # `trap` faz o logout seja qual for o desfecho, e o mesmo trap apaga o
+          # script intermediario.
+          umask 077
+          step=/tmp/skill-finder-deploy-step.sh
+          logged_in=0
+          cleanup() {
+            local rc=$?
+            if [ "$logged_in" = 1 ]; then
+              infisical logout > /dev/null 2>&1 || true
+            fi
+            rm -f "$step" /tmp/infisical-setup.sh
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
+          mkdir -p /opt/app/infra/deploy
+          cd /opt/app
+          printf '%s' "$COMPOSE_GZ" | base64 -d | gzip -dc > compose.yaml
+          printf '%s' "$COMPOSE_PROD_GZ" | base64 -d | gzip -dc > infra/deploy/compose.prod.yaml
+          for arquivo in compose.yaml infra/deploy/compose.prod.yaml; do
+            if [ ! -s "$arquivo" ]; then
+              echo "ERRO: ${arquivo} vazio depois do payload do SSM; nada foi implantado" >&2
+              exit 1
+            fi
+          done
+          echo "compose: $(sha256sum compose.yaml infra/deploy/compose.prod.yaml | cut -c1-12 | tr '\n' ' ')"
+
+          # O `.env` da VM saiu do fluxo: os segredos vêm do Infisical e o compose
+          # roda com `--env-file /dev/null`, então um resto de execução anterior não
+          # influencia o deploy. Não apago nada sem ordem — só aviso.
+          if [ -f .env ]; then
+            echo "AVISO: /opt/app/.env existe e NAO e lido por este deploy (segredos do Infisical). Apague depois de validar; o pipeline nao apaga." >&2
+          fi
+
+          if ! command -v infisical > /dev/null 2>&1; then
+            echo "infisical: CLI ausente neste host, instalando pelo repositorio oficial"
+            if ! command -v curl > /dev/null 2>&1; then
+              echo "ERRO: curl ausente no host; sem ele nao da para instalar a CLI do Infisical" >&2
+              exit 1
+            fi
+            export DEBIAN_FRONTEND=noninteractive
+            curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/infisical-setup.sh 'https://artifacts-cli.infisical.com/setup.deb.sh'
+            bash /tmp/infisical-setup.sh && rm -f /tmp/infisical-setup.sh
+            apt-get install -y --no-install-recommends infisical
+          fi
+          if ! command -v infisical > /dev/null 2>&1; then
+            echo "ERRO: CLI do Infisical nao ficou disponivel apos a instalacao" >&2
+            exit 1
+          fi
+          echo "infisical: $(infisical --version 2>&1 | head -1)"
+
+          token="$(infisical login --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" --client-secret="$INFISICAL_CLIENT_SECRET" \
+            --silent --plain)"
+          if [ -z "$token" ]; then
+            echo "ERRO: Universal Auth nao devolveu token; confira a machine identity e o papel read no projeto" >&2
+            exit 1
+          fi
+          logged_in=1
+          export INFISICAL_TOKEN="$token"
+
+          # Não são segredo e por isso não estão no Infisical: o registry público, a
+          # tag do commit, a porta da borda e a fonte real do catálogo.
+          export DOCKERHUB_USER IMAGE_TAG="$SHA" WEB_PORT=80 SKILL_SOURCE_KIND=html
+          export POSTGRES_USER=skills POSTGRES_DB=skills
+
+          cat > "$step" <<'STEP'
+          set -euo pipefail
+          cd /opt/app
+
+          # `--env-file /dev/null` tira um `/opt/app/.env` velho da interpolação: o
+          # ambiente (Infisical + os exports acima) passa a ser a única fonte. Se o
+          # compose do host for antigo demais para a flag, o deploy segue com aviso em
+          # vez de falhar.
+          env_file_args=()
+          if docker compose --help 2> /dev/null | grep -q -- '--env-file'; then
+            env_file_args=(--env-file /dev/null)
+          else
+            echo "AVISO: compose sem --env-file; um /opt/app/.env velho pode influenciar a interpolacao" >&2
+          fi
+
+          compose() {
+            docker compose "${env_file_args[@]}" -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod "$@"
+          }
+
+          # --no-build: a imagem vem do Docker Hub. Sem a flag o compose.yaml
+          # construiria api e web neste host (t3.small, 2 GB) em vez de baixar o que
+          # o build publicou; com pull_policy: always o digest e sempre o do registry.
+          compose pull
+          compose up -d --no-build
+          compose ps
+          compose exec -T api npm run --silent prisma:deploy
+
+          # A imagem runtime nao tem scripts/ nem ts-node, entao a ingestao e a rota
+          # admin. O ADMIN_TOKEN chega pelo ambiente do Infisical e nunca sai daqui.
+          if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "ERRO: ADMIN_TOKEN ausente no ambiente do Infisical" >&2
+            exit 1
+          fi
+          code="$(curl -sS -m 120 -o /tmp/ingest.json -w '%{http_code}' \
+            -X POST "http://localhost:${WEB_PORT}/api/v1/admin/ingest" \
+            -H "X-Admin-Token: ${ADMIN_TOKEN}" -H 'Content-Type: application/json' \
+            -d '{"source_keys":["vercel-labs/skills/find-skills","anthropics/skills/webapp-testing"]}')"
+          head -c 400 /tmp/ingest.json; echo
+          case "$code" in
+            202|409) echo "ingestao: ${code}" ;;
+            401) echo "ERRO: ADMIN_TOKEN recusado pela API (401)" >&2; exit 1 ;;
+            *) echo "AVISO: ingestao respondeu ${code}; o deploy segue e o catalogo nao mudou" >&2 ;;
+          esac
+          STEP
+
+          infisical secrets-manager run --projectId "$INFISICAL_PROJECT_ID" --env "$INFISICAL_ENV" \
+            -- bash "$step"
+          REMOTE
+          } > "$remote"
+          ssm_run deploy "$remote" "$INSTANCE_ID"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          PUBLIC_IP: ${{ steps.target.outputs.public_ip }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## Deploy"
+            echo ""
+            echo "| item | valor |"
+            echo "| --- | --- |"
+            echo "| commit | \`${SHA}\` |"
+            echo "| IP publico | \`${PUBLIC_IP:-desconhecido}\` |"
+            echo "| imagens | \`${DOCKERHUB_USER}/skill-finder-api:${SHA}\`, \`${DOCKERHUB_USER}/skill-finder-web:${SHA}\` |"
+            echo "| registry | \`docker.io/${DOCKERHUB_USER}\` (publico, pull anonimo) |"
+            echo "| segredos | \`Infisical prod\` lido no host |"
+            echo "| gatilho | \`${EVENT_NAME}\` |"
+            echo ""
+            echo "Rollback: dispare com \`image_tag=<SHA anterior>\` e \`skip_build=true\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      BASE_URL: http://${{ needs.deploy.outputs.public_ip }}
+    steps:
+      - name: Wait for the edge
+        run: |
+          set -uo pipefail
+          for attempt in $(seq 1 24); do
+            if curl -fsS -m 5 -o /dev/null "${BASE_URL}/healthz"; then
+              echo "borda respondendo (tentativa ${attempt})"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::${BASE_URL}/healthz nao respondeu em 120s"
+          exit 1
+
+      - name: smoke /healthz is JSON and ok
+        run: |
+          set -euo pipefail
+          body="$(curl -fsS -m 10 "${BASE_URL}/healthz")"
+          echo "$body"
+          printf '%s' "$body" | jq -e '.status == "ok"' > /dev/null
+
+      - name: smoke /readyz is JSON and ok
+        run: |
+          set -euo pipefail
+          body="$(curl -fsS -m 15 "${BASE_URL}/readyz")"
+          echo "$body"
+          printf '%s' "$body" | jq -e '.status == "ok"' > /dev/null
+
+      - name: smoke / serves the SPA as HTML
+        run: |
+          set -euo pipefail
+          content_type="$(curl -fsS -m 10 -o "$RUNNER_TEMP/root.html" -w '%{content_type}' "${BASE_URL}/")"
+          echo "content-type: ${content_type}"
+          case "$content_type" in
+            text/html*) ;;
+            *) echo "::error::raiz serviu '${content_type}', esperado text/html"; exit 1 ;;
+          esac
+          grep -qi '<!doctype html' "$RUNNER_TEMP/root.html"
+
+      - name: smoke admin ingest answers 401 without a token
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -m 15 -o "$RUNNER_TEMP/ingest-denied.json" -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/admin/ingest" \
+            -H 'Content-Type: application/json' \
+            -d '{"source_keys":["vercel-labs/skills/find-skills"]}')"
+          echo "status: ${code}"
+          head -c 300 "$RUNNER_TEMP/ingest-denied.json"; echo
+          if [ "$code" != "401" ]; then
+            echo "::error::ingestao sem token respondeu ${code}, esperado 401"
+            exit 1
+          fi
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          SHA: ${{ needs.deploy.outputs.sha }}
+        run: |
+          set -uo pipefail
+          probe() {
+            curl -sS -m 15 -o - -w '|%{http_code}' "$1" 2>&1 | tr '\n' ' ' | head -c 500 || true
+          }
+          healthz="$(probe "${BASE_URL}/healthz")"
+          readyz="$(probe "${BASE_URL}/readyz")"
+          root="$(curl -sS -m 10 -o /dev/null -w '%{http_code} %{content_type}' "${BASE_URL}/" 2>&1 || true)"
+          ingest="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/admin/ingest" -H 'Content-Type: application/json' \
+            -d '{"source_keys":["vercel-labs/skills/find-skills"]}' 2>&1 || true)"
+          {
+            echo "## Smoke pos-deploy"
+            echo ""
+            echo "URL: \`${BASE_URL}\` — SHA implantado: \`${SHA}\`."
+            echo ""
+            echo "| checagem | esperado | observado |"
+            echo "| --- | --- | --- |"
+            echo "| \`GET /healthz\` | 200, JSON \`status: ok\` | \`${healthz}\` |"
+            echo "| \`GET /readyz\` | 200, JSON \`status: ok\` | \`${readyz}\` |"
+            echo "| \`GET /\` | 200 \`text/html\` | \`${root}\` |"
+            echo "| \`POST /api/v1/admin/ingest\` sem token | 401 | \`${ingest}\` |"
+            echo ""
+            echo "Reprovou? Rollback: dispatch com \`image_tag=<SHA anterior>\` e \`skip_build=true\`."
+          } >> "$GITHUB_STEP_SUMMARY"

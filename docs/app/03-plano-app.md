@@ -189,7 +189,7 @@ flowchart LR
 | 1 | Compose válido | `docker compose config -q` → exit 0 **com `.env` preenchido** (sem `.env` ele falha de propósito, exigindo `POSTGRES_PASSWORD`) |
 | 2 | Saúde verde local | `curl -fsS localhost:8080/healthz` e `/readyz` → 200 |
 | 3 | Métrica exposta | `curl -sS localhost:8080/metrics \| grep -c http_requests_total` ≥ 1 |
-| 4 | Migration roda | `docker compose run --rm api pnpm prisma migrate deploy` → exit 0; segunda execução idempotente |
+| 4 | Migration roda | `docker compose run --rm api npm run --silent prisma:deploy` → exit 0; segunda execução idempotente |
 | 5 | Log estruturado | `docker compose logs api \| tail -1 \| jq -e '.request_id'` |
 | 6 | Sem valor no exemplo | `grep -E '=.+' .env.example` → vazio |
 
@@ -468,7 +468,7 @@ fechar o número (a §9 hoje soma 4,50 pd para F2.0–F2.9 e não inclui a F2.10
 - [ ] *Ready:* F2.1 congelado.
 - [ ] `docker compose config -q` verde
 - [ ] `/healthz`, `/readyz` 200 e `/metrics` com `http_requests_total`
-- [ ] `pnpm prisma migrate deploy` idempotente
+- [ ] `npm run --silent prisma:deploy` idempotente (no container `api`; o `pnpm` não existe no runtime)
 - [ ] `Dockerfile` com `USER` não-root e `.dockerignore`
 - [ ] Log JSON com `request_id` e sem segredo
 
