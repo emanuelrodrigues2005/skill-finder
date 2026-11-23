@@ -17,9 +17,9 @@ flowchart LR
   MANUAL["workflow_dispatch"] --> GATE
   GATE["gate<br/>sessão AWS + CI verde + host"] --> BUILD["build<br/>Docker Hub: api e web, tag = SHA"]
   GATE --> PROV["provision<br/>terraform apply (desligado por padrão)"]
-  BUILD --> DEPLOY["deploy<br/>SSM: Infisical no host, pull, up -d --no-build, migrate, ingest"]
+  BUILD --> DEPLOY["deploy<br/>SSM: Infisical no host, pull, up -d --no-build, migrate, ingest, --profile obs"]
   PROV --> DEPLOY
-  DEPLOY --> SMOKE["smoke<br/>/healthz, /readyz, /, 401"]
+  DEPLOY --> SMOKE["smoke<br/>/healthz, /readyz, /, 401, /grafana/, /metrics"]
 ```
 
 | job | `needs` | o que faz | quando roda |
@@ -27,8 +27,24 @@ flowchart LR
 | `gate` | — | `sts get-caller-identity`, resolve `sha`, exige `vars.DOCKERHUB_USERNAME` e os secrets do Infisical presentes, CI verde e host de pé | sempre (a checagem de host é pulada com `provision=true`) |
 | `build` | `gate` | `docker build --target runtime` das duas imagens, `push` no Docker Hub com tag = SHA do commit e `docker manifest inspect` da tag | `skip_build != true` |
 | `provision` | `gate` | `terraform init/validate/plan/apply` com as variáveis que o `tfvars` (ignorado pelo Git) daria | `provision == true` |
-| `deploy` | `gate`, `build`, `provision` | resolve o host, espera o agente SSM, grava `compose.yaml` e o override **vindos do payload**, garante a CLI do Infisical, autentica a machine identity e roda `secrets-manager run` sobre `compose pull`, `up -d --no-build`, `npm run --silent prisma:deploy` e a ingestão pelo endpoint admin | `gate` verde e nenhuma dependência falhou |
-| `smoke` | `deploy` | `/healthz` JSON, `/readyz` JSON, `/` HTML e `POST /api/v1/admin/ingest` sem token → 401 | `deploy` verde |
+| `deploy` | `gate`, `build`, `provision` | resolve o host, espera o agente SSM, grava `compose.yaml`, o override **e `observability/` vindos do payload**, garante a CLI do Infisical, autentica a machine identity e roda `secrets-manager run` sobre `compose pull`, `up -d --no-build`, `npm run --silent prisma:deploy`, a ingestão pelo endpoint admin e, por último, `--profile obs up -d` | `gate` verde e nenhuma dependência falhou |
+| `smoke` | `deploy` | `/healthz` JSON, `/readyz` JSON, `/` HTML, `POST /api/v1/admin/ingest` sem token → 401, `/grafana/` → 302 ou 401 e `/metrics` → 404 | `deploy` verde (`if` explícito, ver abaixo) |
+
+**A stack de observabilidade entra no mesmo deploy, e a falha dela não é a falha da
+aplicação.** O último passo do script remoto roda `--profile obs up -d --no-build` dentro do
+mesmo `infisical secrets-manager run` — é de lá que vem `${GRAFANA_PASSWORD}`. Se ele falhar, a
+API, o Postgres e o `web` continuam implantados, migrados e ingeridos: o job fica vermelho e o
+sumário escreve "app no ar, observabilidade fora", porque repetir o dispatch basta e não há
+rollback da aplicação a fazer. Os arquivos de `observability/` viajam no payload pelo mesmo motivo
+dos compose: sem eles o Docker cria um diretório vazio no lugar do bind mount, `prometheus`,
+`loki` e `promtail` entram em `restart loop` e o `up -d` responde `0` do mesmo jeito.
+
+**O `smoke` declara o `if` explicitamente porque o implícito mente.** Um job com `needs` herda a
+condição `success()`, e todo dispatch pula um job de propósito: `provision` no caminho normal,
+`build` no rollback. O `deploy` já escapava disso com `!cancelled() && needs.*.result`; o `smoke`
+não, e o run verde de 2026-11-21 entregou `deploy: success` com `smoke: skipped` sem rodar um
+passo — a borda nunca era verificada. Agora a condição depende só do veredicto do `deploy`, e o
+primeiro passo do job reprova com mensagem própria se `needs.deploy.outputs.public_ip` vier vazio.
 
 `provision` é o único job que mexe em infraestrutura, e está **desligado por padrão**: o caminho
 normal assume a stack da F3 de pé. Ele existe para o dia em que o ambiente tiver sido destruído e
@@ -136,16 +152,24 @@ se o manifesto não estiver lá. O `pull` do deploy continua sendo a prova final
 `pull_policy: always` do `infra/deploy/compose.prod.yaml`, o digest é sempre o do registry — tag
 igual com imagem local velha não passa.
 
-**Os dois arquivos do compose viajam no payload.** O `cd /opt/app` encontrava o `compose.yaml` e o
-`infra/deploy/compose.prod.yaml` de um deploy anterior — e o override daquele commit exigia
-`${ECR_REGISTRY:?}`, então o `compose pull` falhava em "required variable ECR_REGISTRY is missing a
-value" antes de baixar qualquer imagem. Cópia manual não resolve para sempre: o job `deploy` faz
-checkout do commit implantado e envia os dois arquivos dentro do comando do SSM, em `base64` de
-`gzip`; o host os escreve em `/opt/app` antes de qualquer `compose pull`, e a implantação deixa de
-depender do que sobrou no disco. O `gzip` existe porque o parâmetro `commands` do SSM tem limite de
-tamanho: os dois arquivos somam 7,3 KB e comprimidos levam o comando inteiro a ~12 KB, com folga.
-Depois de escrever, o script confere que cada arquivo ficou não vazio e publica os `sha256` curtos no
-log; se a decodificação sair vazia, o deploy para antes do `pull`.
+**O compose e a configuração da observabilidade viajam no payload.** O `cd /opt/app` encontrava o
+`compose.yaml` e o `infra/deploy/compose.prod.yaml` de um deploy anterior — e o override daquele
+commit exigia `${ECR_REGISTRY:?}`, então o `compose pull` falhava em "required variable ECR_REGISTRY
+is missing a value" antes de baixar qualquer imagem. Cópia manual não resolve para sempre: o job
+`deploy` faz checkout do commit implantado e envia um `tar.gz` com os dois arquivos do compose **e
+`observability/`** em `base64`; o host extrai em `/opt/app` antes de qualquer `compose pull`, e a
+implantação deixa de depender do que sobrou no disco. O host não tem checkout, e bind mount sem
+arquivo faz o Docker criar um diretório vazio no lugar: `prometheus`, `loki` e `promtail` subiriam em
+`restart loop` e o `up -d` responderia `0` do mesmo jeito.
+
+Esse payload é um **comando SSM separado** (*Ship the compose files and the obs config*), e não por
+organização: o parâmetro `commands` do `SendCommand` para em ~24 KB, e os 12,4 KB do tar já vão em
+`base64` dentro de um script que o helper *ainda* converte em `base64` — junto do script do deploy
+(que carrega as credenciais da machine identity) o comando passaria de 31 KB e a AWS recusaria o
+envio. Separados, o payload fica em ~18 KB e o deploy em ~8 KB, com folga. `observability/README.md`
+não vai no tar: é documentação, não configuração. Depois de extrair, o script confere arquivo por
+arquivo (inclusive `main.json` e o provisioning) e publica os `sha256` curtos no log; se algum sair
+vazio, o deploy para antes do `pull`.
 
 **Por que o Infisical roda no host, e não no runner.** O segredo tem de chegar ao processo que vai
 usar: em produção é o `docker compose` do host que precisa de `DATABASE_URL`, `POSTGRES_PASSWORD`,
@@ -283,10 +307,34 @@ gh workflow run deploy.yml --ref main -f skip_build=true
 gh workflow run deploy.yml --ref main -f image_tag=<sha-anterior> -f skip_build=true
 ```
 
-O caminho é o mesmo do deploy (Infisical, pull, `up -d --no-build`, migração, smoke), então o
+O caminho é o mesmo do deploy (Infisical, pull, `up -d --no-build`, migração, obs, smoke), então o
 rollback também é verificado. Migrations aplicadas **não** voltam: elas são para frente por desenho, e
 é por isso que a migração entra antes do smoke. Se a tag anterior não existir mais no Docker Hub, o
 rollback é republicar o commit antigo (build a partir dele).
+
+**A stack de observabilidade sobe no mesmo dispatch, sem comando extra.** O último passo do SSM roda
+`docker compose --env-file /dev/null -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod
+--profile obs up -d --no-build` com `observability/` já escrito em `/opt/app` pelo payload. O que
+muda na operação:
+
+- **Grafana na borda**: `http://<host_public_ip>/grafana/` responde `302` para o login (ou `401` em
+  rota de API sem sessão). Nada de painel aberto: `GF_AUTH_ANONYMOUS_ENABLED` é `false` e a senha do
+  `admin` vem de `${GRAFANA_PASSWORD}` no Infisical (env `prod`).
+- **A borda não depende da stack obs para subir.** O `proxy_pass` do `/grafana/` usa uma variável com
+  `resolver 127.0.0.11` (DNS do Docker), e não o nome literal: upstream estático é resolvido **no
+  boot**, e sem o container `grafana` na rede o nginx morreria com `host not found in upstream`,
+  levando a API junto — inclusive no `make up` de dev, onde o profile `obs` não sobe. Com a variável,
+  a resolução é por requisição e o pior caso é `502` em `/grafana/`, com o resto do site no ar. Sem
+  barra final no destino: com ela o nginx trocaria `/grafana/x` por `/x` e o Grafana, que serve em
+  sub-path, responderia `404` em toda rota.
+- **Prometheus, Loki e node-exporter ficam em loopback** (`127.0.0.1:9090`, `:3100`, `:9100`): sem
+  autenticação, quem os expõe é o Grafana, e nenhum deles é roteado pelo nginx. `/metrics` da
+  aplicação continua `404` na borda.
+- **Conferir depois do deploy**: `docker compose --profile obs ps` no host (o `up -d` responde `0`
+  mesmo com container em `restart loop`, então o `ps` é a prova de vida barata); os comandos de cada
+  painel estão em `observability/README.md`.
+- **Se a stack obs não subir**, o app continua no ar e o job fica vermelho com "app no ar,
+  observabilidade fora" no sumário — basta corrigir e repetir o dispatch.
 
 ## 6. O que o smoke prova
 
@@ -299,12 +347,14 @@ em qualquer desvio:
 | `GET /readyz` | `200`, JSON com `status: "ok"` | API viva e Postgres fora: o envelope `NOT_READY` aparece no corpo |
 | `GET /` | `200`, `text/html` com `<!doctype html>` | a SPA não subiu ou o `web` está servindo outro conteúdo |
 | `POST /api/v1/admin/ingest` sem token | `401` | o guard do `X-Admin-Token` não está na frente da rota admin |
+| `GET /grafana/` | `302` (login) ou `401` | `200` é o Grafana aberto na internet; `404` é o proxy apontando para um Grafana sem `GF_SERVER_SERVE_FROM_SUB_PATH`; `502` é a stack obs fora |
+| `GET /metrics` | `404` | a borda parou de fechar a rota e os contadores de latência por rota estão públicos |
 
-Antes das quatro, um passo espera a borda responder por até 2 min (o nginx leva alguns segundos para
+Antes das seis, um passo espera a borda responder por até 2 min (o nginx leva alguns segundos para
 ficar pronto depois do `up`). O `$GITHUB_STEP_SUMMARY` do job `deploy` publica o SHA, o IP público,
-as duas imagens e o registry; o do `smoke` publica a resposta observada de cada checagem. Nenhum
-segredo entra no sumário: o `ADMIN_TOKEN` é lido do ambiente do Infisical dentro do host e nunca sai
-dele.
+as duas imagens, o registry e o veredicto da observabilidade; o do `smoke` publica a resposta
+observada de cada checagem. Nenhum segredo entra no sumário: o `ADMIN_TOKEN` é lido do ambiente do
+Infisical dentro do host e nunca sai dele.
 
 ## 7. Permissões, segredos e custo
 
@@ -319,6 +369,11 @@ dele.
   apenas para reprovar cedo quando faltam (`[ -z ]`, nunca as usa); `smoke` não tem segredo nenhum.
 - Custo: ~6–12 min de runner por deploy, duas imagens pequenas, nenhum recurso AWS novo (o
   `provision` só roda sob demanda) e nenhum custo de Docker Hub ou Infisical no plano gratuito.
+- Memória: `infra/deploy/compose.prod.yaml` fixa `mem_limit` em `api` 600M, `postgres` 512M e `web`
+  96M; o `compose.yaml` já limita os cinco da stack obs (1,22 GiB somados). **A soma passa dos 2 GB
+  do `t3.small`** — os tetos são por container, não reservas, e a stack vive disso porque nenhum
+  serviço chega ao próprio limite em regime normal. Se o host começar a matar processo por OOM, a
+  correção é reduzir teto (Grafana e Loki são os maiores) ou trocar a instância, não remover o limite.
 
 ## 8. Ações pinadas
 
@@ -358,6 +413,10 @@ pendente de uma sessão do lab, e cada item vira evidência em `docs/evidencias/
    no 2.40 local; se o host tiver versão anterior, o deploy avisa em vez de falhar).
 9. `deploy-preflight.sh` na versão atual (seis secrets, `DOCKERHUB_USERNAME` e as invariantes) contra
    um repositório real, e o runbook §1.5 reescrito para o caminho sem `.env`, ou marcado como legado.
+10. A stack obs no host real: `docker compose --profile obs ps` com os cinco containers de pé,
+    `http://<host>/grafana/` respondendo `302` e um painel desenhando (o `prometheus.yml` do
+    repositório precisa alcançar `api:8000` pela rede do compose). O smoke cobre o Grafana pela
+    borda; **Prometheus, Loki e Promtail não têm asserção** — só o `ps` do log do SSM.
 
 ## 10. Dívida conhecida
 
@@ -382,3 +441,15 @@ de hoje; todos têm o caminho de correção ao lado.
    mão num script separado: o workflow pode ganhar uma invariante e o preflight continuar verde.
    Correção: `actionlint` no CI para o YAML e um único `scripts/dev/deploy-preflight.sh` que lê as
    regras de um arquivo de dados, em vez de duas listas para manter.
+5. **`GF_SERVER_SERVE_FROM_SUB_PATH` e `GF_SERVER_ROOT_URL` moram no override de prod, não no
+   `compose.yaml`.** A #62 precisava de `/grafana/` na borda e o `compose.yaml` estava fora do escopo
+   dela; o efeito é que `make PROFILE=obs up` em dev continua servindo o Grafana na raiz e o prefixo
+   `/grafana/` do nginx responde `404` lá. Correção: mover as duas chaves para o serviço `grafana` do
+   `compose.yaml` e apagar o bloco do override. O `%` fica: `root_url` com `%(protocol)s://%(domain)s/grafana/`
+   só resolve host absoluto em e-mail e OAuth, nunca na navegação.
+6. **A borda assume o DNS embutido do Docker.** O `/grafana/` resolve o upstream em tempo de
+   requisição contra `127.0.0.11`, que é o resolver das redes *user-defined* do compose. Se o `web`
+   sair desse modelo (host network, Kubernetes, outro orquestrador), o `resolver` aponta para um
+   endereço que não responde e `/grafana/` fica em `502` — o resto do site não é afetado. Correção
+   nesse dia: trocar o `resolver` pelo do ambiente (CoreDNS/`kube-dns`) ou voltar ao nome literal no
+   `proxy_pass`, aceitando que o nginx passe a exigir a stack obs para subir.

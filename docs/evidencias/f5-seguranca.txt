@@ -1,0 +1,180 @@
+F5 — Evidências de segurança e gerenciamento de segredos (issue #19)
+====================================================================
+
+Data: 2026-11-23
+Checkout onde as provas locais rodaram: branch dev @ a44bc43
+Run de deploy usado como prova: 44850515112 (main @ 2cdfb7e1ae50dcbcb94937f440a34eaed6b33fc8,
+2026-11-21, job deploy 136681134119 verde)
+Gate de origem: docs/04-plano-de-execucao.md §3/F5 (tarefas 8–12) e §8/F5
+Modelo de segredos: docs/seguranca.md
+
+REGRA DESTE ARQUIVO: nenhum valor de segredo aparece aqui. Só nome, comprimento,
+contagem e resultado. Os comandos estão na forma em que foram rodados, todos por
+`wsl.exe -e bash -lc` (regra 8 do AGENTS.md).
+
+
+1. Cofre: os seis segredos do ambiente `prod`
+---------------------------------------------
+
+Projeto `2af53052-6e7a-4e59-a321-4525fa7fadae`, ambiente `prod`, CLI 0.45.13 no WSL
+com sessão de login ativa.
+
+    $ infisical secrets-manager secrets get \
+        --projectId 2af53052-6e7a-4e59-a321-4525fa7fadae --env prod
+
+    │ SECRET NAME       │ SECRET VALUE │ SECRET TYPE │
+    │ ADMIN_TOKEN       │ ***          │ shared      │
+    │ DATABASE_URL      │ ***          │ shared      │
+    │ GRAFANA_PASSWORD  │ ***          │ shared      │
+    │ IP_HASH_SALT      │ ***          │ shared      │
+    │ LLM_API_KEY       │ ***          │ shared      │
+    │ POSTGRES_PASSWORD │ ***          │ shared      │
+
+A coluna de valor foi redigida **à mão** nesta transcrição: ao contrário do que se
+esperava, a CLI 0.45.13 **imprime os valores em claro** nesta subcomando (`--show-values`
+só existe em `create`/`update`, onde a tabela vem mascarada por padrão). Achado registrado
+em `docs/seguranca.md` §5; nenhum valor foi copiado para arquivo, log ou commit.
+
+Comprimentos, medidos sem exibir o valor:
+
+    $ infisical secrets-manager secrets get <NOME> \
+        --projectId 2af53052-6e7a-4e59-a321-4525fa7fadae --env prod --plain | tr -d '\n' | wc -c
+
+    ADMIN_TOKEN        64
+    DATABASE_URL      105
+    IP_HASH_SALT       64
+    LLM_API_KEY        51
+    POSTGRES_PASSWORD  64
+    GRAFANA_PASSWORD   48
+
+`GRAFANA_PASSWORD` foi criada nesta sessão (issue #19). Comando, com o valor gerado por
+`openssl rand -hex 24` e nunca impresso:
+
+    $ val=$(openssl rand -hex 24)
+    $ infisical secrets-manager secrets create "GRAFANA_PASSWORD=$val" \
+        --projectId 2af53052-6e7a-4e59-a321-4525fa7fadae --env prod
+    exit=0
+    1 linha contendo GRAFANA_PASSWORD na saída (mascarada por padrão em `create`)
+    len=48
+
+Antes dela, o ambiente `prod` tinha cinco segredos; o Grafana subiria com a senha default
+do fabricante (`compose.yaml:299` interpola `${GRAFANA_PASSWORD}` sem valor de fallback).
+
+
+2. `gitleaks detect` no repositório (histórico de commits)
+----------------------------------------------------------
+
+O binário não existe no WSL desta máquina, então a varredura rodou pela imagem oficial
+pinada por tag — o plano B que o próprio `ci.yml:413-418` documenta:
+
+    $ docker run --rm -v /mnt/c/Users/Lima02/Documents/bcc/cloud:/repo -w /repo \
+        zricethezav/gitleaks:latest detect --no-banner --redact
+
+    INF 99 commits scanned.
+    INF scanned ~5052359 bytes (5.05 MB) in 1m6.3s
+    INF no leaks found
+    exit=0
+
+Versão do scanner: `zricethezav/gitleaks:latest` = **v8.30.1**
+(`docker run --rm zricethezav/gitleaks:latest version`).
+No CI do repositório o mesmo trabalho é do job `secrets` (`gitleaks/gitleaks-action@v3`,
+`ci.yml:419-435`), com `fetch-depth: 0` para varrer o histórico.
+
+
+3. `gitleaks detect --no-git --source backend`
+----------------------------------------------
+
+    $ docker run --rm -v /mnt/c/Users/Lima02/Documents/bcc/cloud:/repo -w /repo \
+        zricethezav/gitleaks:latest detect --no-git --source backend --no-banner \
+        --redact --verbose
+
+    INF scanned ~3016491 bytes (3.02 MB) in 2.18s
+    INF no leaks found
+    exit=0
+
+O volume lido (3,02 MB) é compatível com a árvore versionada de `backend/` (1,60 MB em 183
+arquivos, `git ls-files -z backend | xargs -0 cat | wc -c`) e incompatível com
+`backend/node_modules`, `dist` e `coverage` — que estão no `.gitignore` e ficaram fora do
+scan.
+
+
+4. Log de deploy sem segredo: `***` no lugar dos valores
+--------------------------------------------------------
+
+    $ gh run view 44850515112 --log
+    (saiu vazio neste ambiente: exit 0 e 0 bytes — o download do arquivo de log não
+     completou. Mesma fonte, pelo endpoint da API:)
+
+    $ gh api repos/emanuelrodrigues2005/skill-finder/actions/jobs/136681134119/logs \
+        > job.log
+    77430 bytes
+
+    $ wc -l job.log                                 1019
+    $ grep -cF '***' job.log                          37
+    $ grep -cF 'oc_sk_' job.log                        0
+    $ grep -cF 'postgresql://skills:' job.log          0
+    $ grep -cF 'skillsdev' job.log                     0
+
+Amostra das linhas mascaradas (as cinco credenciais que passam pelo runner):
+
+    AWS_ACCESS_KEY_ID: ***
+    AWS_SECRET_ACCESS_KEY: ***
+    AWS_SESSION_TOKEN: ***
+    INFISICAL_CLIENT_ID: ***
+    INFISICAL_CLIENT_SECRET: ***
+
+Nenhum dos seis segredos de aplicação aparece no log — eles não passam pelo runner: quem
+lê o cofre é o host, no momento do deploy (item 5).
+
+
+5. Prova de que o host leu o cofre no deploy (run 44850515112)
+--------------------------------------------------------------
+
+Extraído do mesmo `job.log`:
+
+    INFISICAL_CLI     infisical: infisical version 0.45.13      (instalada no host pelo
+                                                                setup.deb.sh, na hora)
+    COMPOSE_PS        skills-search-api-1   emanuelr05/skill-finder-api:2cdfb7e1...
+                      skills-search-postgres-1   postgres:16-alpine
+                      skills-search-web-1   emanuelr05/skill-finder-web:2cdfb7e1...
+    MIGRACOES         All migrations have been successfully applied.
+                      (o `DATABASE_URL` do Prisma veio do ambiente do cofre)
+    INGESTAO          {"request_id":"93f5...","status":"ok",...}
+                      ingestao: 202
+                      (o `X-Admin-Token` veio do `ADMIN_TOKEN` do cofre; o workflow
+                       aborta antes se ele faltar)
+
+O job `smoke` desse run ficou `skipped` (`gh api .../runs/44850515112/jobs`:
+gate/build/deploy `success`, provision/smoke `skipped`), então o `/readyz` **não** foi
+exercitado nele: a prova de que a API subiu é a migração do Prisma aplicada e a ingestão
+respondendo 202 no mesmo comando.
+
+
+6. Nenhum arquivo de segredo versionado
+---------------------------------------
+
+    $ git ls-files | grep -E '(^|/)\.env'
+    .env.example
+    $ git log --all --full-history --oneline -- '*.env' | wc -l
+    0
+
+O `.env` da raiz existe na máquina, mas é ignorado pelo Git e não está no histórico.
+
+
+7. O que NÃO foi verificado nesta sessão (e o comando que fecharia)
+-------------------------------------------------------------------
+
+- **Papel da machine identity (`Viewer`/read-only).** A CLI 0.45.13 não expõe a role de uma
+  identidade; o único jeito é o painel `Access Control → Machine Identities`. Sem esse
+  papel, `infisical login --method=universal-auth` ainda devolve token, e o deploy falha
+  depois, na leitura — não no login.
+- **`/readyz` verde de ponta a ponta.** No run 44850515112 o job `smoke` ficou `skipped`, então a
+  checagem não rodou nele. O comando que fecha:
+  `curl -fsS http://<host>/readyz` depois de um deploy com o `smoke` executado (ou disparar o
+  `deploy` de novo e conferir o job).
+- **`/grafana/` pela borda.** A rota está preparada e comentada (`frontend/nginx.conf:117-120`)
+  e o Grafana publica só em `127.0.0.1:3000`. A prova do critério §3/F5 #5 é
+  `curl -s -o /dev/null -w '%{http_code}' http://<host>/grafana/` → 401 ou 302, e ela não
+  rodou nesta sessão.
+- **`gitleaks` dentro da imagem** (`docker history` sem `ENV`/`ARG` de segredo). O critério
+  §3/F5 #6 cobre isso; hoje a varredura feita é do repositório e da árvore de `backend/`.

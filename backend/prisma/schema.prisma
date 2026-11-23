@@ -189,3 +189,16 @@ model LlmCache {
   @@index([expiresAt])
   @@map("llm_cache")
 }
+
+/// Orçamento **global** diário de chamadas da LLM (issue #35): uma linha por dia
+/// UTC, com a cota já consumida.
+///
+/// Persistido aqui, e não em memória, porque a cota vale até a meia-noite e não
+/// pode voltar a cada reinício do container nem dobrar com duas réplicas — o
+/// recurso protegido (chave e crédito do provedor) é externo ao processo.
+model LlmDailyBudget {
+  day   DateTime @id @db.Date
+  calls Int      @default(0)
+
+  @@map("llm_daily_budget")
+}

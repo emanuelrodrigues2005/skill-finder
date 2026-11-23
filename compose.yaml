@@ -20,6 +20,12 @@ name: skills-search
 # Dois serviços de API porque o profile precisa escolher o `build.target`: `api`
 # mantém o nome que o upstream do nginx (`frontend/nginx.conf`: `api:8000`) espera,
 # e `api-dev` declara o alias `api` na rede do compose.
+#
+# `obs` é o terceiro profile e só sobe a pedido (`--profile obs`): nada em `dev` ou
+# `prod` muda por causa dele. A stack mora **aqui**, e não num `compose.obs.yaml`
+# separado, porque `/metrics` responde `404` na borda (`frontend/nginx.conf`) e a
+# `api` publica em loopback: o Prometheus só alcança `api:8000` de dentro da rede
+# `skills-search_default`. Um segundo arquivo criaria outra rede e nenhum alvo.
 
 x-api-base: &api-base
   depends_on:
@@ -90,6 +96,13 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
+    logging:
+      # `json-file` sem teto é o que enche os 20 GiB de EBS: 10 MB × 3 arquivos
+      # por container é o limite, e vale para todos os serviços deste arquivo.
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
   # Desenvolvimento: devDependencies + `pnpm start:dev`.
   api-dev:
@@ -111,6 +124,11 @@ services:
       # Só o que o `start:dev` recompila.
       - ./backend/src:/app/src
       - ./backend/prisma:/app/prisma
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
   # Production profile: imagem de runtime, sem devDependencies e sem o `src/`.
   api:
@@ -132,6 +150,11 @@ services:
       # exporia `/metrics` e `/docs` direto na internet; com `127.0.0.1` o acesso
       # do host (smoke em `localhost`) continua funcionando.
       - "127.0.0.1:${API_PORT:-8080}:8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
   web:
     build:
@@ -157,6 +180,146 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # --- Profile `obs` -----------------------------------------------------------------
+  #
+  # Cinco containers, sem Telegraf e sem cAdvisor (ADR-009): o host é um `t3.small`
+  # de 2 GB e a aplicação precisa caber junto. `mem_limit` soma 1,22 GiB de teto —
+  # não de uso.
+  #
+  # Sem `healthcheck` de propósito: as imagens oficiais não trazem um cliente HTTP
+  # confiável, e o `depends_on` entre eles é de ordem de boot, não de prontidão. A
+  # prova de vida são os comandos de `observability/README.md`.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: ["obs"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Retenção por tempo **e** por tamanho: a série sai no que vier primeiro, e o
+      # teto de 512 MB é o que impede o TSDB de encher o EBS de 20 GiB.
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=512MB
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      # Loopback: Prometheus não tem autenticação e a borda é o nginx.
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+    mem_limit: 320M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  loki:
+    image: grafana/loki:3.3.2
+    profiles: ["obs"]
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./observability/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+    restart: unless-stopped
+    mem_limit: 384M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    profiles: ["obs"]
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    depends_on:
+      - loki
+    volumes:
+      - ./observability/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      # Os dois pontos que o docker_sd precisa: o socket para descobrir o nome do
+      # container, e o diretório de logs para ler. Ambos `:ro`.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail-data:/var/lib/promtail
+    restart: unless-stopped
+    mem_limit: 96M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    profiles: ["obs"]
+    command:
+      # Sem `--collector.disable-defaults` o exporter abre ~30 coletores e cobra
+      # memória por séries que nenhum dos 4 painéis consulta.
+      - --collector.disable-defaults
+      - --collector.cpu
+      - --collector.meminfo
+      - --collector.filesystem
+      - --collector.loadavg
+      - --collector.uname
+      # O `/` do host em `/host`: sem isso o coletor de filesystem mede o overlay
+      # do próprio container e não o disco que enche.
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      # Sem `rslave`: o `/` do WSL não é um mount shared, e o daemon recusa o
+      # mount. A propagação só serviria para enxergar montagem criada depois do
+      # boot — o disco que enche é o `/`, que já está aqui.
+      - /:/host:ro
+    ports:
+      - "127.0.0.1:${NODE_EXPORTER_PORT:-9100}:9100"
+    restart: unless-stopped
+    mem_limit: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    profiles: ["obs"]
+    depends_on:
+      - prometheus
+      - loki
+    environment:
+      # Nunca literal: em produção quem preenche é o Infisical no ambiente do host.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # O host pode não ter saída para a internet: telemetria e checagem de versão
+      # ficam desligadas para o boot não depender de rede.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    restart: unless-stopped
+    mem_limit: 384M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
 volumes:
   postgres-data:
+  prometheus-data:
+  loki-data:
+  promtail-data:
+  grafana-data:

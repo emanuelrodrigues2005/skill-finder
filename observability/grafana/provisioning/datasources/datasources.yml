@@ -1,0 +1,19 @@
+apiVersion: 1
+
+# UIDs explícitos: o dashboard versionado referencia `uid: prometheus` / `uid: loki`
+# e não pode depender do id que o Grafana gera na primeira subida.
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100

@@ -42,6 +42,20 @@ describe('env schema (§3)', () => {
     );
   });
 
+  it('exposes the optional global LLM budget (#35)', () => {
+    // Ausente = sem teto: a issue #35 é opt-in e não muda o comportamento padrão.
+    expect(loadEnv({ ENV: 'dev' }).llmDailyCallBudget).toBeUndefined();
+    expect(loadEnv({ ENV: 'dev', LLM_DAILY_CALL_BUDGET: '250' }).llmDailyCallBudget).toBe(250);
+    // Teto de 0 (ou fracionário) desligaria a LLM por um número escondido; para
+    // desligar existe `LLM_ENABLED=false`, que é explícito.
+    expect(() => loadEnv({ ENV: 'dev', LLM_DAILY_CALL_BUDGET: '0' })).toThrow(
+      /LLM_DAILY_CALL_BUDGET/,
+    );
+    expect(() => loadEnv({ ENV: 'dev', LLM_DAILY_CALL_BUDGET: '1.5' })).toThrow(
+      /LLM_DAILY_CALL_BUDGET/,
+    );
+  });
+
   it('treats empty strings from .env.example as absent', () => {
     const env = loadEnv({ ENV: 'dev', LLM_TIMEOUT_S: '', RANK_W_STARS: '   ', DATABASE_URL: '' });
 

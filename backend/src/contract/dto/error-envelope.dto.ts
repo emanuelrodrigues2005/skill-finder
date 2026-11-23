@@ -31,7 +31,7 @@ export class ErrorBody {
     type: 'object',
     additionalProperties: true,
     description:
-      'Closed set, on every status: `fields` (422 validation errors), `reason` (503 readiness), `limit` and `window_seconds` (429), `run_id` (409 ingest already running) and `expires_at` (410 history expired). Any other key is dropped by the error filter, so upstream messages, stack traces and driver errors never reach the public body. Empty object when there is no detail.',
+      'Closed set, on every status: `fields` (422 validation errors), `reason` (503 readiness), `limit`, `window_seconds` and `scope` (429, `scope` = `global` when the daily LLM budget is exhausted), `run_id` (409 ingest already running) and `expires_at` (410 history expired). Any other key is dropped by the error filter, so upstream messages, stack traces and driver errors never reach the public body. Empty object when there is no detail.',
   })
   details!: Record<string, unknown>;
 

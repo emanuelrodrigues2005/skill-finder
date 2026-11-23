@@ -34,12 +34,16 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 
 import { CategoriesController } from './categories.controller';
+import { CLOCK, systemClock } from './clock';
+import { DailyLlmBudget } from './daily-llm-budget.service';
+import type { DailyLlmBudgetStore } from './daily-llm-budget.port';
+import { PrismaDailyLlmBudgetRepository } from './prisma-daily-llm-budget.repository';
 import { PrismaSearchCatalogRepository } from './prisma-search-catalog.repository';
 import { PrismaSearchStoreRepository } from './prisma-search-store.repository';
 import { SearchController } from './search.controller';
 import { SearchThrottlerGuard } from './search-throttler.guard';
 import { LIVE_ENRICHER, type LiveEnricher } from './live-enricher.port';
-import { SEARCH_CATALOG, SEARCH_STORE } from './search.tokens';
+import { DAILY_LLM_BUDGET_STORE, SEARCH_CATALOG, SEARCH_STORE } from './search.tokens';
 import type { SearchCatalog } from './search-catalog.port';
 import type { SearchStore } from './search-store.port';
 import { SearchService } from './search.service';
@@ -104,6 +108,16 @@ export class SearchModule {
               config,
             ),
         },
+        // #35: orçamento global do dia. O adapter grava em `llm_daily_budget`;
+        // o serviço decide e, sem `LLM_DAILY_CALL_BUDGET`, nem consulta o banco.
+        {
+          provide: DAILY_LLM_BUDGET_STORE,
+          inject: [PrismaService],
+          useFactory: (prisma: PrismaService): DailyLlmBudgetStore =>
+            new PrismaDailyLlmBudgetRepository(prisma),
+        },
+        { provide: CLOCK, useValue: systemClock },
+        DailyLlmBudget,
         {
           provide: INTENT_PARSER,
           inject: [AppConfigService],

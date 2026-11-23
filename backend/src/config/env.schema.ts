@@ -70,6 +70,11 @@ const baseEnvSchema = z.object({
   // F2.10: orçamento total de latência da LLM numa busca. `positive()` porque um
   // teto de 0 ms faria toda busca degradar sem tentar, em silêncio.
   LLM_TOTAL_DEADLINE_MS: z.coerce.number().int().positive().default(DEFAULT_LLM_TOTAL_DEADLINE_MS),
+  // #35: teto **global** de chamadas da LLM por dia UTC. Opcional — ausente, não
+  // há teto e o comportamento é o de antes da issue. `positive()` porque um teto
+  // de 0 chamadas desligaria a LLM em silêncio, escondido num número; para isso
+  // existe `LLM_ENABLED=false`, que é explícito.
+  LLM_DAILY_CALL_BUDGET: z.coerce.number().int().positive().optional(),
 
   // --- catalog source (skills.sh) ---
   // #47: `json` saiu — não existe endpoint JSON público (`/api/` é proibido pelo
@@ -199,6 +204,7 @@ export const envSchema = baseEnvSchema
     llmEnabled: value.LLM_ENABLED,
     llmTimeoutS: value.LLM_TIMEOUT_S,
     llmTotalDeadlineMs: value.LLM_TOTAL_DEADLINE_MS,
+    llmDailyCallBudget: value.LLM_DAILY_CALL_BUDGET,
     skillSourceKind: value.SKILL_SOURCE_KIND,
     skillSourceBaseUrl: value.SKILL_SOURCE_BASE_URL,
     skillSourceRps: value.SKILL_SOURCE_RPS,

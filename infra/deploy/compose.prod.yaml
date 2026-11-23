@@ -12,7 +12,27 @@ services:
   api:
     image: "${DOCKERHUB_USER:?}/skill-finder-api:${IMAGE_TAG:?}"
     pull_policy: always
+    # Teto por container, nao reserva: o t3.small tem 2 GB e a soma dos tetos
+    # (prod + obs) fica acima disso, entao quem protege a API de um vizinho
+    # descontrolado e este valor, nao o scheduler.
+    mem_limit: 600M
+
+  postgres:
+    mem_limit: 512M
 
   web:
     image: "${DOCKERHUB_USER:?}/skill-finder-web:${IMAGE_TAG:?}"
     pull_policy: always
+    mem_limit: 96M
+
+  grafana:
+    # O `compose.yaml` (fora do escopo da #62) nao declara estas duas chaves e, sem
+    # elas, o Grafana serve na raiz do proprio container: `/grafana/` chegaria como
+    # rota desconhecida e a borda responderia 404. `root_url` e quem define o
+    # sub-path; o `%(domain)s` so aparece em link absoluto (e-mail, OAuth), nunca na
+    # navegacao, que e relativa ao sub-path. O lugar definitivo destas chaves e o
+    # `compose.yaml`, para valer tambem em dev — ver §10 de
+    # `docs/app/06-pipeline-deploy.md`.
+    environment:
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
