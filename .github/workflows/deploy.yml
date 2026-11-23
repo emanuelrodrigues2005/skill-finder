@@ -432,6 +432,47 @@ jobs:
           }
           HELPER
 
+      - name: Ship the compose files and the obs config
+        # Payload em comando SSM proprio. O parametro `commands` do SendCommand para
+        # em ~24 KB e, num comando so, os 12,4 KB do tar (que ja vao em base64 dentro
+        # de um script que o helper ainda converte em base64) estourariam o teto junto
+        # do script do deploy. Aqui nao ha segredo: sao arquivos do commit.
+        #
+        # `observability/README.md` fica de fora: e documentacao, nao configuracao.
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/ssm-run.sh"
+          payload="$RUNNER_TEMP/payload.sh"
+          {
+            printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+            printf 'COMPOSE_GZ=%q\n' "$(tar -cf - compose.yaml infra/deploy/compose.prod.yaml \
+              observability/grafana observability/loki observability/prometheus observability/promtail \
+              | gzip -9 | base64 -w 0)"
+            cat <<'PAYLOAD'
+          # O tar preserva os caminhos relativos que o compose.yaml monta
+          # (`./observability/...` a partir de /opt/app).
+          mkdir -p /opt/app
+          cd /opt/app
+          printf '%s' "$COMPOSE_GZ" | base64 -d | gzip -dc | tar -xf - -C /opt/app
+          for arquivo in compose.yaml infra/deploy/compose.prod.yaml \
+            observability/prometheus/prometheus.yml observability/loki/loki.yml \
+            observability/promtail/promtail.yml \
+            observability/grafana/provisioning/datasources/datasources.yml \
+            observability/grafana/provisioning/dashboards/dashboards.yml \
+            observability/grafana/dashboards/main.json; do
+            if [ ! -s "$arquivo" ]; then
+              echo "ERRO: ${arquivo} vazio depois do payload do SSM; nada foi implantado" >&2
+              exit 1
+            fi
+          done
+          echo "payload: $(sha256sum compose.yaml infra/deploy/compose.prod.yaml | cut -c1-12 | tr '\n' ' ')"
+          echo "obs: $(find observability -type f | wc -l) arquivos de configuracao em /opt/app"
+          PAYLOAD
+          } > "$payload"
+          ssm_run payload "$payload" "$INSTANCE_ID"
+
       - name: Deploy through SSM
         # O trabalho acontece no host porque é lá que o Infisical entrega os segredos
         # do `prod`: o runner nunca recebe `DATABASE_URL`, `ADMIN_TOKEN`,
@@ -453,12 +494,6 @@ jobs:
             printf 'INFISICAL_ENV=%q\n' "$INFISICAL_ENV"
             printf 'SHA=%q\n' "$SHA"
             printf 'DOCKERHUB_USER=%q\n' "$DOCKERHUB_USER"
-            # Os dois arquivos do compose vao no payload: o host pode ter a versao de
-            # um commit anterior — o override antigo exigia uma variavel de registry
-            # que nao existe mais e o `compose pull` morria nela. gzip+base64 mantem
-            # o comando dentro do limite do SSM.
-            printf 'COMPOSE_GZ=%q\n' "$(gzip -9 -c compose.yaml | base64 -w 0)"
-            printf 'COMPOSE_PROD_GZ=%q\n' "$(gzip -9 -c infra/deploy/compose.prod.yaml | base64 -w 0)"
             cat <<'REMOTE'
           # O AWS-RunShellScript executa como root: `apt-get` e o instalador da CLI
           # abaixo rodam sem `sudo`.
@@ -479,13 +514,17 @@ jobs:
           }
           trap cleanup EXIT
 
-          mkdir -p /opt/app/infra/deploy
+          # Os arquivos do compose e de `observability/` chegaram no passo anterior
+          # (`Ship the compose files and the obs config`). Aqui so se confere que
+          # estao no disco: o deploy nao depende do que sobrou de uma execucao antiga,
+          # e um bind mount sem arquivo viraria diretorio vazio dentro do container.
           cd /opt/app
-          printf '%s' "$COMPOSE_GZ" | base64 -d | gzip -dc > compose.yaml
-          printf '%s' "$COMPOSE_PROD_GZ" | base64 -d | gzip -dc > infra/deploy/compose.prod.yaml
-          for arquivo in compose.yaml infra/deploy/compose.prod.yaml; do
+          for arquivo in compose.yaml infra/deploy/compose.prod.yaml \
+            observability/prometheus/prometheus.yml observability/loki/loki.yml \
+            observability/promtail/promtail.yml \
+            observability/grafana/provisioning/datasources/datasources.yml; do
             if [ ! -s "$arquivo" ]; then
-              echo "ERRO: ${arquivo} vazio depois do payload do SSM; nada foi implantado" >&2
+              echo "ERRO: ${arquivo} ausente em /opt/app; o passo do payload do SSM nao rodou" >&2
               exit 1
             fi
           done
@@ -573,21 +612,61 @@ jobs:
             401) echo "ERRO: ADMIN_TOKEN recusado pela API (401)" >&2; exit 1 ;;
             *) echo "AVISO: ingestao respondeu ${code}; o deploy segue e o catalogo nao mudou" >&2 ;;
           esac
+
+          # Observabilidade depois da aplicacao, e de proposito no fim: se a stack obs
+          # nao subir, api, postgres e web ja estao implantados, migrados e ingeridos —
+          # o app nao volta atras, o job falha e o sumario diz "app no ar,
+          # observabilidade fora". O marcador `::obs-failed::` e o unico sinal que o
+          # sumario usa; sem ele, uma falha anterior (payload, pull, migrate) nao pode
+          # ser confundida com esta.
+          if [ -z "${GRAFANA_PASSWORD:-}" ]; then
+            echo "::obs-failed:: GRAFANA_PASSWORD ausente no ambiente do Infisical" >&2
+            exit 1
+          fi
+          # `--no-build` tambem aqui: as duas imagens de prod ja foram baixadas pelo
+          # `compose pull` e o host nao pode reconstruir nenhuma delas.
+          if ! compose --profile obs up -d --no-build; then
+            echo "::obs-failed:: compose --profile obs up -d falhou no host" >&2
+            exit 1
+          fi
+          # `up -d` responde 0 mesmo com container em restart loop: o `ps` fica no log
+          # do SSM e e a prova de vida que `observability/README.md` cobre.
+          compose --profile obs ps
+          echo "::obs-ok:: stack obs aplicada"
           STEP
 
           infisical secrets-manager run --projectId "$INFISICAL_PROJECT_ID" --env "$INFISICAL_ENV" \
             -- bash "$step"
           REMOTE
           } > "$remote"
-          ssm_run deploy "$remote" "$INSTANCE_ID"
+          # O retorno do comando vai para um arquivo alem do log: o passo *Summary*
+          # le o marcador `::obs-failed::` de la para separar "app no ar,
+          # observabilidade fora" de uma falha anterior a aplicacao.
+          rc=0
+          set +e
+          ssm_run deploy "$remote" "$INSTANCE_ID" 2>&1 | tee "$RUNNER_TEMP/deploy-ssm.log"
+          rc="${PIPESTATUS[0]}"
+          set -e
+          exit "$rc"
 
       - name: Summary
         if: ${{ !cancelled() }}
         env:
           PUBLIC_IP: ${{ steps.target.outputs.public_ip }}
           EVENT_NAME: ${{ github.event_name }}
+          SSM_LOG: ${{ runner.temp }}/deploy-ssm.log
         run: |
           set -uo pipefail
+          # "nao executada" e o veredicto quando o deploy morreu antes do passo obs
+          # (payload, pull, migracao): sem marcador nenhum, afirmar "no ar" seria mentira.
+          obs='nao executada'
+          if [ -f "${SSM_LOG}" ]; then
+            if grep -q -- '::obs-failed::' "${SSM_LOG}"; then
+              obs='fora'
+            elif grep -q -- '::obs-ok::' "${SSM_LOG}"; then
+              obs='no ar'
+            fi
+          fi
           {
             echo "## Deploy"
             echo ""
@@ -598,18 +677,45 @@ jobs:
             echo "| imagens | \`${DOCKERHUB_USER}/skill-finder-api:${SHA}\`, \`${DOCKERHUB_USER}/skill-finder-web:${SHA}\` |"
             echo "| registry | \`docker.io/${DOCKERHUB_USER}\` (publico, pull anonimo) |"
             echo "| segredos | \`Infisical prod\` lido no host |"
+            echo "| observabilidade | \`${obs}\` |"
             echo "| gatilho | \`${EVENT_NAME}\` |"
             echo ""
+            if [ "$obs" = 'fora' ]; then
+              echo "app no ar, observabilidade fora: a aplicacao foi implantada e migrada, e"
+              echo "\`--profile obs up -d\` falhou no host. Corrija e repita o dispatch; nao ha"
+              echo "rollback da aplicacao a fazer por causa disto."
+              echo ""
+            fi
             echo "Rollback: dispare com \`image_tag=<SHA anterior>\` e \`skip_build=true\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   smoke:
     needs: deploy
+    # O `if` implicito de um job com `needs` e `success()`, que reprova quando um job
+    # do grafo terminou `skipped` — e todo dispatch pula um: `provision` no caminho
+    # normal, `build` no rollback. Foi assim que o run verde de 2026-11-21 entregou
+    # `deploy: success` e `smoke: skipped` sem rodar um passo (o `deploy` escapou por
+    # declarar a condicao abaixo; o `smoke` herdou o padrao). A condicao depende so do
+    # veredicto do `deploy`, que e quem sabe se a aplicacao foi implantada.
+    if: ${{ !cancelled() && needs.deploy.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       BASE_URL: http://${{ needs.deploy.outputs.public_ip }}
     steps:
+      - name: Fail fast when the deployed host is unknown
+        # O contrato de `outputs` do `deploy` e o que da URL ao smoke: sem o IP o
+        # `curl` falharia em `http://` e o erro diria "resposta vazia", nao "contrato".
+        env:
+          PUBLIC_IP: ${{ needs.deploy.outputs.public_ip }}
+        run: |
+          set -uo pipefail
+          if [ -z "${PUBLIC_IP:-}" ]; then
+            echo '::error::needs.deploy.outputs.public_ip vazio: o contrato de outputs do job deploy quebrou'
+            exit 1
+          fi
+          echo "alvo: http://${PUBLIC_IP}"
+
       - name: Wait for the edge
         run: |
           set -uo pipefail
@@ -662,6 +768,33 @@ jobs:
             exit 1
           fi
 
+      - name: smoke /grafana/ asks for a login
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "${BASE_URL}/grafana/")"
+          echo "status: ${code}"
+          # 302 e o Grafana mandando para o login; 401 e a mesma rota fechada para
+          # quem nao tem sessao. `200` significaria o Grafana servindo painel aberto
+          # na internet, e `404` significaria o proxy apontando para um Grafana que
+          # nao esta em sub-path (`GF_SERVER_SERVE_FROM_SUB_PATH`).
+          case "$code" in
+            302|401) ;;
+            *) echo "::error::/grafana/ respondeu ${code}, esperado 302 (login) ou 401"; exit 1 ;;
+          esac
+
+      - name: smoke /metrics is closed at the edge
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "${BASE_URL}/metrics")"
+          echo "status: ${code}"
+          # O 404 e deliberado e mora em `frontend/nginx.conf`: o Prometheus raspa
+          # `api:8000` na rede interna do compose, e contadores de rota na internet
+          # seriam vazamento. Um 200 aqui e regressao da borda.
+          if [ "$code" != "404" ]; then
+            echo "::error::/metrics respondeu ${code} na borda, esperado 404"
+            exit 1
+          fi
+
       - name: Summary
         if: ${{ !cancelled() }}
         env:
@@ -674,6 +807,8 @@ jobs:
           healthz="$(probe "${BASE_URL}/healthz")"
           readyz="$(probe "${BASE_URL}/readyz")"
           root="$(curl -sS -m 10 -o /dev/null -w '%{http_code} %{content_type}' "${BASE_URL}/" 2>&1 || true)"
+          grafana="$(curl -sS -m 15 -o /dev/null -w '%{http_code} %{redirect_url}' "${BASE_URL}/grafana/" 2>&1 || true)"
+          metrics="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "${BASE_URL}/metrics" 2>&1 || true)"
           ingest="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' \
             -X POST "${BASE_URL}/api/v1/admin/ingest" -H 'Content-Type: application/json' \
             -d '{"source_keys":["vercel-labs/skills/find-skills"]}' 2>&1 || true)"
@@ -688,6 +823,8 @@ jobs:
             echo "| \`GET /readyz\` | 200, JSON \`status: ok\` | \`${readyz}\` |"
             echo "| \`GET /\` | 200 \`text/html\` | \`${root}\` |"
             echo "| \`POST /api/v1/admin/ingest\` sem token | 401 | \`${ingest}\` |"
+            echo "| \`GET /grafana/\` | 302 ou 401 | \`${grafana}\` |"
+            echo "| \`GET /metrics\` | 404 | \`${metrics}\` |"
             echo ""
             echo "Reprovou? Rollback: dispatch com \`image_tag=<SHA anterior>\` e \`skip_build=true\`."
           } >> "$GITHUB_STEP_SUMMARY"
