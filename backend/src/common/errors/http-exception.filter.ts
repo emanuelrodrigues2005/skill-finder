@@ -66,6 +66,8 @@ const ALLOWED_DETAIL_KEYS: readonly string[] = [
   'reason',
   'limit',
   'window_seconds',
+  // #35: `scope` separa o 429 do orçamento global do 429 por cliente.
+  'scope',
   'run_id',
   'expires_at',
 ];
@@ -98,6 +100,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
         `${normalized.code} on ${request.method} ${request.originalUrl ?? request.url}`,
         exception instanceof Error ? exception.stack : undefined,
       );
+    }
+
+    // `Retry-After` acompanha `retry_after_seconds` em **todo** 429: o corpo é o
+    // contrato, mas o header é o que um `curl`/cliente HTTP genérico respeita, e
+    // um 429 sem ele (o do orçamento global, #35) convidaria a repetir na hora.
+    if (normalized.retryAfterSeconds !== undefined) {
+      response.setHeader('Retry-After', normalized.retryAfterSeconds);
     }
 
     const envelope: ErrorEnvelope = {

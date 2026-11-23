@@ -63,6 +63,10 @@ import type { IntentParser, IntentParserResult } from '@/llm/intent-parser';
 import { EXPLAIN_PORT, INTENT_PARSER, LlmModule } from '@/llm/llm.module';
 import { OpenAICompatParser } from '@/llm/openai-compat';
 import { decodeSkillId, encodeSkillId } from '@/search/ids';
+import {
+  DailyLlmBudget,
+  type BudgetRejection,
+} from '@/search/daily-llm-budget.service';
 import { LIVE_ENRICHER, type LiveEnricher, type LiveEnrichInput } from '@/search/live-enricher.port';
 import type { SearchCatalog, SearchCatalogInput } from '@/search/search-catalog.port';
 import type { SearchStore, StoredSearchInput, StoredSearchRow } from '@/search/search-store.port';
@@ -457,6 +461,28 @@ class DisabledEnricher implements LiveEnricher {
   }
 }
 
+/** Orçamento do dia já esgotado: a recusa vem pronta do serviço (#35). */
+class RejectedBudget implements Pick<DailyLlmBudget, 'reserve'> {
+  calls = 0;
+
+  constructor(private readonly rejection: BudgetRejection) {}
+
+  reserve(): Promise<BudgetRejection | null> {
+    this.calls += 1;
+    return Promise.resolve(this.rejection);
+  }
+}
+
+/** Orçamento com cota: a busca segue o caminho normal. */
+class AllowedBudget implements Pick<DailyLlmBudget, 'reserve'> {
+  calls = 0;
+
+  reserve(): Promise<BudgetRejection | null> {
+    this.calls += 1;
+    return Promise.resolve(null);
+  }
+}
+
 interface Harness {
   service: SearchService;
   catalog: CatalogStub;
@@ -472,6 +498,7 @@ async function build(
     store?: StoreStub;
     explain?: ExplainParser;
     live?: LiveEnricher;
+    budget?: Pick<DailyLlmBudget, 'reserve'>;
   } = {},
 ): Promise<Harness> {
   const catalog = options.catalog ?? new CatalogStub();
@@ -480,6 +507,10 @@ async function build(
   // pede um duplo. Sem ela, a busca roda como no caminho normal (nada a fazer).
   const liveProvider =
     options.live === undefined ? [] : [{ provide: LIVE_ENRICHER, useValue: options.live }];
+  // O orçamento global (#35) também é `@Optional()`: sem duplo, o serviço nem
+  // reserva — é o comportamento sem `LLM_DAILY_CALL_BUDGET`.
+  const budgetProvider =
+    options.budget === undefined ? [] : [{ provide: DailyLlmBudget, useValue: options.budget }];
 
   let builder = Test.createTestingModule({
     // `LLM_ENABLED=false` (o modo degradado de dev/CI) entra pelo módulo real:
@@ -499,6 +530,7 @@ async function build(
       { provide: AppConfigService, useValue: appConfig(options.config) },
       { provide: MetricsService, useValue: METRICS_STUB },
       ...liveProvider,
+      ...budgetProvider,
     ],
   });
 
@@ -1311,6 +1343,47 @@ describe('SearchService.search (F2.6)', () => {
       expect(live.calls).toBe(1);
       expect(response.results).toEqual([]);
       expect(response.warnings).toContain('no_results');
+    });
+  });
+
+  /**
+   * Issue #35: o orçamento global é reservado **antes** do passo de intenção. A
+   * prova que só o unitário dá é a ordem: com o dia esgotado, o parser não é
+   * chamado (`llm_calls_total` não muda no e2e) e nada é persistido. O adaptador
+   * Postgres da reserva é provado em `test/integration/search-budget.spec.ts`.
+   */
+  describe('orçamento global diário (#35)', () => {
+    it('answers 429 RATE_LIMITED with scope=global and never calls the LLM', async () => {
+      const parser = new OkIntentParser();
+      const budget = new RejectedBudget({ limit: 2, windowSeconds: 86_400, retryAfterSeconds: 30 });
+      const harness = await build({ parser, budget });
+
+      const error = await captureError(harness.service.search(SEARCH_INPUT));
+
+      expect(error.status).toBe(429);
+      expect(error.body.code).toBe('RATE_LIMITED');
+      expect(detailsOf(error.body)).toEqual({
+        scope: 'global',
+        limit: 2,
+        window_seconds: 86_400,
+      });
+      expect(error.body.retry_after_seconds).toBe(30);
+      // A LLM não é chamada: o 429 sai antes do passo de intenção.
+      expect(parser.calls).toBe(0);
+      expect(harness.store.saved).toHaveLength(0);
+    });
+
+    it('runs the search untouched while the budget allows the call', async () => {
+      const parser = new OkIntentParser();
+      const budget = new AllowedBudget();
+      const harness = await build({ parser, budget });
+
+      const response = await harness.service.search(SEARCH_INPUT);
+
+      expect(budget.calls).toBe(1);
+      expect(parser.calls).toBe(1);
+      expect(harness.store.saved).toHaveLength(1);
+      expect(response.llm.status).toBe('ok');
     });
   });
 });

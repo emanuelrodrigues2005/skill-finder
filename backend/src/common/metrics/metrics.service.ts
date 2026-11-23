@@ -15,6 +15,17 @@ import {
 // mesmo histograma.
 const DURATION_BUCKETS_SECONDS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 
+/**
+ * Escopos do 429 que a busca publica (issue #35).
+ *
+ * `global` é o orçamento do dia inteiro; o 429 por cliente continua sem série
+ * própria porque o guard conta por bucket e o painel de abuso já o vê em
+ * `http_requests_total{status="429"}`. O rótulo existe para separar as duas
+ * recusas quando a segunda entrar no painel.
+ */
+export const RATE_LIMIT_SCOPES = ['global'] as const;
+export type RateLimitScope = (typeof RATE_LIMIT_SCOPES)[number];
+
 @Injectable()
 export class MetricsService {
   private readonly registry = new Registry();
@@ -81,6 +92,19 @@ export class MetricsService {
     registers: [this.registry],
   });
 
+  /**
+   * `rate_limited_total{scope}` — buscas recusadas por teto (issue #35).
+   *
+   * Nasce em zero no boot, como os outros contadores: a série é o que prova que
+   * o orçamento existe e está armado, mesmo no dia em que o teto não foi tocado.
+   */
+  readonly rateLimitedTotal = new Counter({
+    name: 'rate_limited_total',
+    help: 'Rate-limited requests by scope.',
+    labelNames: ['scope'],
+    registers: [this.registry],
+  });
+
   constructor() {
     collectDefaultMetrics({ register: this.registry });
     for (const status of LLM_STATUSES) {
@@ -88,6 +112,9 @@ export class MetricsService {
     }
     for (const reason of DEGRADED_REASONS) {
       this.searchDegradedTotal.inc({ reason }, 0);
+    }
+    for (const scope of RATE_LIMIT_SCOPES) {
+      this.rateLimitedTotal.inc({ scope }, 0);
     }
   }
 
@@ -119,6 +146,11 @@ export class MetricsService {
     if (reason !== null) {
       this.searchDegradedTotal.inc({ reason });
     }
+  }
+
+  /** Conta uma busca barrada por teto; `scope` diz qual dos dois recusou. */
+  observeRateLimited(scope: RateLimitScope): void {
+    this.rateLimitedTotal.inc({ scope });
   }
 
   async render(): Promise<{ body: string; contentType: string }> {

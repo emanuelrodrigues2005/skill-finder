@@ -56,6 +56,10 @@ import {
   SOURCE_UNAVAILABLE_REASON,
   VALIDATION_REASON,
 } from './constants';
+// Import de valor, nunca `import type`: o Nest resolve o provedor pelo
+// `design:paramtypes` que o compilador emite a partir do símbolo — um import de
+// tipo o apaga, e a injeção opcional cairia em `undefined` em silêncio.
+import { DailyLlmBudget } from './daily-llm-budget.service';
 import {
   EXPLANATION_REPAIRED_FLAG,
   explainItem,
@@ -125,6 +129,13 @@ const STRICT_FAILURE_STATUSES: ReadonlySet<LlmStatus> = new Set<LlmStatus>([
   'invalid_ids',
 ]);
 
+/**
+ * Mensagem do 429 do orçamento global (#35): o teto é do dia, não do cliente, e
+ * o instante em que a cota volta é previsível (meia-noite UTC).
+ */
+const GLOBAL_BUDGET_MESSAGE =
+  'Too many searches: the daily LLM call budget is exhausted. Try again after midnight UTC.';
+
 @Injectable()
 export class SearchService {
   private readonly logger = new Logger(SearchService.name);
@@ -143,6 +154,10 @@ export class SearchService {
     // Enriquecimento ao vivo: só entra quando a busca local volta vazia. Opcional
     // porque um teste do caminho normal não deve montar rede nem Postgres.
     @Optional() @Inject(LIVE_ENRICHER) private readonly live?: LiveEnricher,
+    // Orçamento global do dia (#35). Opcional no injetor, mas sempre registrado
+    // em `SearchModule`: só quem configura `LLM_DAILY_CALL_BUDGET` paga a reserva,
+    // e o teste de unidade da busca não monta banco.
+    @Optional() private readonly budget?: DailyLlmBudget,
   ) {}
 
   /**
@@ -172,6 +187,11 @@ export class SearchService {
     // O vocabulário de categorias é o do catálogo do momento: a intenção que
     // citar uma categoria fora dele é reparada por `parseIntentPayload` (§6.3).
     const categories = await this.catalog.listCategories();
+    // #35: a reserva vem **antes** da chamada de intenção, que é o único passo
+    // que gasta crédito do provedor. Recusada, a LLM não é chamada e
+    // `llm_calls_total` não muda. Fica depois do 422/503 de propósito: uma busca
+    // que nem chegaria ao modelo não deve consumir a cota do dia.
+    await this.assertDailyLlmBudget();
     const parsed = await this.parseIntent(input.query, categories, deadlineAtMs);
     this.observeLlmCall(parsed.status);
     if (input.strictLlm && STRICT_FAILURE_STATUSES.has(parsed.status)) {
@@ -704,6 +724,33 @@ export class SearchService {
       query,
       categories.map((category) => category.slug),
       { deadlineAtMs },
+    );
+  }
+
+  /**
+   * Orçamento global diário de chamadas da LLM (#35).
+   *
+   * Ausente `LLM_DAILY_CALL_BUDGET`, `DailyLlmBudget.reserve()` devolve `null` e
+   * a busca segue como antes da issue — sem escrita no banco e sem recusa.
+   *
+   * @throws ApiError 429 `RATE_LIMITED` com `details.scope="global"` quando o dia
+   *   já gastou o teto.
+   */
+  private async assertDailyLlmBudget(): Promise<void> {
+    const rejection = await this.budget?.reserve();
+    if (rejection === undefined || rejection === null) {
+      return;
+    }
+    throw new ApiError(
+      HttpStatus.TOO_MANY_REQUESTS,
+      ERROR_CODES.RATE_LIMITED,
+      GLOBAL_BUDGET_MESSAGE,
+      {
+        scope: 'global',
+        limit: rejection.limit,
+        window_seconds: rejection.windowSeconds,
+      },
+      rejection.retryAfterSeconds,
     );
   }
 

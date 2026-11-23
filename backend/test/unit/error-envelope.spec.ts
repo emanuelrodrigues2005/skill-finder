@@ -163,4 +163,24 @@ describe('error envelope details allowlist (§5.5)', () => {
     });
     expect(JSON.stringify(response.body)).not.toContain('Postgres.connect');
   });
+
+  it('keeps the scope of the global budget 429 (#35)', () => {
+    // `scope` é a chave que separa o 429 do orçamento global do 429 por cliente;
+    // fora da allowlist ele seria descartado e o cliente não saberia qual teto
+    // o barrou.
+    const response = writeEnvelope(
+      { scope: 'global', limit: 2, window_seconds: 86_400 },
+      HttpStatus.TOO_MANY_REQUESTS,
+      ERROR_CODES.RATE_LIMITED,
+      'Too many searches: the daily LLM call budget is exhausted.',
+    );
+
+    expect(response.statusCode).toBe(HttpStatus.TOO_MANY_REQUESTS);
+    expect(response.body?.error.code).toBe(ERROR_CODES.RATE_LIMITED);
+    expect(response.body?.error.details).toEqual({
+      scope: 'global',
+      limit: 2,
+      window_seconds: 86_400,
+    });
+  });
 });
