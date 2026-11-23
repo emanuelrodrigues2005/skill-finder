@@ -26,7 +26,7 @@
 | **F2** — Aplicação e testes | MVP (domínio, API, UI, migrations) rodando local com testes | **E2**, parte de E4 | **C1 (25%)**, **C5 (10%)** | 4,0–4,5 | `/healthz` local verde, 3 telas operáveis, cobertura do domínio ≥ 80%, teste de concorrência verde |
 | **F3** — Infraestrutura como código | Provisionar por Terraform, com estado remoto, e ver a app no ar | **E2**, **E4** | **C3 (15%)**, C1 | 1,5–2,0 | `fmt`/`validate` limpos, `apply` sem erro, app em HTTP, `ssh` OK, `destroy` sem órfãos |
 | **F4** — Pipeline CI/CD e ECR | Ciclar sem passo manual, com gate de testes explícito | **E3** | **C4 (15%)**, **C5 (10%)** | 1,0–1,5 | CI verde com 8 jobs; `deploy.yml` com gate por `workflow_run`, imagem com tag = SHA e smoke que reprova o workflow |
-| **F5** — Observabilidade e segredos | Mostrar métrica, log e dashboard vivos; nenhum segredo rastreável | **E2**, **E5** | **C7 (5%)**, **C6 (5%)** | 0,5–1,0 | 4 painéis com dados, log de erro no Loki, `/grafana` protegido, `.env` gerado pelo cofre |
+| **F5** — Observabilidade e segredos | Mostrar métrica, log e dashboard vivos; nenhum segredo rastreável | **E2**, **E5** | **C7 (5%)**, **C6 (5%)** | 0,5–1,0 | 4 painéis com dados, log de erro no Loki, `/grafana` protegido, segredos lidos do cofre no host |
 | **F6** — Endurecimento e entrega | Fechar documentação, ensaiar a demo e entregar | **E5**, **E4** | **C8 (5%)** + protege C1–C4 | 0,5–1,0 | Docs completos, ciclo completo em < 15 min, demo de 3 min ensaiada, checklist da §11 marcado |
 | **Total** | | | | **8,0–12,0** | — |
 
@@ -230,7 +230,7 @@
 14. Rodar `terraform init` e `terraform plan -out=plan.out`, lendo o plano linha a linha: contar recursos, conferir ausência de `aws_iam_*` e de destruição inesperada.
 15. Rodar `terraform apply plan.out` **sem** `-auto-approve`, cronometrando (meta < 10 min, `docs/02` §12).
 16. Construir as imagens de `api` e `web` com tag = SHA do commit, autenticar no ECR e publicar.
-17. Conectar por `ssh -i ~/.ssh/labsuser.pem ubuntu@<host_public_ip>`, criar `/opt/app/.env` com `chmod 600`, rodar `docker compose --profile prod pull` e `docker compose --profile prod up -d --no-build`, e por fim `docker compose exec -T api npm run --silent prisma:deploy`.
+17. Conectar por `ssh -i ~/.ssh/labsuser.pem ubuntu@<host_public_ip>`, exportar as variáveis na sessão (sem gravar arquivo de segredo no host), rodar `docker compose --profile prod pull` e `docker compose --profile prod up -d --no-build`, e por fim `docker compose exec -T api npm run --silent prisma:deploy`.
 18. Rodar o smoke manual: `curl -fsS http://<host_public_ip>/healthz`, `/readyz`, criar e listar um registro pela UI.
 19. Escrever `docs/runbook-operacao.md` com os quatro procedimentos: subir, implantar, destruir, encerrar sessão.
 20. Rodar `terraform destroy` como teste controlado e conferir a ausência de órfãos.
@@ -286,7 +286,7 @@
 5. Implementar o job `gate` com `aws sts get-caller-identity` e mensagem explícita ("renove a sessão do lab"), executando **antes** de qualquer job com AWS; no dispatch manual ele também prova o CI verde do SHA pela API de Actions.
 6. Implementar o job `build` com `docker build --target runtime` e push para o ECR com tag = SHA do commit, sem `latest`, conferindo a tag depois no `describe-images`.
 7. Implementar o job `provision` (desligado por padrão, só com `provision=true`) rodando `init -backend-config`, `fmt -check`, `validate`, `plan -out` e `apply tfplan`, com as variáveis que o `terraform.tfvars` (ignorado pelo Git) daria no runner.
-8. Implementar o job `deploy`: resolve o host por tag, espera o agente SSM ficar `Online` e, por **SSM RunCommand** (`AWS-RunShellScript`; a porta 22 não existe no security group da F3), troca o `IMAGE_TAG` do `/opt/app/.env`, roda `compose pull` + `up -d --no-build`, `npm run --silent prisma:deploy` e a ingestão pelo endpoint admin.
+8. Implementar o job `deploy`: resolve o host por tag, espera o agente SSM ficar `Online` e, por **SSM RunCommand** (`AWS-RunShellScript`; a porta 22 não existe no security group da F3), exporta `IMAGE_TAG` no ambiente do host, roda `compose pull` + `up -d --no-build`, `npm run --silent prisma:deploy` e a ingestão pelo endpoint admin.
 9. Implementar o job `smoke` na borda pública: `/healthz` e `/readyz` em JSON com `status: ok`, `/` em `text/html` com a SPA e `POST /api/v1/admin/ingest` **sem** token respondendo `401`, **falhando o workflow** em qualquer desvio.
 10. Publicar no `$GITHUB_STEP_SUMMARY` a URL, o digest da imagem e o SHA implantado.
 11. Configurar a proteção do branch padrão exigindo `lint`, `test-unit`, `test-integration` e `secrets` verdes.
@@ -327,7 +327,7 @@
 
 **Objetivo.** Entregar C7 e C6 funcionando no ar: métricas, logs e dashboard com dados reais, e nenhum segredo rastreável em repositório, log, imagem ou host.
 
-**Pré-requisitos.** F3 verde (host provisionado); F4 verde (o `deploy` sabe regenerar o `.env`); `/metrics` exposto desde a F2; identidade de máquina criada no Infisical.
+**Pré-requisitos.** F3 verde (host provisionado); F4 verde (o `deploy` já leva as variáveis ao host); `/metrics` exposto desde a F2; identidade de máquina criada no Infisical.
 
 **Tarefas.**
 
@@ -341,11 +341,11 @@
 7. Proteger `/grafana` no Nginx (basic auth ou login do Grafana) com senha vinda do cofre.
 
 *Segredos*
-8. Criar o projeto/ambiente `prod` no Infisical e cadastrar `DB_PASSWORD`, `JWT_SECRET` e `GRAFANA_PASSWORD`.
-9. Criar a identidade de máquina com escopo mínimo e gravar o token como `INFISICAL_TOKEN` nos Actions Secrets.
-10. Ajustar o job `deploy` para gerar `/opt/app/.env` com `infisical export`, `chmod 600`, aplicando `::add-mask::` em cada valor antes de usá-lo.
-11. Substituir valores fixos por variáveis de ambiente no `compose.yaml` e remover qualquer senha do `user_data`.
-12. Rodar `gitleaks detect --no-git` na imagem construída e no repositório, corrigindo todos os achados.
+8. Criar o projeto e o ambiente `prod` no Infisical e cadastrar os **seis** segredos que o produto consome: `DATABASE_URL`, `POSTGRES_PASSWORD` (par que precisa concordar com o volume do Postgres), `ADMIN_TOKEN`, `IP_HASH_SALT`, `LLM_API_KEY` e `GRAFANA_PASSWORD`. A lista original (senha do banco com outro nome, um segredo de sessão que o produto não usa e a senha do Grafana) estava errada: o boot em `prod` exige os quatro primeiros (`backend/src/config/env.schema.ts`).
+9. Criar a machine identity (Universal Auth) com papel **Viewer** — só leitura do ambiente `prod` — e gravar `INFISICAL_CLIENT_ID` e `INFISICAL_CLIENT_SECRET` nos Actions Secrets. O runner **não** recebe segredo de aplicação: quem lê o cofre é o host.
+10. Ajustar o job `deploy` para o host buscar os valores no cofre na hora do deploy, com `infisical secrets-manager run --projectId <id> --env prod -- bash <script>`: o `compose.yaml` interpola do ambiente, o deploy roda com `--env-file /dev/null` (nenhum arquivo de segredo no host) e um `trap` executa `infisical logout` em qualquer desfecho.
+11. Tirar do `compose.yaml` e do `user_data` qualquer senha fixa, trocando por interpolação do ambiente (`${POSTGRES_PASSWORD:-skillsdev}`, `${ADMIN_TOKEN:-}`, ...). `GRAFANA_PASSWORD` é obrigatória em `prod`: sem ela o Grafana sobe com a senha default do fabricante (achado da #18).
+12. Rodar `gitleaks detect` no repositório e `gitleaks detect --no-git --source backend` e corrigir todo achado; conferir no log do deploy que os valores que passam pelo runner saem como `***`.
 
 **Critérios de aceitação (verificáveis).**
 
@@ -356,12 +356,13 @@
 | 3 | Logs correlacionados | LogQL `{service="api"} \|= "error"` devolve linhas com `request_id`; provocar um erro e achar seu log no painel |
 | 4 | Dashboard versionado e vivo | `observability/grafana/dashboards/main.json` tem 4 painéis; URL aberta mostra dados dos últimos 15 min e print datado |
 | 5 | `/grafana` protegido | `curl -s -o /dev/null -w "%{http_code}" http://<host>/grafana/` → 401 ou 302 sem credencial |
-| 6 | Segredo só no cofre | `git ls-files \| xargs grep -l '<valor real>'` → vazio; `gitleaks` verde; `docker history` da imagem sem `ENV`/`ARG` de segredo |
-| 7 | App boota com segredo do cofre | remover o `.env` local, rodar o `deploy` e ver `/readyz` verde (o valor veio do Infisical) |
-| 8 | Sem segredo em log | log do job `deploy` mostra `***` no lugar dos valores |
-| 9 | Disco sob controle | `docker stats --no-stream` todos abaixo do `mem_limit`; `df -h` do volume de dados < 80% |
+| 6 | Segredo só no cofre | `gitleaks detect` (histórico) e `gitleaks detect --no-git --source backend` sem achados; `git ls-files \| grep '\.env$'` → vazio; `infisical secrets-manager secrets get --projectId <id> --env prod` lista os seis nomes |
+| 7 | App boota com segredo do cofre | `deploy` verde num host **sem** arquivo de segredo: `/readyz` responde `ok` e o boot não falha por `DATABASE_URL`, `IP_HASH_SALT` ou `ADMIN_TOKEN` ausentes |
+| 8 | Sem segredo em log | `gh run view <run> --log \| grep -cF '***'` > 0 (valores mascarados) e busca pelo prefixo de cada valor no log → 0 ocorrências |
+| 9 | Grafana sem a senha default | `grep -c 'GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}' compose.yaml` = 1 e `GRAFANA_PASSWORD` presente no cofre |
+| 10 | Disco sob controle | `docker stats --no-stream` todos abaixo do `mem_limit`; `df -h` do volume de dados < 80% |
 
-**Artefatos.** `observability/**`; `docs/seguranca.md` (modelo de segredos, rotação e escopo do token); `docs/evidencias/f5-dashboard.png`, `f5-targets.png`, `f5-log-erro.png`.
+**Artefatos.** `observability/**`; `docs/seguranca.md` (inventário dos segredos, quem lê o quê, escopo da identidade, rotação e riscos aceitos); `docs/evidencias/f5-seguranca.txt`; `docs/evidencias/f5-dashboard.png`, `f5-targets.png`, `f5-log-erro.png`.
 
 **Riscos da fase.**
 
@@ -369,7 +370,7 @@
 | --- | --- |
 | OOM com a stack inteira em uma instância pequena | `mem_limit` por serviço, retenção de 7 dias e Grafana sem plugins extras |
 | Loki com volume ou cardinalidade alta | Rótulos de baixa cardinalidade, `batch_wait` e retenção curta |
-| Infisical Cloud indisponível na demo | `.env` em cache no host com `chmod 600` e validade declarada no runbook |
+| Infisical Cloud indisponível na demo | o host lê o cofre a cada deploy e o deploy **falha fechado**; os containers do último deploy seguem no ar com o ambiente que já têm. Para a demo, validar o cofre antes de começar (`docs/runbook-operacao.md`) |
 | Senha aparecendo em print de tela | Usar valores descartáveis e raspar antes de publicar imagens em `docs/evidencias/` |
 | `/grafana` exposto | Rodar o critério 5 **antes** de mostrar o dashboard a alguém |
 
@@ -393,7 +394,7 @@
 
 *Endurecimento*
 6. Revisar o security group: 22 restrito ou justificado, 80 aberto e nenhuma outra porta exposta.
-7. Conferir `chmod 600` do `/opt/app/.env` e do `.pem` fora de `/mnt/c`; registrar a decisão sobre `fail2ban`/`ufw`.
+7. Conferir que nenhum segredo fica em arquivo no host (`ls -a /opt/app`) e que o `.pem` está fora de `/mnt/c`; registrar a decisão sobre `fail2ban`/`ufw`.
 8. Rodar a varredura final: `gitleaks detect`, `terraform fmt -check -recursive` e `git log --all --full-history -- "*.env"` vazio.
 
 *Ensaio*
@@ -475,7 +476,7 @@ Regras de convivência, em ordem de importância:
 | 4 | F2 (UI + testes) | 3 telas operáveis e invariante provada sob concorrência | print da UI + `f2-cobertura.txt` + resultado do teste de integração |
 | 5 | F3 | `terraform apply` cria a EC2 e a app responde em HTTP; `destroy` sem órfãos | `f3-plan.txt`, `f3-apply.txt`, `f3-destroy.txt`, print da URL |
 | 6 | F4 | Workflow verde com 7 jobs e imagem no ECR com tag = SHA; gate provado em execução vermelha | `f4-pipeline-verde.png`, `f4-pipeline-vermelho.png`, `f4-gate.md` |
-| 7 | F5 | Dashboard com 4 painéis e `.env` vindo do Infisical; `gitleaks` verde | `f5-dashboard.png`, `f5-targets.png`, `f5-log-erro.png` |
+| 7 | F5 | Dashboard com 4 painéis e segredos lidos do cofre no host; `gitleaks` verde | `f5-dashboard.png`, `f5-targets.png`, `f5-log-erro.png`, `f5-seguranca.txt` |
 | 8 | F6 | Ciclo completo em < 15 min, docs completos e demo de 3 min ensaiada | `f6-ensaio.md` + vídeo da demo + checklist da §11 marcado |
 
 ### 5.1 Como comprimir para 6 semanas e como esticar para 12
@@ -503,7 +504,7 @@ Regras de convivência, em ordem de importância:
 | **M2** MVP local testado | 4 | 3 telas operáveis, `pnpm test` verde com cobertura, teste de concorrência provando a invariante | `f2-cobertura.txt` + print da UI |
 | **M3** Primeira nuvem | 5 | "`terraform apply` cria a EC2 e a app responde em HTTP" + `ssh` + `destroy` sem órfãos | `f3-apply.txt`, `f3-destroy.txt`, `f3-url.png` |
 | **M4** Pipeline completo | 6 | "Workflow verde com 7 jobs", imagem no ECR com tag = SHA, e a execução vermelha mostrando `build`/`deploy` `skipped` | `f4-pipeline-verde.png`, `f4-pipeline-vermelho.png` |
-| **M5** Observabilidade e segredos | 7 | "Dashboard com 4 painéis", erro provocado aparecendo no Loki, `.env` gerado pelo Infisical, `gitleaks` verde | `f5-dashboard.png`, `f5-log-erro.png`, `f5-targets.png` |
+| **M5** Observabilidade e segredos | 7 | "Dashboard com 4 painéis", erro provocado aparecendo no Loki, segredos lidos do cofre no host, `gitleaks` verde | `f5-dashboard.png`, `f5-log-erro.png`, `f5-targets.png`, `f5-seguranca.txt` |
 | **M6** Entrega | 8 | Ciclo completo `destroy`→`apply`→`deploy`→`smoke` em < 15 min, demo de 3 min ensaiada, docs completos | `f6-ensaio.md` + vídeo + checklist da §11 |
 
 ## 7. Mapa de rastreabilidade entrega → nota
@@ -515,7 +516,7 @@ Regras de convivência, em ordem de importância:
 | **C3** Terraform (**15%**) | F3 (e F6) | `infra/` versionado, backend S3, `fmt -check`/`validate` no CI, ciclo `apply`→`destroy` documentado | o state for local; o `destroy` deixar órfãos; houver recurso criado à mão no console |
 | **C4** Pipeline CI/CD (**15%**) | F4 | Histórico com 7 jobs, deploy sem clique, smoke que reprova o workflow, summary com URL e digest | o deploy depender de SSH manual; o smoke for `curl` sem assert; só existir execução local |
 | **C5** Testes e qualidade (**10%**) | F2 e F4 | Três níveis (unitário, integração, contrato), cobertura do domínio, execução vermelha com jobs `skipped` | os testes existirem "para constar", sem ligação com o gate; ou não houver teste da regra de negócio |
-| **C6** Segurança e segredos (**5%**) | F5 (e F6) | Infisical com `.env` 600, `gitleaks` verde, log mascarado, `docs/seguranca.md` com riscos aceitos | houver segredo no histórico, `ENV` de segredo na imagem, ou `/opt/app/.env` sem permissão 600 |
+| **C6** Segurança e segredos (**5%**) | F5 (e F6) | Infisical como fonte única dos seis segredos (lidos no host com `secrets-manager run`), `gitleaks` verde, log mascarado (`***`), `docs/seguranca.md` com riscos aceitos | houver segredo no histórico, `ENV` de segredo na imagem, ou segredo em texto no host ou no log |
 | **C7** Observabilidade (**5%**) | F5 | 4 painéis com dados, alvos `UP`, log de erro correlacionado, dashboard versionado | os painéis estiverem vazios na demo; ou só houver CloudWatch sem consulta demonstrável |
 | **C8** Documentação técnica (**5%**) | F1 e F6 | README + ADR + runbook + segurança + observabilidade, com remoção de recursos documentada | o runbook não tiver o `destroy`; ou a documentação descrever uma arquitetura diferente da que roda |
 
@@ -585,8 +586,8 @@ Regras de convivência, em ordem de importância:
 - [ ] 4 painéis com dados reais e print datado
 - [ ] Log de erro consultável por LogQL com `request_id`
 - [ ] `/grafana` exige autenticação
-- [ ] `/opt/app/.env` gerado por `infisical export` com permissão 600
-- [ ] `::add-mask::` aplicado em todo valor lido do cofre
+- [ ] Nenhum arquivo de segredo no host: o deploy lê o cofre com `secrets-manager run` e o token da identidade morre no `trap` (`infisical logout`)
+- [ ] Seis segredos no ambiente `prod` do cofre, `GRAFANA_PASSWORD` incluída
 - [ ] `docs/seguranca.md` com riscos aceitos
 - [ ] `docker stats` abaixo dos `mem_limit`
 
@@ -667,7 +668,7 @@ Regras de convivência, em ordem de importância:
 
 **Segurança**
 - [ ] `gitleaks detect` verde no repositório e na imagem
-- [ ] `.env` do host com permissão 600; `.pem` em `~/.ssh`, fora de `/mnt/c`
+- [ ] Nenhum arquivo de segredo no host; `.pem` em `~/.ssh`, fora de `/mnt/c`
 - [ ] Log do deploy com valores mascarados (`***`)
 
 **Observabilidade**

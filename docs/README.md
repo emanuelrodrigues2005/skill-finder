@@ -28,6 +28,7 @@ produto da aplicação que será entregue: o **buscador de skills** (`Skill Find
 | Documento | Para quê |
 | --- | --- |
 | [runbook-operacao](runbook-operacao.md) | subir, implantar, destruir e encerrar sessão na EC2 do lab — os "procedimentos de execução, implantação e remoção" do edital (§3.7) |
+| [seguranca](seguranca.md) | inventário dos seis segredos, quem lê o quê, escopo da machine identity, rotação/revogação e riscos aceitos — a demonstração do §3.4 do edital |
 
 Para agentes, a regra de sessão está em [`../AGENTS.md`](../AGENTS.md).
 
