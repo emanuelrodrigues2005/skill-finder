@@ -1,0 +1,63 @@
+# Loki single-binary: um processo só (sem microsserviços internos) é o único
+# desenho que cabe em 384 MB. `filesystem` em vez de S3: não há bucket no
+# sandbox do Academy e o volume nomeado morre com a instância.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+# TSDB (`v13`) é o índice recomendado desde o Loki 2.9 e o único que combina com
+# `compactor` + retenção por tempo.
+schema_config:
+  configs:
+    - from: 2024-04-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+
+# 7 dias: o mesmo horizonte do Prometheus, e o que impede o disco de 20 GiB de
+# encher com log velho. Sem `compactor` a retenção de Loki não existe — ele é
+# quem apaga os chunks fora da janela.
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 50
+  delete_request_store: filesystem
+
+limits_config:
+  retention_period: 168h
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  max_query_series: 5000
+  # Sem isto um único cliente pode abrir 50 streams e estourar o índice.
+  max_streams_per_user: 5000
+  # O Loki 3 deriva `service_name` de `service` por padrão: é uma cópia 1:1 do
+  # rótulo e não acrescenta pergunta nenhuma. Os rótulos ficam os três de §9.2.
+  discover_service_name: []
+
+analytics:
+  reporting_enabled: false

@@ -1,0 +1,16 @@
+apiVersion: 1
+
+# Provisionamento por arquivo: o dashboard vive no Git e é reaplicado a cada boot.
+# `allowUiUpdates: false` impede que uma edição no navegador divergir do arquivo e
+# desaparecer no próximo restart.
+providers:
+  - name: skill-finder
+    orgId: 1
+    folder: Skill Finder
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

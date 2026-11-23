@@ -1,0 +1,45 @@
+# Promtail é o único componente com acesso aos logs dos containers: ele lê
+# `/var/lib/docker/containers/*/*-json.log` (via docker_sd, que resolve o caminho
+# de cada container) e empurra para o Loki.
+#
+# O docker_sd existe para descobrir o NOME do container — sem ele o caminho
+# `<id>-json.log` não tem como virar o rótulo `service`. O socket entra `:ro`.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+# Fora de `/tmp`: posição perdida no restart relê o arquivo inteiro e duplica
+# todas as linhas no Loki.
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    batchwait: 1s
+    batchsize: 1048576
+
+scrape_configs:
+  # Filtro pelo projeto deste compose: a máquina roda outros projetos e sem ele
+  # o Loki receberia os logs deles no mesmo índice.
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=skills-search"]
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+    pipeline_stages:
+      # Rótulos de baixa cardinalidade (§9.2): `level` e `route` são conjuntos
+      # fechados. `query`, `query_hash` e `client_hash` NUNCA viram rótulo —
+      # são entrada de usuário e explodem o índice do Loki.
+      - json:
+          expressions:
+            level: level
+            route: route
+      - labels:
+          level:
+          route:
