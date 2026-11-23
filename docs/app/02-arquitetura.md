@@ -655,28 +655,39 @@ Instrumentação na primeira versão (não depois): sem isso, C7 (5%) vira traba
 
 ### 9.1 Métricas Prometheus
 
-| Métrica | Tipo | Labels | Por que existe |
-| --- | --- | --- | --- |
-| `http_requests_total` | counter | `route`, `method`, `status` | Requisições (exigência §3.6 do edital) |
-| `http_request_duration_seconds` | histogram | `route`, `method` | p95 do endpoint — tempo de resposta |
-| `search_requests_total` | counter | `result` (`ok`,`empty`,`degraded`,`error`) | Volume e qualidade da busca |
-| `search_degraded_total` | counter | `reason` (`source_stale`,`llm_unavailable`) | Por que a resposta degradou — distingue catálogo velho de LLM fora do ar (#48) |
-| `catalog_snapshot_age_seconds` | gauge | — | Idade do snapshot vista pela última busca; envelhece junto com `data.age_seconds` e dispara `source_stale` acima de 12 h (#48) |
-| `search_stage_duration_seconds` | histogram | `stage` (`validate`,`intent`,`retrieve`,`rank`,`explain`,`total`) | Mostra onde o tempo vai (LLM vs banco) |
-| `search_results_count` | histogram | — | Distribuição de resultados por busca |
-| `llm_calls_total` | counter | `status` (`ok`,`timeout`,`http_error`,`invalid_json`,`invalid_ids`) | Saúde do provedor |
-| `llm_call_duration_seconds` | histogram | `stage` (`intent`,`explain`) | Latência da LLM separada da latência da API |
-| `llm_tokens_total` | counter | `kind` (`prompt`,`completion`) | Custo de token visível na demo |
-| `llm_fallback_total` | counter | `reason` (`timeout`,`invalid_ids`,`circuit_open`,`budget`) | Quantas buscas perderam a prosa |
-| `llm_injection_suspected_total` | counter | `stage` | Prova de que a injeção é monitorada |
-| `skill_source_requests_total` | counter | `adapter`, `status` | Saúde da fonte |
-| `skill_source_duration_seconds` | histogram | `adapter` | Latência do skills.sh |
-| `ingest_runs_total` | counter | `status` | Histórico de ingestão |
-| `ingest_last_success_timestamp_seconds` | gauge | — | Idade do catálogo (alerta se > 12 h) |
-| `skills_total` | gauge | `category`, `is_active` | Tamanho do catálogo (queda abrupta = parser quebrado) |
-| `cache_hits_total` | counter | `cache` (`search`,`llm`,`skill_md`) | Eficácia do cache/custo |
-| `rate_limited_total` | counter | `scope` (`client`,`global`) | Abuso e ajuste de limites |
-| `db_pool_in_use` | gauge | — | Saturação do Postgres |
+| Métrica | Tipo | Labels | Por que existe | Implementado |
+| --- | --- | --- | --- | --- |
+| `http_requests_total` | counter | `route`, `method`, `status` | Requisições (exigência §3.6 do edital) | sim |
+| `http_request_duration_seconds` | histogram | `route`, `method` | p95 do endpoint — tempo de resposta | sim |
+| `search_requests_total` | counter | `result` (`ok`,`empty`,`degraded`,`error`) | Volume e qualidade da busca | roadmap |
+| `search_degraded_total` | counter | `reason` (`source_stale`,`llm_unavailable`) | Por que a resposta degradou — distingue catálogo velho de LLM fora do ar (#48) | sim |
+| `catalog_snapshot_age_seconds` | gauge | — | Idade do snapshot vista pela última busca; envelhece junto com `data.age_seconds` e dispara `source_stale` acima de 12 h (#48) | sim |
+| `search_stage_duration_seconds` | histogram | `stage` (`validate`,`intent`,`retrieve`,`rank`,`explain`,`total`) | Mostra onde o tempo vai (LLM vs banco) | roadmap |
+| `search_results_count` | histogram | — | Distribuição de resultados por busca | roadmap |
+| `llm_calls_total` | counter | `status` (`ok`,`timeout`,`http_error`,`invalid_json`,`invalid_ids`) | Saúde do provedor | sim |
+| `llm_call_duration_seconds` | histogram | `stage` (`intent`,`explain`) | Latência da LLM separada da latência da API | roadmap |
+| `llm_tokens_total` | counter | `kind` (`prompt`,`completion`) | Custo de token visível na demo | roadmap |
+| `llm_fallback_total` | counter | `reason` (`timeout`,`invalid_ids`,`circuit_open`,`budget`) | Quantas buscas perderam a prosa | roadmap |
+| `llm_injection_suspected_total` | counter | `stage` | Prova de que a injeção é monitorada | roadmap |
+| `skill_source_requests_total` | counter | `adapter`, `status` | Saúde da fonte | roadmap |
+| `skill_source_duration_seconds` | histogram | `adapter` | Latência do skills.sh | roadmap |
+| `ingest_runs_total` | counter | `status` | Histórico de ingestão | roadmap |
+| `ingest_last_success_timestamp_seconds` | gauge | — | Idade do catálogo (alerta se > 12 h) | roadmap |
+| `skills_total` | gauge | `category`, `is_active` | Tamanho do catálogo (queda abrupta = parser quebrado) | roadmap |
+| `cache_hits_total` | counter | `cache` (`search`,`llm`,`skill_md`) | Eficácia do cache/custo | roadmap |
+| `rate_limited_total` | counter | `scope` (`client`,`global`) | Abuso e ajuste de limites | sim |
+| `db_pool_in_use` | gauge | — | Saturação do Postgres | roadmap |
+
+**Estado em 2026-11-23:** **6 de 20** métricas têm código — `http_requests_total`,
+`http_request_duration_seconds`, `llm_calls_total`, `catalog_snapshot_age_seconds`,
+`search_degraded_total` e `rate_limited_total`, registradas em
+`backend/src/common/metrics/metrics.service.ts`. As outras 14 são **roadmap declarado**, não
+esquecimento: os nomes e rótulos continuam congelados aqui para o painel e os testes não mudarem de
+contrato quando cada uma nascer. Onde o código publica um subconjunto do rótulo (por exemplo,
+`rate_limited_total` só com `scope="global"`), este contrato segue valendo para a série que faltar.
+Os 4 painéis de §9.3 consultam as seis que existem; uma métrica nova entra no painel sem mudar de
+forma.
+
 
 ### 9.2 Logs estruturados (JSON, uma linha por evento)
 

@@ -54,13 +54,13 @@ com pipeline CI/CD e observabilidade. Interface em português (pt-BR), documenta
 
 | pasta | o que mora | o que **não** mora | comando que a exercita |
 | --- | --- | --- | --- |
-| `backend/` | NestJS 11 + Prisma: `src/` (`config`, `common`, `prisma`, `health` hoje; `catalog/`, `ranking/`, `llm/`, `search/` na F2.3–F2.6), `prisma/schema.prisma`, `test/` | ranking fora de `src/ranking`; rede em teste; chave de LLM | `make test` · `pnpm --dir backend typecheck` |
+| `backend/` | NestJS 11 + Prisma: `src/` (`config`, `common`, `prisma`, `health`, `contract`, `docs`, `admin`, `catalog/`, `ranking/`, `llm/`, `search/`), `prisma/schema.prisma`, `test/` | ranking fora de `src/ranking`; rede em teste; chave de LLM | `make test` · `pnpm --dir backend typecheck` |
 | `frontend/` | React + Vite + TS: 3 telas (`src/pages/`), `src/api.ts` (só `/api/v1`), `src/types.ts` (contrato v0), `nginx.conf` (SPA + proxy) | chave de LLM; chamada ao skills.sh; lista fixa de categorias | `pnpm --dir frontend run lint` · `make up` (serviço `web`) |
 | `docs/` | `00`–`04` do projeto acadêmico; `app/` com spec, arquitetura, plano e `amostras/`; `evidencias/` | código; critério de aceitação de issue (vive na issue) | `python scripts/dev/validate_docs.py` · índice em `docs/README.md` |
-| `infra/` | Terraform aplicado e destruído (8 recursos): state no S3, EC2, ECR, security group e as **5 saídas do seam** (`host_public_ip`, `ecr_registry`, `ecr_repository_urls`, `state_bucket`, `target_port`) | segredo; `tfstate` versionado; lógica de aplicação | `terraform -chdir=infra validate` · `plan` (F3) |
+| `infra/` | Terraform aplicado e destruído (**4 recursos**): state no S3, EC2 `t3.small`, security group e EBS de dados com attachment; imagens no Docker Hub público e as **5 saídas** (`host_public_ip`, `dockerhub_user`, `image_repository`, `state_bucket`, `target_port`) | segredo; `tfstate` versionado; ECR; lógica de aplicação | `terraform -chdir=infra validate` · `plan`/`apply`/`destroy` |
 | `scripts/` | automação de apoio: `sandbox-check.sh`, `install-toolchain-*`, `bootstrap-state.sh`, `probe-skills-sh.sh`, `dev/*.py`, `dev/collect-skills-sample.ps1`, `github/publish-tracker.ps1` + `github/issues/f0–f6.md` | lógica de aplicação; regra de negócio | `pwsh scripts/github/publish-tracker.ps1 -ValidateOnly` |
-| `observability/` | **ainda não existe** — nasce na F5: Prometheus, Loki, Grafana e os 4 painéis versionados | configuração da aplicação | hoje `curl -sS localhost:8080/metrics`; depois `/grafana` no `make up` |
-| `.github/` | `pull_request_template.md` hoje; `workflows/` (CI e deploy) na F4 | corpo de issue (vive em `scripts/github/issues/`); segredo | `gh pr checks` · `gh pr view` |
+| `observability/` | stack do profile `obs` no `compose.yaml`: Prometheus, Loki, Promtail, node-exporter e Grafana (5 containers), 4 painéis versionados e retenção de 7 dias (ADR-009); `/grafana/` na borda | configuração da aplicação; dados coletados | `docker compose --profile obs up -d` · `curl -sS localhost:8080/metrics` |
+| `.github/` | `pull_request_template.md`, `workflows/ci.yml` (8 jobs) e `workflows/deploy.yml` (`workflow_run` → Docker Hub → SSM → smoke) | corpo de issue (vive em `scripts/github/issues/`); segredo | `gh pr checks` · `gh run list` |
 | `tasks/` | `plan.md`: índice das issues por milestone F0–F6, ADRs herdadas e riscos | critério de aceitação (vive na issue); `tasks/todo.md` (não existe de propósito) | `pwsh scripts/github/publish-tracker.ps1 -ValidateOnly` |
 
 ## 5. Fluxo de uma busca

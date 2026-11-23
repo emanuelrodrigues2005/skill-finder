@@ -770,8 +770,16 @@ jobs:
 
       - name: smoke /grafana/ asks for a login
         run: |
-          set -euo pipefail
-          code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "${BASE_URL}/grafana/")"
+          set -uo pipefail
+          # O Grafana leva dezenas de segundos para ficar pronto depois do `up`, e o
+          # nginx responde 502 enquanto ele nao escuta. Checar uma vez, logo depois do
+          # deploy, reprova um app correto — aconteceu no ensaio de 2026-11-23.
+          code=""
+          for _ in $(seq 1 18); do
+            code="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "${BASE_URL}/grafana/")"
+            case "$code" in 302|401) break ;; esac
+            sleep 5
+          done
           echo "status: ${code}"
           # 302 e o Grafana mandando para o login; 401 e a mesma rota fechada para
           # quem nao tem sessao. `200` significaria o Grafana servindo painel aberto

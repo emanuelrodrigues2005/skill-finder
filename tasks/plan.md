@@ -36,7 +36,8 @@ Todas **herdadas** — nenhuma é redecidida por este plano.
 
 ## Task List
 
-Índice das issues por milestone. `[x]` = já fechada, com o commit que a entregou.
+Índice das issues por milestone. `[x]` = entrega verificada no commit ou run citado (a issue no
+GitHub fecha com o comentário de evidência quando revisada).
 
 ### F0 — Pré-requisitos e sandbox
 - [x] Validar o sandbox AWS Academy (K1–K14) — `c8b1840`, `b9a3b93`
@@ -80,22 +81,29 @@ padrão declarado; **Q7 (Tema D) registrada**; data e conclusão da aula em `doc
 "No changes."; app em HTTP; `state list` ≥ 8 sem `aws_iam_*`; **`destroy` sem órfãos**; runbook.
 
 ### F4 — Pipeline CI/CD
-- [ ] `ci:` workflow de CI com lint, três níveis e gitleaks
-- [ ] `ci:` deploy automatizado com smoke e gate de testes provado
+- [x] `ci:` workflow de CI com lint, três níveis de teste e gitleaks — #16, `fa60294`, `bcabf50`
+- [x] `ci:` deploy automatizado com smoke e gate de testes provado — #17, `5e567bd`, `264001b`, `a0e5084`, `2414ccc`
 
-**Checkpoint F4:** execução verde com os 7 jobs; execução vermelha com `build`/`deploy` `skipped`
-arquivada; imagem no ECR com tag = SHA; branch padrão protegido.
+**Checkpoint F4:** execução verde com os 8 jobs; execução vermelha com `build`/`deploy` `skipped`;
+prova em `docs/evidencias/f4-gate.md` (runs `45273346584` verde, `45273141415` e `44849868942`
+vermelhos); imagem no Docker Hub público com tag = SHA. Pendência: `main` **não** está protegida
+(`gh api .../branches/main/protection` → 404), registrada na §11 de `docs/04`.
 
 ### F5 — Observabilidade e segredos
-- [ ] `feat(observability):` Prometheus, Loki, Grafana e 4 painéis
-- [ ] `feat(security):` segredos no Infisical e `.env` gerado no deploy
+- [x] `feat(observability):` Prometheus, Loki e Grafana no profile `obs` com 4 painéis — #18, `6ab90ac`
+- [x] `feat(security):` fechar a demonstração de segredos (docs, `GRAFANA_PASSWORD`, provas) — #19, `9c85154`
+- [x] `ci(infra):` subir a stack obs no deploy e expor o Grafana na borda — #62, `a0e5084`
 
-**Checkpoint F5:** alvos `UP`; 4 painéis com dados datados; log consultável por `request_id`;
-`/grafana` autenticado; `.env` do cofre com `chmod 600`.
+**Checkpoint F5:** 5 containers no profile `obs` (ADR-009); 4 painéis versionados; `/grafana/`
+autenticado; seis segredos no Infisical e nenhum `.env` no host; prova em
+`docs/evidencias/f5-seguranca.txt`.
 
 ### F6 — Entrega
-- [ ] `docs:` README, runbook, segurança e observabilidade finais
-- [ ] `chore(release):` ensaio cronometrado e demo de 3 minutos
+- [x] `docs:` README final, verdade da arquitetura e índice de evidências — #20
+- [ ] `chore(release):` ensaio cronometrado, evidências vivas e demo de 3 minutos — #21
+- [x] `docs:` reescrever o runbook §1–2 para o deploy por SSM — #63, `3dc3032`
+- [x] `docs(evidencias):` arquivar a prova do pipeline (verde, vermelho e gate) — #64, `0ca5234`
+- [ ] `chore(security):` rotacionar a `LLM_API_KEY` e revogar a machine identity — #65
 
 **Checkpoint F6:** ciclo `destroy`→`apply`→`deploy`→`smoke` em < 15 min registrado; demo ensaiada
 com vídeo de fallback; `gitleaks` e `fmt` limpos; checklist da §11 100%.

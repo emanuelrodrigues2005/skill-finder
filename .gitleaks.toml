@@ -1,0 +1,21 @@
+# Configuracao do gitleaks.
+#
+# Existe por um motivo so: o `generic-api-key` dispara em **SHA de commit usado
+# como tag de imagem** (`skill-finder-api:d8574a94…`), porque "api" no meio e a
+# sequencia hex longa imitam uma credencial. Um SHA e publico por definicao — e o
+# pipeline inteiro existe para torna-lo rastreavel.
+#
+# A allowlist e **estreita de proposito**: casa a forma exata do alvo, nao o
+# arquivo. `docs/evidencias/` continua sendo varrido, porque e justamente onde
+# logs sao transcritos — abrir a pasta inteira esconderia o vazamento que a
+# varredura existe para achar.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "SHA de commit em tag de imagem: fato publico, nao credencial"
+regexTarget = "line"
+regexes = [
+  '''skill-finder-(api|web):[0-9a-f]{40}''',
+]

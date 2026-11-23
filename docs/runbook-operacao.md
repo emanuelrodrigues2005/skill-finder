@@ -4,14 +4,18 @@ Procedimentos de execução, implantação e remoção do Skill Finder na EC2 do
 `docs/00-edital-projeto-2.md` §3.7 cobra como "procedimentos de execução, implantação e remoção" e o
 desenho de `docs/01-analise-requisitos-e-arquitetura.md` §4.2 assume.
 
-Vale para toda a página: WSL com AWS CLI v2 e Terraform ≥ 1.10 (`terraform version`), a chave privada
-do key pair **`vockey`** em `~/.ssh/labsuser.pem` (`chmod 400`), `infra/terraform.tfvars` preenchido
-e credenciais de sessão exportadas:
+Vale para toda a página: WSL com AWS CLI v2, Terraform ≥ 1.10 (`terraform version`), `gh` autenticado
+(`gh auth status`), `infra/terraform.tfvars` preenchido e credenciais de sessão exportadas:
 
 ```bash
 source ~/.local/bin/academy-env
 aws sts get-caller-identity --query '[Account,Arn]' --output text
 ```
+
+O caminho principal (§1 e §2) **não usa SSH**: a porta 22 não existe no security group
+(`allowed_ssh_cidrs = []`, `infra/network.tf`) e o único canal até o host é o SSM RunCommand.
+Nenhuma chave privada é necessária. O único passo que ainda sai por SSH — o backup que precede o
+`destroy`, na §3 — está declarado no apêndice A, com o pré-requisito.
 
 As credenciais do Learner Lab duram ~4 h e o `apply` não tem retomada automática: renove no começo
 de cada sessão e siga o protocolo de `docs/02-aws-academy-limites-e-riscos.md` §2.6 se expirarem no
@@ -19,8 +23,9 @@ meio de um comando.
 
 ## 1. Subir
 
-Do zero até a aplicação respondendo. Caminho de primeira execução — para uma versão nova de código
-já com a stack no ar, use a §2.
+Do zero até a aplicação respondendo pela borda. São duas metades: a infraestrutura (§1.1–§1.4) e o
+deploy que coloca a aplicação dentro dela (§1.5); a §1.6 fecha com a verificação pela borda. Para
+uma versão nova de código com a stack no ar, vá direto à §2.
 
 ### 1.1 Bucket de state — uma vez por conta, fora do Terraform
 
@@ -48,21 +53,29 @@ cp infra/terraform.tfvars.example infra/terraform.tfvars
 "${EDITOR:-vi}" infra/terraform.tfvars
 ```
 
-`project_name`, `key_name` (o key pair da F0) e `state_bucket` (o nome impresso em §1.1) não têm
-default. `allowed_ssh_cidrs` vazio mantém a porta 22 fechada; para abrir, use o CIDR da sua rede com
-máscara `/32`. `terraform.tfvars` é ignorado pelo Git.
+`project_name` e `state_bucket` (o nome impresso em §1.1) não têm default. `dockerhub_user` diz de
+qual namespace o host puxa as imagens e é o mesmo valor da variable `DOCKERHUB_USERNAME` que o
+`deploy.yml` usa para publicar; os dois lados têm de concordar, senão o `pull` no host procura uma
+imagem que ninguém publicou.
 
-O `key_name` tem default **`vockey`**, e é o único par que existe na conta do lab: nada de criar
-`projeto2` nem baixar `.pem` novo — a privada correspondente é o `labsuser.pem` de *AWS Details*.
+`allowed_ssh_cidrs` vazio — o default — mantém a **porta 22 fechada**: sem CIDR na lista, a regra
+nem existe no security group (`infra/network.tf`). É decisão de desenho, não esquecimento: o deploy
+passa por SSM e não precisa de shell. Abrir a porta é trocar a lista por `<rede>/32` e rodar
+`terraform apply`; sem isso, nenhum `ssh` responde e o acesso ao host é só o da §2.3.
+
+`key_name` continua no arquivo (default `vockey`, o único par da conta do lab) porque a variável
+existe no Terraform, mas nenhum passo do caminho principal depende dela. `terraform.tfvars` é
+ignorado pelo Git.
 
 ### 1.3 init, plan e apply
 
 O backend é **parcial**: o nome do bucket chega por `-backend-config` a cada `init` e nunca é
-versionado (`infra/backend.tf`).
+versionado (`infra/backend.tf`). O `-reconfigure` é o que faz um `init` repetido aceitar esse valor
+em vez de reclamar que o backend já foi configurado.
 
 ```bash
 cd infra
-terraform init -backend-config="bucket=$TF_STATE_BUCKET"
+terraform init -reconfigure -backend-config="bucket=$TF_STATE_BUCKET"
 terraform fmt -check -recursive
 terraform validate
 terraform plan -out=plan.out
@@ -70,16 +83,18 @@ terraform apply plan.out
 cd ..
 ```
 
-Os comandos de Terraform entram e saem de `infra/`; o `cd ..` devolve ao repositório, de onde
-rodam os comandos de `docker`, `scp` e `git` das seções seguintes.
+Os comandos de Terraform entram e saem de `infra/`; o `cd ..` devolve ao repositório, de onde rodam
+os comandos de `terraform output`, `gh` e `curl` das seções seguintes.
 
 Esperado: `Terraform has been successfully initialized!`, nenhuma saída de `fmt`, `Success! The
-configuration is valid.`, um plano com as 5 saídas (`host_public_ip`, `ecr_registry`,
-`ecr_repository_urls`, `state_bucket`, `target_port`) e **nenhum** `aws_iam_*`, e por fim
+configuration is valid.`, um plano com os cinco outputs (`dockerhub_user`, `host_public_ip`,
+`image_repository`, `state_bucket`, `target_port`) e **nenhum** `aws_iam_*`, e por fim
 `Apply complete! Resources: N added, 0 changed, 0 destroyed.`
 
 Não use `-auto-approve`: o plano mostra o que será criado antes de o crédito ser gasto, e a sessão
-pode expirar no meio (`docs/02` §2.6).
+pode expirar no meio (`docs/02` §2.6). O mesmo ciclo existe pronto no pipeline
+(`gh workflow run deploy.yml --ref main -f provision=true`, §2.2), mas lá não há plano na tela —
+rodar `terraform plan` na frente é o que permite ver o custo antes.
 
 Mudou o `user_data`? Ele só roda em instância nova: o provider atualiza o atributo, mas o cloud-init
 não reexecuta num host que já bootou. Force a troca e a sessão de bootstrap acontece de novo —
@@ -104,215 +119,181 @@ Esperado: um IPv4 público. **O IP muda a cada `stop`/`start` da instância** (n
 desenho): toda URL abaixo depende de `$IP` e fica inválida depois de religar a máquina. Releia o
 output — §4.2 — antes de qualquer comando com `$IP`.
 
-### 1.5 Compose e `/opt/app/.env`
+### 1.5 Deploy da aplicação
 
-O host não tem o repositório e **não precisa dele**: o código roda dentro da imagem publicada no
-ECR (§1.6). Para `/opt/app` vão só os dois arquivos de composição e o `.env` — `/opt/app` já existe
-porque o `user_data` o criou.
+Depois do `apply` a instância está de pé e **vazia**: o `user_data` instala o Docker, monta o volume
+de dados em `/var/lib/docker` e cria `/opt/app`, mas não sobe container nenhum. Quem coloca a
+aplicação lá é o pipeline — o mesmo caminho de qualquer deploy, sem procedimento paralelo:
+
+```bash
+gh workflow run deploy.yml --ref main
+```
+
+Se a infraestrutura acabou de ser criada pelo próprio workflow, `-f provision=true` faz as duas
+coisas num dispatch só. O `gate` exige os secrets da sessão AWS, o `DOCKERHUB_TOKEN`, os dois do
+Infisical e a variable `DOCKERHUB_USERNAME`; a lista completa e como gravá-los está em
+[`docs/app/06-pipeline-deploy.md`](app/06-pipeline-deploy.md) §3, e
+`bash scripts/dev/set-deploy-secrets.sh` publica as três credenciais da sessão de uma vez.
+
+A primeira ingestão não é um passo à parte: o deploy chama a rota admin de dentro do host, com o
+`ADMIN_TOKEN` do Infisical, e o log do job mostra `ingestao: 202` (ou `409`, se outra ingestão
+estiver em curso).
+
+### 1.6 Verificação pela borda
+
+O `smoke` do workflow roda estas checagens e reprova o run em qualquer desvio; rodar à mão serve para
+conferir uma borda que ficou de pé fora do último deploy.
 
 ```bash
 IP="$(cd infra && terraform output -raw host_public_ip)"
-git archive --format=tar.gz -o /tmp/compose.tar.gz HEAD compose.yaml infra/deploy/compose.prod.yaml
-scp -i ~/.ssh/labsuser.pem /tmp/compose.tar.gz "ubuntu@$IP:/tmp/"
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'sudo mkdir -p /opt/app && sudo tar -xzf /tmp/compose.tar.gz -C /opt/app && sudo chown -R ubuntu:ubuntu /opt/app && ls -R /opt/app'
-```
-
-Esperado: `compose.yaml` e `infra/deploy/compose.prod.yaml`. Nenhum `backend/`, nenhum `frontend/`:
-o que o host executa vem do registry, não do checkout.
-
-O `.env` é lido pelo compose (`env_file`) e é o que faz a API passar no schema de produção. As
-últimas quatro linhas não são segredo: são a interpolação de `infra/deploy/compose.prod.yaml`, e o
-registry vem de `terraform output` para o id da conta não ser escrito no repositório.
-
-```bash
-ECR_REGISTRY="$(cd infra && terraform output -raw ecr_registry)"
-IMAGE_TAG="$(git rev-parse --short HEAD)"
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'umask 077 && cat > /opt/app/.env' <<EOF
-POSTGRES_USER=skills
-POSTGRES_PASSWORD=$(openssl rand -hex 24)
-POSTGRES_DB=skills
-IP_HASH_SALT=$(openssl rand -hex 16)
-ADMIN_TOKEN=$(openssl rand -hex 32)
-LLM_ENABLED=true
-LLM_API_KEY=troque-pela-chave-do-provedor
-SKILL_SOURCE_KIND=html
-WEB_PORT=80
-ECR_REGISTRY=$ECR_REGISTRY
-ECR_API_REPOSITORY=skill-finder-api
-ECR_WEB_REPOSITORY=skill-finder-web
-IMAGE_TAG=$IMAGE_TAG
-EOF
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'chmod 600 /opt/app/.env && stat -c "%a %U" /opt/app/.env'
-```
-
-Esperado: `600 ubuntu`. O `chmod 600` é obrigatório — o arquivo tem a senha do banco, o
-`ADMIN_TOKEN` e a chave da LLM, e é lido por um usuário só.
-
-Troque `LLM_API_KEY` pelo valor real **antes** de rodar o bloco: o schema só exige string não vazia,
-então o placeholder passa no boot e falha na primeira busca, com `degraded: true`.
-
-Por que essas chaves: o compose deriva `DATABASE_URL` de `POSTGRES_*` e fixa `ENV=prod` por
-serviço; com `ENV=prod` o boot **recusa** subir sem `DATABASE_URL`, `IP_HASH_SALT`, `ADMIN_TOKEN`
-(≥ 32 caracteres) e `LLM_API_KEY` (quando `LLM_ENABLED=true`), e recusa a senha de dev `skillsdev`
-(`backend/src/config/env.schema.ts`). `WEB_PORT=80` é o que publica o nginx na porta 80 — sem ele o
-stack sobe na 8081 e `http://$IP/` não responde.
-
-### 1.6 Puxar as imagens do ECR, subir e migrar
-
-O `IMAGE_TAG` sai do `.env` (§1.5) e é o mesmo SHA nos dois repositórios: `pull` e `up` leem a
-imagem do registry, nunca constroem no host.
-
-```bash
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod pull'
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --no-build'
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod ps'
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod exec -T api npm run --silent prisma:deploy'
-```
-
-Esperado: `pull` baixando `skill-finder-api:<sha>`, `skill-finder-web:<sha>` e `postgres:16-alpine`;
-`up -d --no-build` subindo os três; `ps` com `api` e `web` em `running (healthy)` (o `postgres`
-também, `healthy`); `prisma:deploy` aplicando as migrations pendentes ou respondendo
-`No pending migrations to apply.`
-
-O `pull` não pede senha nem AWS CLI. O `user_data` instala o `amazon-ecr-credential-helper` e escreve
-`/home/ubuntu/.docker/config.json` com `credHelpers` para o registry da conta; o helper pede o token
-ao ECR com a credencial do `LabInstanceProfile` (o `LabRole` tem
-`AmazonECRContainerRegistryReadOnly`) e a renova a cada `pull`. Consequência de projeto: nenhum
-segredo de registry mora no host e nada vence em 12 h.
-
-```bash
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cat /home/ubuntu/.docker/config.json'
-```
-
-Esperado: `credHelpers` com `7943…amazonaws.com` → `ecr-login`.
-
-`--no-build` não é opcional: o `compose.yaml` da raiz declara `build:` para `api` e `web`, e sem a
-flag o host tentaria construir as duas imagens (`pnpm install --frozen-lockfile` do monorepo em
-`t3.small`, 2 GB) em vez de usar o que veio do registry.
-
-### 1.7 Smoke
-
-```bash
 curl -fsS "http://$IP/healthz"; echo
 curl -fsS "http://$IP/readyz"; echo
-curl -fsS -o /dev/null -w '%{http_code}\n' "http://$IP/"
+curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "http://$IP/"
+curl -sS -o /dev/null -w '%{http_code}\n' "http://$IP/grafana/"
+curl -sS -o /dev/null -w '%{http_code}\n' "http://$IP/metrics"
 ```
 
-Esperado: `200` em `/healthz` e `/readyz` (os dois têm proxy explícito na borda —
-`frontend/nginx.conf`) e `200` na raiz com a SPA. Um `502` aqui significa API fora do ar, quase
-sempre `.env` inválido — o erro exato do schema aparece em
-`ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod logs api | tail -20'`.
+| checagem | esperado | o que um desvio significa |
+| --- | --- | --- |
+| `GET /healthz` | `200`, JSON com `status: ok` | API fora do ar ou nginx sem proxy; segredo ausente no Infisical é a causa mais comum |
+| `GET /readyz` | `200`, JSON com `status: ok` | API viva e Postgres fora — o envelope `NOT_READY` diz qual dos dois |
+| `GET /` | `200`, `text/html` com `<!doctype html>` | a SPA não subiu, ou o `web` está servindo outro conteúdo |
+| `GET /grafana/` | `302` (login) ou `401` | `200` é o Grafana aberto na internet; `404`, proxy apontando para Grafana sem sub-path; `502`, stack obs fora |
+| `GET /metrics` | `404` | a borda parou de fechar a rota e os contadores de latência por rota estão públicos |
 
-### 1.8 Primeira ingestão
-
-A imagem `runtime` **não** tem `scripts/` nem `ts-node` (`backend/Dockerfile`), então `make seed`,
-`pnpm seed` e `pnpm ingest` não rodam no host de produção. Em produção a ingestão é a rota admin,
-autenticada por `X-Admin-Token`:
-
-```bash
-TOKEN="$(ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'sed -n "s/^ADMIN_TOKEN=//p" /opt/app/.env')"
-curl -fsS -X POST "http://$IP/api/v1/admin/ingest" \
-  -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"source_keys":["vercel-labs/skills/find-skills","anthropics/skills/webapp-testing"]}' | head -c 400; echo
-```
-
-Esperado: `202` com o resultado do run. A rota aceita **1 a 20** `source_keys` (`owner/repo/slug`) e
-responde `409` se outra ingestão estiver em curso; o ciclo de 720 chaves é do agendador, não desta
-rota (`docs/app/02-arquitetura.md` §7.3). O catálogo cresce a cada chamada — o bootstrap completo
-são várias.
+Um `502` na raiz é quase sempre segredo inválido no Infisical — o motivo exato aparece no log do job
+`deploy` (§2.3). `bash scripts/dev/smoke-edge.sh "$IP"` roda `/healthz`, `/readyz`, `/` e a recusa
+`401` da rota admin sem token, com código de saída 1 quando alguma falha; `/grafana/` e `/metrics`
+ficam de fora dele.
 
 ## 2. Implantar
 
-Uma versão nova de código com a infraestrutura de pé: a imagem nova no ECR, `IMAGE_TAG` trocado,
-`pull`, `up -d --no-build`, migração, smoke. Nada de `terraform apply` aqui — infraestrutura só
-muda na §1 — e nada de construir imagem no host.
+Uma versão nova de código com a infraestrutura de pé. O caminho normal é **automático**: o
+`deploy.yml` nasce de um `workflow_run` do `ci.yml` concluído com `success` num `push` para `main`.
+O manual é o mesmo workflow, por `workflow_dispatch`. Nada de `terraform apply` aqui — infraestrutura
+só muda na §1 — e nada de construir imagem no host.
 
-Esta seção é o caminho **manual**, para quando a sessão não tem credencial de GitHub Actions. O
-caminho automatizado é `.github/workflows/deploy.yml`: ele executa esta mesma sequência por SSM
-RunCommand (sem SSH) e reprova o workflow se o smoke falhar — desenho, secrets e limitações do lab
-em [`docs/app/06-pipeline-deploy.md`](app/06-pipeline-deploy.md).
+O canal entre o runner e a EC2 é o **SSM RunCommand**, não SSH: a porta 22 não existe no security
+group por decisão de desenho (§1.2), então o runner não guarda chave privada e o host não expõe
+shell na internet. O desenho completo — jobs, secrets, limitações do lab — está em
+[`docs/app/06-pipeline-deploy.md`](app/06-pipeline-deploy.md).
 
-### 2.1 Publicar a imagem e apontar o `IMAGE_TAG`
+### 2.1 Caminho normal: merge em `main`
 
-A imagem sai do CI (F4) ou, sem CI, da máquina de quem desenvolve. O contrato é um só: **tag = SHA
-do commit**, nos dois repositórios, e `latest` nunca entra.
+`ci.yml` verde → `deploy.yml` (`workflow_run`, `completed: success`, `push` em `main`) → cinco jobs:
 
-```bash
-SHA="$(git rev-parse --short HEAD)"
-aws ecr get-login-password --region us-east-1 \
-  | docker login --username AWS --password-stdin "$(cd infra && terraform output -raw ecr_registry)"
-docker build -t "skill-finder-api:$SHA" --target runtime backend
-docker build -t "skill-finder-web:$SHA" frontend
-docker tag "skill-finder-api:$SHA" "$(cd infra && terraform output -raw ecr_registry)/skill-finder-api:$SHA"
-docker tag "skill-finder-web:$SHA" "$(cd infra && terraform output -raw ecr_registry)/skill-finder-web:$SHA"
-docker push "$(cd infra && terraform output -raw ecr_registry)/skill-finder-api:$SHA"
-docker push "$(cd infra && terraform output -raw ecr_registry)/skill-finder-web:$SHA"
-```
+| job | o que faz |
+| --- | --- |
+| `gate` | valida a sessão AWS (`sts get-caller-identity`), resolve o SHA, exige `DOCKERHUB_USERNAME` e os secrets do Infisical e confere que há host `running` (checagem pulada com `provision=true`) |
+| `build` | `docker build --target runtime` de `api` e `web`, `push` no Docker Hub com tag = SHA e `docker manifest inspect` da tag |
+| `provision` | `terraform init/validate/plan/apply` — só com `provision=true` |
+| `deploy` | SSM: payload do compose e de `observability/`, Infisical no host, `pull`, `up -d --no-build`, `prisma:deploy`, ingestão e `--profile obs` |
+| `smoke` | as checagens da §1.6 na borda pública; qualquer desvio reprova o run |
 
-Esperado: dois `Pushed` e, em `aws ecr describe-images --repository-name skill-finder-api`, a tag com
-o SHA. O `docker login` acima é da máquina de build — o host não faz login nenhum (§1.6).
+Nada a digitar. Run de CI vermelho não gera run de deploy: o gate é do grafo do GitHub, não uma
+segunda suíte de teste (o porquê está em `docs/app/06-pipeline-deploy.md` §2). Run verde com
+`smoke: skipped` seria smoke não executado — por isso a condição do job é explícita no `deploy.yml`,
+dependente só do veredicto do `deploy`.
 
-O host só precisa saber qual SHA rodar, e isso mora no `IMAGE_TAG` do `.env`:
+### 2.2 Caminho manual: `workflow_dispatch`
 
-```bash
-IP="$(cd infra && terraform output -raw host_public_ip)"
-SHA="$(git rev-parse --short HEAD)"
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" "sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=$SHA/' /opt/app/.env && grep -E '^(IMAGE_TAG|ECR_REGISTRY)=' /opt/app/.env"
-```
-
-Esperado: `IMAGE_TAG=<sha>` e `ECR_REGISTRY=<conta>.dkr.ecr.us-east-1.amazonaws.com`.
-
-### 2.2 Puxar, subir e migrar
+Para reimplantar sem merge, subir a infraestrutura junto ou voltar um deploy. O dispatch não escapa
+do gate: o passo *Prove the CI gate for a manual dispatch* consulta a API de Actions e exige ao menos
+um run verde do `ci.yml` para o SHA que vai ser implantado.
 
 ```bash
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod pull'
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --no-build'
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod exec -T api npm run --silent prisma:deploy'
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod ps'
+source ~/.local/bin/academy-env
+bash scripts/dev/refresh-aws-secrets.sh     # as 3 credenciais da sessão nos secrets do repo
+bash scripts/dev/deploy-preflight.sh        # AWS, host, SSM e secrets, antes de gastar um run
+gh workflow run deploy.yml --ref main
+gh run watch "$(gh run list --workflow deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```
 
-Esperado: os serviços cuja imagem mudou são recriados (`Recreated`), os demais seguem `running`, e o
-`ps` volta com `api`/`web` `healthy`. `prisma:deploy` é idempotente — pode rodar em todo deploy. O
-`pull_policy: always` de `compose.prod.yaml` garante que `up` traga o digest do registry: tag igual e
-imagem local velha não passam.
+`deploy-preflight.sh --offline` roda só as checagens de arquivo, quando a sessão do lab não está
+aberta. Os três inputs do dispatch — `image_tag` vazio e os dois booleanos `false` por default:
 
-O `.env` **não** é tocado por esta seção além do `IMAGE_TAG`. Mudou um segredo? Edite
-`/opt/app/.env`, confirme `chmod 600` e recrie a API:
-`docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --force-recreate api`.
-
-### 2.3 Smoke e diagnóstico
+| input | efeito |
+| --- | --- |
+| `image_tag` | SHA já publicado que será implantado (rollback, §2.4) |
+| `skip_build` | pula build+push e implanta a imagem que já está no Docker Hub |
+| `provision` | roda `terraform apply` antes do deploy, para infraestrutura derrubada |
 
 ```bash
-curl -fsS "http://$IP/readyz"; echo
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod logs --tail=50 api'
+gh workflow run deploy.yml --ref main -f skip_build=true   # reimplanta o SHA de `main`, sem build
+gh workflow run deploy.yml --ref main -f provision=true    # §1 e §2 num dispatch
 ```
 
-Esperado: `200` e log sem `Invalid environment configuration`. Se a imagem subiu mas a API morre no
-boot, o log traz o campo que falta (`DATABASE_URL`, `IP_HASH_SALT`, `ADMIN_TOKEN`, `LLM_API_KEY`).
+### 2.3 O que acontece no host, e onde ler o resultado
+
+O job `deploy` faz, nesta ordem:
+
+1. resolve o host por tag (`project=skill-finder`) e espera o agente SSM ficar `Online` — é o
+   `LabInstanceProfile` que autoriza o agente;
+2. manda `compose.yaml`, `infra/deploy/compose.prod.yaml` e `observability/` para `/opt/app` num
+   comando SSM próprio: são arquivos do commit, sem segredo nenhum;
+3. no host, autentica a machine identity no Infisical e roda, sob `secrets-manager run`,
+   `compose pull`, `up -d --no-build`, `npm run --silent prisma:deploy` e a ingestão pela rota admin;
+4. por último, `--profile obs up -d --no-build`: Grafana, Prometheus, Loki, Promtail e
+   node-exporter.
+
+Os segredos da aplicação (`DATABASE_URL`, `POSTGRES_PASSWORD`, `IP_HASH_SALT`, `ADMIN_TOKEN`,
+`LLM_API_KEY`, `GRAFANA_PASSWORD`) existem só no projeto do Infisical, env `prod`: não passam pelo
+runner, não ficam em arquivo no host e não aparecem em log. Não há arquivo de ambiente no host de
+produção — o compose roda com `--env-file /dev/null` e o ambiente injetado é a única fonte; sobra de
+execução antiga é ignorada, com aviso no log.
+
+Onde olhar:
+
+```bash
+gh run view <run-id> --log | grep -E 'SSM (payload|deploy)|compose|ingestao|obs-'
+gh run view <run-id>            # o Summary: commit, IP, imagens e o veredicto da observabilidade
+```
+
+E, para inspecionar o host sem SSH, o mesmo canal do deploy:
+
+```bash
+ID="$(aws ec2 describe-instances --filters "Name=tag:project,Values=skill-finder" \
+  "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].InstanceId' --output text)"
+CMD="$(aws ssm send-command --document-name AWS-RunShellScript --instance-ids "$ID" \
+  --comment "estado do compose" --timeout-seconds 120 \
+  --parameters 'commands=["cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod --profile obs ps"]' \
+  --query 'Command.CommandId' --output text)"
+aws ssm wait command-executed --command-id "$CMD" --instance-id "$ID"
+aws ssm get-command-invocation --command-id "$CMD" --instance-id "$ID" \
+  --query '[Status,StandardOutputContent]' --output text
+```
+
+A saída do SSM volta truncada em 24 mil caracteres: serve para `ps` e para `logs --tail=50`, não para
+arquivo grande — backup de banco é a §3, por outro canal.
 
 ### 2.4 Voltar um deploy (rollback)
 
-O ECR guarda as 5 imagens mais recentes de cada repositório (`infra/ecr.tf`), então voltar é apontar
-o `IMAGE_TAG` para o SHA anterior e repetir §2.2 — sem rebuild, sem `apply`:
+A tag de cada imagem é o SHA do commit e o Docker Hub não expira tag: voltar é repetir o deploy
+apontando para o SHA anterior, sem rebuild e sem `apply`.
 
 ```bash
-SHA_ANTERIOR="<sha que está rodando hoje>"
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" "sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=$SHA_ANTERIOR/' /opt/app/.env"
+gh workflow run deploy.yml --ref main -f image_tag=<sha-anterior> -f skip_build=true
 ```
 
-Depois, `pull` + `up -d --no-build` + `prisma:deploy` (§2.2) e o smoke (§2.3). Com o pipeline, o
-mesmo movimento é um dispatch — `gh workflow run deploy.yml --ref main -f image_tag=$SHA_ANTERIOR -f
-skip_build=true` —, que repete §2.2 e só fica verde se o smoke passar. Se o SHA anterior já
-saiu da janela de 5 imagens, o rollback é republicar o commit antigo
-(`git switch --detach <sha>` e o bloco de build de §2.1) — migrations aplicadas **não** voltam: elas
-são para frente por desenho, e é por isso que a migration de cada release entra antes do smoke.
+É o mesmo caminho da §2.3 — Infisical, `pull`, `up -d --no-build`, `prisma:deploy`, obs —, e o
+`smoke` da §1.6 só fecha verde se a versão antiga responder pela borda: o rollback é verificado como
+um deploy. Migrations aplicadas **não** voltam: elas são para frente por desenho, e é por isso que a
+migração de cada release entra antes do smoke. Reverter schema exige um release novo, não um
+dispatch.
+
+Se a tag anterior não existir mais no Docker Hub, dispare com `image_tag=<sha-anterior>` e **sem**
+`skip_build`: o `build` faz checkout daquele commit, republica a tag e o `deploy` a consome — e o
+gate manual continua exigindo um run verde do CI para o SHA.
 
 ## 3. Destruir
 
 Remove tudo o que o Terraform criou e **pára de gastar crédito**. O bucket de state da §1.1 sobrevive
 — ele não pertence a este state.
 
-Antes de destruir, salve o que o `destroy` leva junto: o volume EBS de dados (o banco) é apagado.
+Antes de destruir, salve o que o `destroy` leva junto: o volume EBS de dados (o banco) é apagado. O
+`pg_dump` abaixo sai por SSH, o único passo do runbook que ainda depende da porta 22 — o
+pré-requisito está no apêndice A.
 
 ```bash
 IP="$(cd infra && terraform output -raw host_public_ip)"
@@ -409,10 +390,13 @@ curl -fsS "http://$IP/healthz"; echo
 ```
 
 Esperado: um IP novo (ou o mesmo, por sorte) e `200` em `/healthz`. Os containers têm
-`restart: unless-stopped` e o Docker sobe no boot; se `ps` não mostrar `healthy` em ~2 min:
+`restart: unless-stopped` e o Docker sobe no boot. Se `/healthz` continuar fora do ar depois de
+~2 min, não há shell no host para mexer em container um a um: o conserto é reimplantar pelo mesmo
+canal, que refaz `pull`, `up -d --no-build` e a migração e só fecha verde se a borda responder
+(§2.2):
 
 ```bash
-ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod up -d --no-build'
+gh workflow run deploy.yml --ref main -f skip_build=true
 ```
 
 ### 4.3 Fim do lab: credenciais, lock preso
@@ -439,3 +423,27 @@ ssh -i ~/.ssh/labsuser.pem "ubuntu@$IP" 'cd /opt/app && docker compose -f compos
 Esperado: `plan exit: 0` (sem mudanças). `2` significa deriva entre o código e a AWS — investigue
 antes de sair; `1` é erro de leitura, normalmente credencial vencida. Registre o que mudou em
 `docs/evidencias/` se a sessão produziu evidência para o relatório.
+
+## Apêndice A — Legado: procedimento manual (não usado)
+
+As versões anteriores deste runbook ensinavam a subir a aplicação à mão: copiar os arquivos de
+composição para o host, escrever o arquivo de ambiente à mão, preencher o registry do ECR e rodar
+cada comando por `ssh -i ~/.ssh/labsuser.pem`. **Não é mais o procedimento**: a imagem vem do Docker
+Hub público (o pull é anônimo, sem credencial de registry no host), o arquivo de ambiente foi
+eliminado (o Infisical injeta no processo) e a porta 22 não existe no security group. O caminho
+válido é a §2 — um dispatch, o mesmo do dia a dia.
+
+O que sobrou de SSH no documento é um passo anterior ao canal SSM — o `pg_dump` que precede o
+`destroy` (§3) —, e ele não funciona sem o pré-requisito explícito: **`allowed_ssh_cidrs` preenchido**
+em `infra/terraform.tfvars` com o CIDR de quem opera (`<rede>/32`) e um **`terraform apply`**. Sem os
+dois, não há regra na 22 e o `ssh` não responde. Como conferir o estado da porta:
+
+```bash
+aws ec2 describe-security-groups --filters "Name=tag:project,Values=skill-finder" \
+  --query 'SecurityGroups[].IpPermissions[].[FromPort,ToPort]' --output text
+```
+
+Esperado com o default: só `80 80`. Qualquer `22` na saída é a porta aberta — o que a §1.2 fechou.
+
+Para inspecionar o host sem abrir nada, use o SSM da §2.3; para o backup antes do `destroy` (§3), o
+SSH é o canal que resta enquanto não houver upload da base para o S3.
