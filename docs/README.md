@@ -21,6 +21,9 @@ produto da aplicação que será entregue: o **buscador de skills** (`Skill Find
 | [01-spec-produto](app/01-spec-produto.md) | problema, personas, histórias de usuário, **regra de ranking**, requisitos não-funcionais |
 | [02-arquitetura](app/02-arquitetura.md) | componentes, contrato da API, modelo de dados, segurança (prompt injection), ADRs |
 | [03-plano-app](app/03-plano-app.md) | como a F2 é executada: descoberta da fonte de dados, sub-fases F2.0–F2.9, gates |
+| [04-rodar-local](app/04-rodar-local.md) | roteiro verificado do zero à busca respondendo: Compose, migrations, fixture e `/docs` |
+| [05-ingestao-e-frescor](app/05-ingestao-e-frescor.md) | rodízio da ingestão (720 chaves a cada 6 h), TTL do snapshot e quando a resposta degrada |
+| [06-pipeline-deploy](app/06-pipeline-deploy.md) | desenho do `deploy.yml`: `workflow_run`, Docker Hub, SSM, smoke e rollback por SHA |
 | [amostras](app/amostras/) | amostra real do skills.sh + decisão sobre a forma de acesso (F2.0) |
 
 ## Operação
@@ -29,6 +32,20 @@ produto da aplicação que será entregue: o **buscador de skills** (`Skill Find
 | --- | --- |
 | [runbook-operacao](runbook-operacao.md) | subir, implantar, destruir e encerrar sessão na EC2 do lab — os "procedimentos de execução, implantação e remoção" do edital (§3.7) |
 | [seguranca](seguranca.md) | inventário dos seis segredos, quem lê o quê, escopo da machine identity, rotação/revogação e riscos aceitos — a demonstração do §3.4 do edital |
+| [observability/README](../observability/README.md) | o que sobe no profile `obs` (5 containers), os 4 painéis, retenção de 7 dias, consultas de verificação e riscos aceitos |
+
+## Evidências por fase
+
+Provas datadas, em arquivo, sem segredo e sem link dependente do GitHub Actions.
+
+| Evidência | O que prova |
+| --- | --- |
+| [sandbox](evidencias/sandbox.md) | K1–K14 do AWS Academy validados antes de qualquer recurso |
+| [f1-aprovacao](evidencias/f1-aprovacao.md) | proposta E1 aprovada e escopo congelado |
+| [f2-ui](evidencias/f2-ui.md) | checklist da interface: pt-BR, foco, erro, vazio e `n/a` |
+| [f3-smoke](evidencias/f3-smoke.txt) | ciclo da F3: `apply`, smoke pela borda e `destroy` sem órfãos |
+| [f4-gate](evidencias/f4-gate.md) | pipeline provado: run verde, dois runs vermelhos e o `gate` bloqueando |
+| [f5-seguranca](evidencias/f5-seguranca.txt) | seis segredos no cofre, deploy sem `.env` e log mascarado |
 
 Para agentes, a regra de sessão está em [`../AGENTS.md`](../AGENTS.md).
 

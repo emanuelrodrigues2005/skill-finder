@@ -353,8 +353,9 @@
                                       "area:infra",
                                       "priority:p1"
                                   ],
-                       "state":  "open",
-                       "bodyFile":  "scripts/github/issues/f4.md"
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f4.md",
+                       "closing_comment":  "Entregue em `fa60294` e `bcabf50`: `ci.yml` com 8 jobs (lint, typecheck, test-unit, test-integration, test-e2e, test-web, contract, secrets). Run verde `45273101280` (main @ d8574a9) com os 8 jobs em success e o artefato `backend-coverage` (JUnit + cobertura). Pendencia: no HEAD atual (3dc3032) o job `secrets` reprova por falso positivo do gitleaks em `docs/evidencias/f4-gate.md`, sem relacao com o codigo."
                    },
                    {
                        "title":  "ci: deploy automatizado com smoke e gate de testes provado",
@@ -364,8 +365,9 @@
                                       "area:infra",
                                       "priority:p0"
                                   ],
-                       "state":  "open",
-                       "bodyFile":  "scripts/github/issues/f4.md"
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f4.md",
+                       "closing_comment":  "Entregue em `5e567bd` (`deploy.yml`), `264001b` (compose no payload SSM), `2414ccc` (Docker Hub + Infisical) e `a0e5084` (stack obs no deploy). Run verde `45273346584`: `gate`, `build`, `deploy` e `smoke` em success, `provision` skipped por desenho; imagens `emanuelr05/skill-finder-{api,web}` na tag do SHA. Gate provado pelos runs `45273141415` (gate) e `44849868942` (build), transcritos em `docs/evidencias/f4-gate.md`."
                    },
                    {
                        "title":  "feat(observability): Prometheus, Loki, Grafana e 4 painéis",
@@ -375,8 +377,9 @@
                                       "area:observability",
                                       "priority:p1"
                                   ],
-                       "state":  "open",
-                       "bodyFile":  "scripts/github/issues/f5.md"
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f5.md",
+                       "closing_comment":  "Entregue em `6ab90ac`: Prometheus, Loki, Promtail, node-exporter e Grafana no profile `obs` do `compose.yaml` (ADR-009), 4 painéis em `observability/grafana/dashboards/main.json` e `/grafana/` na borda. Run verde `45273346584`: o passo *smoke /grafana/ asks for a login* passou e o deploy gravou `::obs-ok:: stack obs aplicada`. Este título é o de `scripts/github/issues/f5.md`; no GitHub a issue é a #18, com o título `feat(observability): Prometheus, Loki e Grafana no profile obs com 4 paineis`."
                    },
                    {
                        "title":  "feat(security): segredos no Infisical e .env gerado no deploy",
@@ -386,11 +389,24 @@
                                       "area:security",
                                       "priority:p0"
                                   ],
-                       "state":  "open",
-                       "bodyFile":  "scripts/github/issues/f5.md"
+                       "state":  "closed",
+                       "bodyFile":  "scripts/github/issues/f5.md",
+                       "closing_comment":  "Entregue em `9c85154`: `docs/seguranca.md` com o inventário dos seis segredos, machine identity só de leitura e riscos aceitos; `GRAFANA_PASSWORD` no cofre; provas em `docs/evidencias/f5-seguranca.txt` (run `44850515112`). Este título é o de `scripts/github/issues/f5.md`; no GitHub a issue é a #19, com o título `feat(security): fechar a demonstracao de segredos (docs, GRAFANA_PASSWORD, provas)`."
                    },
                    {
-                       "title":  "docs: README, runbook, segurança e observabilidade finais",
+                       "title":  "ci(infra): subir a stack obs no deploy e expor o Grafana na borda",
+                       "milestone":  "F5 — Observabilidade e segredos",
+                       "labels":  [
+                                      "type:infra",
+                                      "area:infra",
+                                      "priority:p0"
+                                  ],
+                       "state":  "closed",
+                       "body":  "O deploy passa a subir a stack de observabilidade no host (`docker compose --profile obs`) e a publicar `/grafana/` pela borda do nginx, com login obrigatório. Entregue em `a0e5084`; o job `deploy` do run `45273346584` gravou `::obs-ok:: stack obs aplicada` e o passo *smoke /grafana/ asks for a login* do mesmo run passou. O desenho está na ADR-009 e em `observability/README.md`. Issue no GitHub: #62.",
+                       "closing_comment":  "Entregue em `a0e5084`: o job `deploy` sobe a stack `obs` e o run `45273346584` prova a borda com *smoke /grafana/ asks for a login* em success. Sem `compose.obs.yaml`: a stack vive no `compose.yaml` da raiz (ADR-009)."
+                   },
+                   {
+                       "title":  "docs: README final, verdade da arquitetura e indice de evidencias",
                        "milestone":  "F6 — Entrega",
                        "labels":  [
                                       "type:docs",
@@ -401,12 +417,45 @@
                        "bodyFile":  "scripts/github/issues/f6.md"
                    },
                    {
-                       "title":  "chore(release): ensaio cronometrado e demo de 3 minutos",
+                       "title":  "chore(release): ensaio cronometrado, evidencias vivas e demo de 3 minutos",
                        "milestone":  "F6 — Entrega",
                        "labels":  [
                                       "type:chore",
                                       "area:docs",
                                       "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f6.md"
+                   },
+                   {
+                       "title":  "docs: reescrever o runbook 1-2 para o deploy automatizado por SSM",
+                       "milestone":  "F6 — Entrega",
+                       "labels":  [
+                                      "type:docs",
+                                      "area:infra",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f6.md"
+                   },
+                   {
+                       "title":  "docs(evidencias): arquivar a prova do pipeline - verde, vermelho e gate",
+                       "milestone":  "F6 — Entrega",
+                       "labels":  [
+                                      "type:gate",
+                                      "area:docs",
+                                      "priority:p0"
+                                  ],
+                       "state":  "open",
+                       "bodyFile":  "scripts/github/issues/f6.md"
+                   },
+                   {
+                       "title":  "chore(security): rotacionar a LLM_API_KEY e revogar a machine identity",
+                       "milestone":  "F6 — Entrega",
+                       "labels":  [
+                                      "type:chore",
+                                      "area:security",
+                                      "priority:p1"
                                   ],
                        "state":  "open",
                        "bodyFile":  "scripts/github/issues/f6.md"

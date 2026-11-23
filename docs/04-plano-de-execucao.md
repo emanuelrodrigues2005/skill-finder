@@ -30,7 +30,7 @@
 | **F6** — Endurecimento e entrega | Fechar documentação, ensaiar a demo e entregar | **E5**, **E4** | **C8 (5%)** + protege C1–C4 | 0,5–1,0 | Docs completos, ciclo completo em < 15 min, demo de 3 min ensaiada, checklist da §11 marcado |
 | **Total** | | | | **8,0–12,0** | — |
 
-> **Por que o total fecha em 8–12 pd (e onde a distribuição difere de `docs/01` §4.2(i)).** A soma das sete fases é **8,0–12,0 pessoa-dia**, exatamente a faixa da Opção 1 em `docs/01` §4.2(i). A distribuição interna, porém, foi rebalanceada: aquele documento reserva **1–3 pd** para "infra + deploy + observabilidade + docs" e **5–7 pd** para a aplicação. Este plano aloca **3,5–5,5 pd** ao bloco de infraestrutura/deploy/observabilidade/docs (F3–F6) e **4,0–4,5 pd** à aplicação com testes (F2), mais **1,0–2,0 pd** para pré-requisitos e proposta (F0–F1). Dois motivos sustentam a troca: (i) 1–3 pd não cobrem Terraform partindo do zero + pipeline de 7 jobs + dashboards versionados + runbook; (ii) `docs/01` §8 orça as **funcionalidades** em 6–8 pd (Tema A: 11–15 pd no total), o que já estouraria a faixa antes de contar infraestrutura. O plano mantém o total dentro da faixa **cortando a aplicação para 4 histórias** em vez das 5 do Tema A. Se o grupo insistir nas 5 histórias *e* na UI polida, o total vai para **12,5–14 pd**, acima da faixa — e a decisão explícita é: cortar a 5ª história, cortar o polimento da UI, ou registrar o estouro no relatório final.
+> **Por que o total fecha em 8–12 pd (e onde a distribuição difere de `docs/01` §4.2(i)).** A soma das sete fases é **8,0–12,0 pessoa-dia**, exatamente a faixa da Opção 1 em `docs/01` §4.2(i). A distribuição interna, porém, foi rebalanceada: aquele documento reserva **1–3 pd** para "infra + deploy + observabilidade + docs" e **5–7 pd** para a aplicação. Este plano aloca **3,5–5,5 pd** ao bloco de infraestrutura/deploy/observabilidade/docs (F3–F6) e **4,0–4,5 pd** à aplicação com testes (F2), mais **1,0–2,0 pd** para pré-requisitos e proposta (F0–F1). Dois motivos sustentam a troca: (i) 1–3 pd não cobrem Terraform partindo do zero + pipeline de 8 jobs de CI + dashboards versionados + runbook; (ii) `docs/01` §8 orça as **funcionalidades** em 6–8 pd (Tema A: 11–15 pd no total), o que já estouraria a faixa antes de contar infraestrutura. O plano mantém o total dentro da faixa **cortando a aplicação para 4 histórias** em vez das 5 do Tema A. Se o grupo insistir nas 5 histórias *e* na UI polida, o total vai para **12,5–14 pd**, acima da faixa — e a decisão explícita é: cortar a 5ª história, cortar o polimento da UI, ou registrar o estouro no relatório final.
 
 ## 3. Fases em detalhe
 
@@ -274,6 +274,11 @@
 
 **Tarefas.**
 
+> **Executado com Docker Hub, não ECR.** O commit `2414ccc` moveu o registry para o Docker Hub
+> público (`emanuelr05/skill-finder-api` e `emanuelr05/skill-finder-web`) e os segredos para o
+> Infisical. Onde as tarefas abaixo dizem ECR, leia Docker Hub; o desenho final está em
+> `docs/app/06-pipeline-deploy.md`.
+
 *CI (sem AWS)*
 1. Criar `.github/workflows/ci.yml` com os jobs `lint` (eslint + `tsc --noEmit`), `test-unit`, `test-integration` (service container `postgres:16` com `healthcheck`) e `test-api`.
 2. Publicar como artefatos apenas o JUnit XML e o relatório de cobertura, com caminhos explícitos — nunca `tfstate`, `.env` ou `docker save` (`docs/01` §7.5).
@@ -292,7 +297,7 @@
 11. Configurar a proteção do branch padrão exigindo `lint`, `test-unit`, `test-integration` e `secrets` verdes.
 
 *Prova do gate*
-12. Rodar a cadeia duas vezes: uma completa (verde) e uma com um teste quebrado de propósito (commit temporário, revertido em seguida), capturando as duas telas.
+12. Provar o gate pelos runs reais do histórico, sem quebrar teste de propósito: `45273141415` (`gate` reprovou e `build`/`deploy`/`smoke` ficaram `skipped`) e `44849868942` (`build` falhou e nada foi implantado), ao lado do run verde `45273346584`.
 13. Registrar em `docs/evidencias/f4-gate.md` qual job falhou e quais ficaram `skipped` na execução vermelha — é a evidência exigida por R3.5.3.
 
 **Critérios de aceitação (verificáveis).**
@@ -330,6 +335,11 @@
 **Pré-requisitos.** F3 verde (host provisionado); F4 verde (o `deploy` já leva as variáveis ao host); `/metrics` exposto desde a F2; identidade de máquina criada no Infisical.
 
 **Tarefas.**
+
+> **Decisão que substitui os itens 1–3.** A ADR-009 fixa **cinco** containers (Prometheus, Loki,
+> Promtail, node-exporter e Grafana) no `compose.yaml` da raiz sob `profiles: ["obs"]`, sem Telegraf
+> e sem cAdvisor — não existe `observability/compose.obs.yaml`. O que foi executado está em
+> `observability/README.md`.
 
 *Coleta e visualização*
 1. Criar `observability/compose.obs.yaml` (profile `obs`) com Prometheus, Loki, Promtail, Grafana, Telegraf, cAdvisor e node-exporter, com `mem_limit` e retenção de 7 dias.
@@ -389,7 +399,7 @@
 1. Escrever o `README.md` final: problema, arquitetura com diagrama, tecnologias e justificativas, como rodar, como implantar, como destruir e divisão de tarefas.
 2. Revisar `docs/runbook-operacao.md` com os quatro procedimentos, o protocolo de credencial expirada (`docs/02` §2.6) e o de lock preso (§7.4).
 3. Escrever `docs/seguranca.md` com modelo de segredos, riscos aceitos (`LabRole` larga, HTTP sem TLS, SSH exposto) e a justificativa honesta de "least privilege possível" (`docs/02` §4.3-5).
-4. Escrever `docs/observabilidade.md` explicando onde ver cada métrica, log e painel e o que cada um prova.
+4. Documentar em `observability/README.md` onde ver cada métrica, log e painel e o que cada um prova — o arquivo existe desde a F5; não há documento de observabilidade em `docs/`.
 5. Escrever no README a seção "Como os testes bloqueiam o deploy", com a tabela de `docs/01` §6.3 e o link para a execução vermelha da F4.
 
 *Endurecimento*
@@ -406,7 +416,7 @@
 
 | # | Critério | Como provar |
 | --- | --- | --- |
-| 1 | Documentação mínima (R3.7) | `README.md`, `docs/runbook-operacao.md`, `docs/seguranca.md` e `docs/observabilidade.md` existem e trazem comandos copiáveis |
+| 1 | Documentação mínima (R3.7) | `README.md`, `docs/runbook-operacao.md`, `docs/seguranca.md` e `observability/README.md` existem e trazem comandos copiáveis |
 | 2 | Remoção documentada (R3.7.2) | runbook tem "destruir" com `terraform destroy` **e** a verificação de órfãos |
 | 3 | Divisão de tarefas (R5.2) | seção "Equipe e divisão" no README com nomes e fases |
 | 4 | Ciclo reproduzível | ensaio com `destroy`+`apply`+`deploy`+`smoke` verdes em < 15 min, logs em `f6-ensaio.md` |
@@ -414,7 +424,7 @@
 | 6 | Zero segredo | `gitleaks detect` verde no repositório e na imagem |
 | 7 | Repositório educado | `terraform fmt -check -recursive` = 0; `git status` limpo; `git count-objects -vH` < 50 MB |
 
-**Artefatos.** `README.md` final; `docs/runbook-operacao.md`; `docs/seguranca.md`; `docs/observabilidade.md`; `docs/evidencias/f6-ensaio.md`; vídeo/print da demo.
+**Artefatos.** `README.md` final; `docs/runbook-operacao.md`; `docs/seguranca.md`; `observability/README.md`; `docs/evidencias/f6-ensaio.md`; vídeo/print da demo.
 
 **Riscos da fase.**
 
@@ -437,7 +447,7 @@ flowchart TD
   F0["F0 Pre-requisitos e sandbox<br/>gate: K1-K3, K6, K7, K10, K11"] --> F1["F1 Proposta e decisoes<br/>gate: E1 aprovado + Q1-Q6"]
   F1 --> F2["F2 Aplicacao + testes<br/>gate: healthz local + cobertura 80%"]
   F2 --> F3["F3 IaC + primeira EC2<br/>gate: apply limpo, app HTTP, ssh, destroy sem orfaos"]
-  F3 --> F4["F4 Pipeline + ECR<br/>gate: 7 jobs verdes + gate provado"]
+  F3 --> F4["F4 Pipeline + imagens<br/>gate: 8 jobs verdes + gate provado"]
   F4 --> F5["F5 Observabilidade + segredos<br/>gate: 4 paineis + gitleaks verde"]
   F5 --> F6["F6 Endurecimento + entrega<br/>gate: ensaio menor que 15 min + demo 3 min"]
 
@@ -475,7 +485,7 @@ Regras de convivência, em ordem de importância:
 | 3 | F2 (domínio + API) | API rodando local: migrations aplicadas, `/healthz` e `/readyz` 200, `pnpm test` verde | log do jest + `openapi.yaml` + `f2-curl.txt` |
 | 4 | F2 (UI + testes) | 3 telas operáveis e invariante provada sob concorrência | print da UI + `f2-cobertura.txt` + resultado do teste de integração |
 | 5 | F3 | `terraform apply` cria a EC2 e a app responde em HTTP; `destroy` sem órfãos | `f3-plan.txt`, `f3-apply.txt`, `f3-destroy.txt`, print da URL |
-| 6 | F4 | Workflow verde com 7 jobs e imagem no ECR com tag = SHA; gate provado em execução vermelha | `f4-pipeline-verde.png`, `f4-pipeline-vermelho.png`, `f4-gate.md` |
+| 6 | F4 | Workflow verde com 8 jobs e imagem publicada com tag = SHA; gate provado em execução vermelha | `docs/evidencias/f4-gate.md` |
 | 7 | F5 | Dashboard com 4 painéis e segredos lidos do cofre no host; `gitleaks` verde | `f5-dashboard.png`, `f5-targets.png`, `f5-log-erro.png`, `f5-seguranca.txt` |
 | 8 | F6 | Ciclo completo em < 15 min, docs completos e demo de 3 min ensaiada | `f6-ensaio.md` + vídeo da demo + checklist da §11 marcado |
 
@@ -503,7 +513,7 @@ Regras de convivência, em ordem de importância:
 | **M1** Proposta aprovada | 2 | E1 completo: problema, 4 funcionalidades, arquitetura preliminar, tecnologias, ADR com as 5 justificativas | `f1-aprovacao.md` + `docs/adr/0001-*.md` |
 | **M2** MVP local testado | 4 | 3 telas operáveis, `pnpm test` verde com cobertura, teste de concorrência provando a invariante | `f2-cobertura.txt` + print da UI |
 | **M3** Primeira nuvem | 5 | "`terraform apply` cria a EC2 e a app responde em HTTP" + `ssh` + `destroy` sem órfãos | `f3-apply.txt`, `f3-destroy.txt`, `f3-url.png` |
-| **M4** Pipeline completo | 6 | "Workflow verde com 7 jobs", imagem no ECR com tag = SHA, e a execução vermelha mostrando `build`/`deploy` `skipped` | `f4-pipeline-verde.png`, `f4-pipeline-vermelho.png` |
+| **M4** Pipeline completo | 6 | "Workflow verde com 8 jobs", imagem publicada com tag = SHA, e a execução vermelha mostrando `build`/`deploy` `skipped` | `docs/evidencias/f4-gate.md` |
 | **M5** Observabilidade e segredos | 7 | "Dashboard com 4 painéis", erro provocado aparecendo no Loki, segredos lidos do cofre no host, `gitleaks` verde | `f5-dashboard.png`, `f5-log-erro.png`, `f5-targets.png`, `f5-seguranca.txt` |
 | **M6** Entrega | 8 | Ciclo completo `destroy`→`apply`→`deploy`→`smoke` em < 15 min, demo de 3 min ensaiada, docs completos | `f6-ensaio.md` + vídeo + checklist da §11 |
 
@@ -514,7 +524,7 @@ Regras de convivência, em ordem de importância:
 | **C1** Desenvolvimento da aplicação (**25%**) | F2 (e F6) | URL viva + 3 telas + regra de negócio testada + README com casos de uso | a UI só funcionar com dados pré-carregados que o `apply` não cria; ou a demo precisar de explicação para operar |
 | **C2** Serviços AWS integrados (**20%**) | F3, F4, F5 | EC2 criada por Terraform + imagem puxada do ECR + `tfstate`/backup no S3 + observabilidade + ADR justificando escolhas e omissões | a banca ler "só uma EC2": sem o ADR-0001 e sem mostrar a integração (pull do ECR, state no S3, upload de backup), C2 cai |
 | **C3** Terraform (**15%**) | F3 (e F6) | `infra/` versionado, backend S3, `fmt -check`/`validate` no CI, ciclo `apply`→`destroy` documentado | o state for local; o `destroy` deixar órfãos; houver recurso criado à mão no console |
-| **C4** Pipeline CI/CD (**15%**) | F4 | Histórico com 7 jobs, deploy sem clique, smoke que reprova o workflow, summary com URL e digest | o deploy depender de SSH manual; o smoke for `curl` sem assert; só existir execução local |
+| **C4** Pipeline CI/CD (**15%**) | F4 | Histórico com 8 jobs, deploy sem clique, smoke que reprova o workflow, summary com URL e digest | o deploy depender de SSH manual; o smoke for `curl` sem assert; só existir execução local |
 | **C5** Testes e qualidade (**10%**) | F2 e F4 | Três níveis (unitário, integração, contrato), cobertura do domínio, execução vermelha com jobs `skipped` | os testes existirem "para constar", sem ligação com o gate; ou não houver teste da regra de negócio |
 | **C6** Segurança e segredos (**5%**) | F5 (e F6) | Infisical como fonte única dos seis segredos (lidos no host com `secrets-manager run`), `gitleaks` verde, log mascarado (`***`), `docs/seguranca.md` com riscos aceitos | houver segredo no histórico, `ENV` de segredo na imagem, ou segredo em texto no host ou no log |
 | **C7** Observabilidade (**5%**) | F5 | 4 painéis com dados, alvos `UP`, log de erro correlacionado, dashboard versionado | os painéis estiverem vazios na demo; ou só houver CloudWatch sem consulta demonstrável |
@@ -645,31 +655,31 @@ Regras de convivência, em ordem de importância:
 ## 11. Checklist final de entrega (véspera)
 
 **Repositório (E2)**
-- [ ] `README.md` com problema, arquitetura, tecnologias justificadas, como rodar, como implantar, como destruir e divisão de tarefas
-- [ ] `infra/`, `app/`, `tests/`, `.github/`, `observability/`, `docs/` versionados; nenhum `.tfstate`, `.env` ou `.pem` no histórico
-- [ ] `git log` mostrando evolução por fases (≥ 20 commits pequenos, não um commit gigante)
+- [x] `README.md` com problema, arquitetura, tecnologias justificadas, como rodar, como implantar, como destruir e divisão de tarefas
+- [x] `backend/`, `frontend/`, `infra/`, `.github/`, `observability/`, `docs/` versionados; nenhum `.tfstate`, `.env` ou `.pem` no histórico (`git log --all -- *.env *.tfstate* *.pem` vazio)
+- [x] `git log` mostrando evolução por fases (`git rev-list --count HEAD` = 109 commits pequenos, não um commit gigante)
 
 **Pipeline (E3)**
-- [ ] Execução verde mais recente com os 7 jobs e artefatos (JUnit, cobertura, digest)
-- [ ] Execução vermelha documentada com `build`/`deploy` `skipped` (`f4-gate.md`)
-- [ ] `$GITHUB_STEP_SUMMARY` com URL, digest e SHA
-- [ ] Proteção do branch padrão ativa
+- [x] Execução verde com os 8 jobs de CI e artefatos (JUnit e cobertura) — runs `45273101280` e `45274126711`
+- [x] Execução vermelha documentada com `build`/`deploy` `skipped` (`f4-gate.md`; runs `45273141415` e `44849868942`)
+- [x] `$GITHUB_STEP_SUMMARY` com URL, digest e SHA (`docs/evidencias/f4-gate.md` §1.1)
+- [ ] Proteção do branch padrão ativa — conferido em 2026-11-23: `main` **não** está protegida (`gh api .../branches/main/protection` → 404)
 
 **Aplicação no ar (E4)**
-- [ ] URL anotada e testada na véspera; `smoke` verde
-- [ ] Dados de demonstração criados **por script/migration**, não à mão
-- [ ] `/grafana` protegido e testado
+- [x] URL anotada e testada na véspera; `smoke` verde (run `45273346584`, seis asserções do job `smoke`)
+- [x] Dados de demonstração criados **por script/migration**, não à mão (migrations do Prisma e ingestão chamada pelo job `deploy`; `f4-gate.md` §7)
+- [x] `/grafana` protegido e testado (passo *smoke /grafana/ asks for a login* do run `45273346584`)
 
 **Documentação (E5)**
-- [ ] `docs/runbook-operacao.md` com subir, implantar, destruir e encerrar sessão
-- [ ] `docs/seguranca.md` com modelo de segredos e riscos aceitos
-- [ ] `docs/observabilidade.md` com onde ver cada métrica e log
-- [ ] ADR-0001 e `docs/01`–`docs/04` atualizados com o que foi executado
+- [x] `docs/runbook-operacao.md` com subir, implantar, destruir e encerrar sessão (`3dc3032`)
+- [x] `docs/seguranca.md` com modelo de segredos e riscos aceitos (`docs/evidencias/f5-seguranca.txt`)
+- [x] `observability/README.md` com onde ver cada métrica e log
+- [ ] ADR-0001 e `docs/01`–`docs/04` atualizados com o que foi executado — não existe `docs/adr/`; a arquitetura executada está nas ADR-001–ADR-009 de `docs/app/02-arquitetura.md`
 
 **Segurança**
-- [ ] `gitleaks detect` verde no repositório e na imagem
+- [ ] `gitleaks detect` verde no repositório e na imagem — no HEAD atual o job `secrets` reprova por falso positivo em `docs/evidencias/f4-gate.md` (digest lido como `generic-api-key`)
 - [ ] Nenhum arquivo de segredo no host; `.pem` em `~/.ssh`, fora de `/mnt/c`
-- [ ] Log do deploy com valores mascarados (`***`)
+- [x] Log do deploy com valores mascarados (`***`) — passo *Mask credentials* do job `gate` e transcrição em `f4-gate.md` §8
 
 **Observabilidade**
 - [ ] 4 painéis com dados; alvos `UP`; erro provocado aparecendo no Loki
