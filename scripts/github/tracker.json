@@ -27,6 +27,10 @@
                        {
                            "title":  "F6 — Entrega",
                            "description":  "Fechar a documentação técnica (E5), endurecer a operação e ensaiar a demo até o ciclo completo ser reprodutível: destroy→apply→deploy→smoke em \u003c 15 min e demo de 3 min."
+                       },
+                       {
+                           "title":  "F7 — Arquitetura distribuida",
+                           "description":  "Trocar a Opção 1 (uma EC2 com IP público) pela arquitetura distribuída na janela da demo: ALB com DNS estável, três VMs por papel fatiadas por profile do mesmo compose.yaml, banco em EC2 (RDS inviável por medição), observabilidade na VM do back, cliente pelo X-Forwarded-For, deploy em três alvos e destroy no fim de cada sessão."
                        }
                    ],
     "labels":  [
@@ -460,6 +464,117 @@
                        "state":  "open",
                        "bodyFile":  "scripts/github/issues/f6.md"
                    },
+                    {
+                        "bodyFile":  "scripts/github/issues/f7.md",
+                        "title":  "chore(infra): provar que o ALB cria, fica active e destroi no lab",
+                        "milestone":  "F7 — Arquitetura distribuida",
+                        "labels":  [
+                                       "type:gate",
+                                       "area:infra",
+                                       "priority:p0"
+                                   ],
+                        "state":  "closed",
+                        "closing_comment":  "Executada em 2026-11-24 e arquivada em `docs/evidencias/f7-alb-probe.txt` (commit `3b3fb1a`): ALB `probe-f71` com `State.Code = active` em **121 s**, target group HTTP:80, listener HTTP:80 e regra `path-pattern /api/*` na prioridade 10; no fim `describe-load-balancers` = 0, `describe-target-groups` = 0, ENIs do ELB = 0 e o SG default idêntico (ALB removido em **153 s**). Custo da prova: US$ 0,0010 (160 s a $0,0225/h). Ressalva registrada na ADR-010: a service-linked role `AWSServiceRoleForElasticLoadBalancing` **já existia** (`CreateDate` 2024-06-27), então `iam:CreateServiceLinkedRole` **não** foi exercitado; registro de instância no target group e requisição HTTP real ao DNS do ALB também ficaram não medidos."
+                    },
+                    {
+                        "bodyFile":  "scripts/github/issues/f7.md",
+                        "title":  "docs(app): ADR-010 a ADR-017 e a milestone F7 no tracker",
+                        "milestone":  "F7 — Arquitetura distribuida",
+                        "labels":  [
+                                       "type:docs",
+                                       "area:docs",
+                                       "priority:p0"
+                                   ],
+                        "state":  "open"
+                    },
+                    {
+                        "bodyFile":  "scripts/github/issues/f7.md",
+                        "title":  "feat(infra): tres instancias por papel, quatro security groups e EBS",
+                        "milestone":  "F7 — Arquitetura distribuida",
+                        "labels":  [
+                                       "type:infra",
+                                       "area:infra",
+                                       "priority:p0"
+                                   ],
+                        "state":  "open"
+                    },
+                    {
+                        "bodyFile":  "scripts/github/issues/f7.md",
+                        "title":  "feat(infra): ALB com tres target groups e regras de caminho",
+                        "milestone":  "F7 — Arquitetura distribuida",
+                        "labels":  [
+                                       "type:infra",
+                                       "area:infra",
+                                       "priority:p0"
+                                   ],
+                        "state":  "open"
+                    },
+                    {
+                        "bodyFile":  "scripts/github/issues/f7.md",
+                        "title":  "feat(infra): fatiar o compose por papel (web, api, db)",
+                        "milestone":  "F7 — Arquitetura distribuida",
+                        "labels":  [
+                                       "type:infra",
+                                       "area:infra",
+                                       "priority:p0"
+                                   ],
+                        "state":  "open"
+                    },
+                    {
+                        "bodyFile":  "scripts/github/issues/f7.md",
+                        "title":  "fix(api): identificar o cliente pelo X-Forwarded-For do ALB",
+                        "milestone":  "F7 — Arquitetura distribuida",
+                        "labels":  [
+                                       "type:fix",
+                                       "area:api",
+                                       "priority:p0"
+                                   ],
+                        "state":  "open"
+                    },
+                    {
+                        "bodyFile":  "scripts/github/issues/f7.md",
+                        "title":  "fix(web): tirar do nginx do front o que o ALB passou a rotear",
+                        "milestone":  "F7 — Arquitetura distribuida",
+                        "labels":  [
+                                       "type:fix",
+                                       "area:web",
+                                       "priority:p0"
+                                   ],
+                        "state":  "open"
+                    },
+                    {
+                        "bodyFile":  "scripts/github/issues/f7.md",
+                        "title":  "ci(deploy): implantar nas tres VMs por tag de papel e smoke pelo ALB",
+                        "milestone":  "F7 — Arquitetura distribuida",
+                        "labels":  [
+                                       "type:infra",
+                                       "area:infra",
+                                       "priority:p0"
+                                   ],
+                        "state":  "open"
+                    },
+                    {
+                        "bodyFile":  "scripts/github/issues/f7.md",
+                        "title":  "docs(infra): runbook das tres VMs, custo por hora e destroy sem orfaos",
+                        "milestone":  "F7 — Arquitetura distribuida",
+                        "labels":  [
+                                       "type:docs",
+                                       "area:docs",
+                                       "priority:p1"
+                                   ],
+                        "state":  "open"
+                    },
+                    {
+                        "bodyFile":  "scripts/github/issues/f7.md",
+                        "title":  "chore(release): ensaio cronometrado do ciclo F7",
+                        "milestone":  "F7 — Arquitetura distribuida",
+                        "labels":  [
+                                       "type:chore",
+                                       "area:infra",
+                                       "priority:p1"
+                                   ],
+                        "state":  "open"
+                    },
                    {
                        "bodyFile":  "scripts/github/issues/f2-web.md",
                        "title":  "docs(api): Swagger gerado, Scalar em /docs e openapi.yaml no CI",
