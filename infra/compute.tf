@@ -12,9 +12,18 @@ locals {
     set -euxo pipefail
     export DEBIAN_FRONTEND=noninteractive
 
-    apt-get update -y
-    apt-get install -y --no-install-recommends \
-      docker.io docker-compose-v2 e2fsprogs util-linux
+    # `DPkg::Lock::Timeout`: no primeiro boot o `unattended-upgrades` pode segurar
+    # `/var/lib/dpkg/lock-frontend` por minutos. Sem isso o install morre na hora
+    # com "Could not get lock" e o cloud-init termina em `error - done` em ~60 s
+    # — o host fica sem Docker e o sintoma chega ao deploy como "daemon sem
+    # resposta", que e o mesmo que "nao instalado".
+    apt-get -o DPkg::Lock::Timeout=300 update -y 2>&1
+    apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends \
+      docker.io docker-compose-v2 e2fsprogs util-linux 2>&1 \
+      || { echo "ERRO: apt-get install falhou (veja as linhas acima)" >&2; exit 1; }
+
+    command -v docker >/dev/null 2>&1 \
+      || { echo "ERRO: docker ausente depois do apt-get install" >&2; exit 1; }
 
     systemctl stop docker.socket docker || true
   EOT
