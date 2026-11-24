@@ -23,8 +23,8 @@ name: skills-search
 # `docker compose config` válido numa árvore limpa.
 #
 # Dois serviços de API porque o profile precisa escolher o `build.target`: `api`
-# mantém o nome que o upstream do nginx (`frontend/nginx.conf`: `api:8000`) espera,
-# e `api-dev` declara o alias `api` na rede do compose.
+# mantém o nome `api` que o Prometheus e o `frontend/nginx.dev.conf` (`api:8000`)
+# esperam, e `api-dev` declara o alias `api` na rede do compose.
 #
 # `obs` só sobe a pedido (`--profile obs`): nada em `dev` ou `prod` muda por causa
 # dele. A stack mora **aqui**, e não num `compose.obs.yaml` separado, porque
@@ -199,6 +199,12 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+    volumes:
+      # O default é o arquivo de produção, que é só estático: quem pede o proxy de
+      # dev é o `make`, que exporta `NGINX_CONF` apenas no profile `dev`. A escolha
+      # não vem do `.env` — um `.env` de dev copiado para uma VM não pode montar o
+      # proxy num stack `prod`.
+      - "${NGINX_CONF:-./frontend/nginx.conf}:/etc/nginx/nginx.conf:ro"
     logging:
       driver: json-file
       options:

@@ -10,6 +10,14 @@ PROFILE ?= dev
 API_SERVICE := $(if $(filter prod,$(PROFILE)),api,api-dev)
 API_RUN := $(COMPOSE) --profile $(PROFILE) run --rm $(API_SERVICE)
 
+# A borda do `dev` precisa do proxy `/api` (`frontend/nginx.dev.conf`); a de
+# produção é estática e o default do compose já é essa. A escolha é do profile,
+# aqui, e não do `.env`: variável de ambiente interpolada deixaria um `.env` de
+# dev montar o proxy num stack `prod`, e aí `/healthz` do `web` responderia `502`
+# e o ALB tiraria a SPA do ar. `export` vale para toda receita que chame o compose.
+NGINX_CONF := $(if $(filter dev,$(PROFILE)),./frontend/nginx.dev.conf,./frontend/nginx.conf)
+export NGINX_CONF
+
 # Postgres descartável do nível de integração. Porta 55432 para não colidir com a
 # 5432 do compose de dev — e credenciais próprias, que não são segredo: o
 # container escuta só em 127.0.0.1 e o volume morre com `make db-test-down`.
