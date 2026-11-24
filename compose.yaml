@@ -83,6 +83,11 @@ services:
   postgres:
     image: postgres:16-alpine
     profiles: ["db", "dev", "prod"]
+    ports:
+      # O banco vive numa VM só dele (ADR-011); quem chega é a api, pelo IP privado.
+      # O bind de loopback é o default para o dev não expor a 5432; o deploy exporta
+      # `POSTGRES_BIND=0.0.0.0` porque é ele que precisa da porta aberta.
+      - "${POSTGRES_BIND:-127.0.0.1}:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-skills}
       POSTGRES_DB: ${POSTGRES_DB:-skills}
