@@ -8,7 +8,10 @@ docker inspect skills-search-web-1 --format '{{range .Mounts}}{{.Source}} => {{.
 
 echo
 echo "== a config do container ve a mudanca do repositorio? =="
-if docker exec skills-search-web-1 grep -q 'api/v1/admin' /etc/nginx/nginx.conf 2>/dev/null; then
+# A sonda usa `location = /metrics`, que e a ultima coisa que a borda ainda faz
+# (ADR-014). Ela procurava `api/v1/admin` ate a F7.7 — o bloco saiu do arquivo de
+# proposito, e a sonda passou a responder "nao" mesmo com o bind mount novo.
+if docker exec skills-search-web-1 grep -q 'location = /metrics' /etc/nginx/nginx.conf 2>/dev/null; then
   echo "  sim: o bind mount ja reflete o arquivo novo"
 else
   echo "  nao: o container tem a versao antiga (imagem construida antes)"
