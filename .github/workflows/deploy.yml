@@ -566,7 +566,11 @@ jobs:
 
           # Não são segredo e por isso não estão no Infisical: o registry público, a
           # tag do commit, a porta da borda e a fonte real do catálogo.
+          # `API_BIND`/`GRAFANA_BIND` abrem 8080/3000 na VM: no compose o default é
+          # loopback, e quem precisa expor é o deploy, não o teste local. O filtro
+          # real é o security group (só `sg-alb` alcança essas portas).
           export DOCKERHUB_USER IMAGE_TAG="$SHA" WEB_PORT=80 SKILL_SOURCE_KIND=html
+          export API_BIND=0.0.0.0 GRAFANA_BIND=0.0.0.0
           export POSTGRES_USER=skills POSTGRES_DB=skills
 
           cat > "$step" <<'STEP'
