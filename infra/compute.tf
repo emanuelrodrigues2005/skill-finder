@@ -35,20 +35,30 @@ locals {
   # evita casar com outro disco anexado antes do volume de dados aparecer.
   user_data_mount_template = <<-EOT
     data_disk="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_%s"
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 120); do
       [ -e "$data_disk" ] && break
       sleep 5
     done
-    [ -e "$data_disk" ] || { echo "volume EBS de dados nao anexado" >&2; exit 1; }
 
-    if [ -z "$(blkid -o value -s TYPE "$data_disk" || true)" ]; then
-      mkfs.ext4 -L docker-data "$data_disk"
+    # O attach do EBS pode atrasar mais que a janela do ensaio. Se ele nao aparecer,
+    # o host segue no disco raiz e o app atende: perder o volume numa sessao e
+    # degradacao visivel (e o `destroy` apaga tudo de qualquer forma), enquanto o
+    # `exit 1` daqui abortava o script ANTES do `systemctl enable --now docker` —
+    # o daemon nunca subia e o sintoma virava "docker sem resposta", que e
+    # indistinguivel de "nao instalado" e esconde a causa.
+    if [ -e "$data_disk" ]; then
+      if [ -z "$(blkid -o value -s TYPE "$data_disk" || true)" ]; then
+        mkfs.ext4 -L docker-data "$data_disk"
+      fi
+
+      mkdir -p /var/lib/docker
+      grep -q "LABEL=docker-data" /etc/fstab \
+        || echo "LABEL=docker-data /var/lib/docker ext4 defaults,nofail 0 2" >> /etc/fstab
+      mountpoint -q /var/lib/docker || mount LABEL=docker-data /var/lib/docker
+      echo "dados em $data_disk"
+    else
+      echo "AVISO: volume EBS nao anexado em 600s; seguindo no disco raiz" >&2
     fi
-
-    mkdir -p /var/lib/docker
-    grep -q "LABEL=docker-data" /etc/fstab \
-      || echo "LABEL=docker-data /var/lib/docker ext4 defaults,nofail 0 2" >> /etc/fstab
-    mountpoint -q /var/lib/docker || mount LABEL=docker-data /var/lib/docker
   EOT
 
   user_data_mount = {

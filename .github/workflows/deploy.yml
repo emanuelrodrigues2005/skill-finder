@@ -601,9 +601,14 @@ jobs:
           # `PingStatus=Online` so prova que o agente SSM da AMI subiu, e ele fica verde
           # antes de o `user_data` (infra/compute.tf) instalar o Docker. `command -v`
           # cobre "binario ausente"; `docker info` cobre "daemon ainda subindo".
+          #
+          # O `timeout` do empurrao do cloud-init nao e cosmetico: esse comando nao tem
+          # teto proprio, e um user_data travado seguraria o SSM ate o corte de 900s.
+          timeout 60 cloud-init status --wait > /dev/null 2>&1 || true
+
           docker_bin=0
           docker_daemon=0
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 180); do
             if command -v docker > /dev/null 2>&1; then
               docker_bin=1
             fi
@@ -611,15 +616,26 @@ jobs:
               docker_daemon=1
               break
             fi
-            echo "docker: aguardando o user_data terminar (${attempt}/60)"
+            echo "docker: aguardando o user_data terminar (${attempt}/180)"
             sleep 5
           done
-          if [ "$docker_bin" -ne 1 ]; then
-            echo "ERRO: docker nao instalado no host apos 300s; o user_data de infra/compute.tf nao terminou" >&2
-            exit 1
-          fi
-          if [ "$docker_daemon" -ne 1 ]; then
-            echo "ERRO: daemon do docker sem resposta em 300s; o user_data de infra/compute.tf nao terminou" >&2
+          if [ "$docker_bin" -ne 1 ] || [ "$docker_daemon" -ne 1 ]; then
+            echo "--- diagnostico do user_data ---" >&2
+            if command -v cloud-init > /dev/null 2>&1; then
+              cloud-init status --long 2>&1 | sed 's/^/  /' >&2 || true
+            else
+              echo "  cloud-init ausente" >&2
+            fi
+            cloud_init_log=/var/log/cloud-init-output.log
+            echo "--- ultimas 40 linhas de ${cloud_init_log} ---" >&2
+            tail -40 "$cloud_init_log" 2>&1 | sed 's/^/  /' >&2 || true
+            echo "--- apt travado? ---" >&2
+            ps -eo pid,etime,cmd 2> /dev/null | grep -E 'apt|dpkg|cloud-init' | grep -v grep | sed 's/^/  /' >&2 || echo "  nenhum processo de apt/cloud-init" >&2
+            if [ "$docker_bin" -ne 1 ]; then
+              echo "ERRO: docker nao instalado no host apos 900s; o user_data de infra/compute.tf nao terminou" >&2
+              exit 1
+            fi
+            echo "ERRO: daemon do docker sem resposta em 900s; o user_data de infra/compute.tf nao terminou" >&2
             exit 1
           fi
 
@@ -781,9 +797,14 @@ jobs:
           # `PingStatus=Online` so prova que o agente SSM da AMI subiu, e ele fica verde
           # antes de o `user_data` (infra/compute.tf) instalar o Docker. `command -v`
           # cobre "binario ausente"; `docker info` cobre "daemon ainda subindo".
+          #
+          # O `timeout` do empurrao do cloud-init nao e cosmetico: esse comando nao tem
+          # teto proprio, e um user_data travado seguraria o SSM ate o corte de 900s.
+          timeout 60 cloud-init status --wait > /dev/null 2>&1 || true
+
           docker_bin=0
           docker_daemon=0
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 180); do
             if command -v docker > /dev/null 2>&1; then
               docker_bin=1
             fi
@@ -791,15 +812,26 @@ jobs:
               docker_daemon=1
               break
             fi
-            echo "docker: aguardando o user_data terminar (${attempt}/60)"
+            echo "docker: aguardando o user_data terminar (${attempt}/180)"
             sleep 5
           done
-          if [ "$docker_bin" -ne 1 ]; then
-            echo "ERRO: docker nao instalado no host apos 300s; o user_data de infra/compute.tf nao terminou" >&2
-            exit 1
-          fi
-          if [ "$docker_daemon" -ne 1 ]; then
-            echo "ERRO: daemon do docker sem resposta em 300s; o user_data de infra/compute.tf nao terminou" >&2
+          if [ "$docker_bin" -ne 1 ] || [ "$docker_daemon" -ne 1 ]; then
+            echo "--- diagnostico do user_data ---" >&2
+            if command -v cloud-init > /dev/null 2>&1; then
+              cloud-init status --long 2>&1 | sed 's/^/  /' >&2 || true
+            else
+              echo "  cloud-init ausente" >&2
+            fi
+            cloud_init_log=/var/log/cloud-init-output.log
+            echo "--- ultimas 40 linhas de ${cloud_init_log} ---" >&2
+            tail -40 "$cloud_init_log" 2>&1 | sed 's/^/  /' >&2 || true
+            echo "--- apt travado? ---" >&2
+            ps -eo pid,etime,cmd 2> /dev/null | grep -E 'apt|dpkg|cloud-init' | grep -v grep | sed 's/^/  /' >&2 || echo "  nenhum processo de apt/cloud-init" >&2
+            if [ "$docker_bin" -ne 1 ]; then
+              echo "ERRO: docker nao instalado no host apos 900s; o user_data de infra/compute.tf nao terminou" >&2
+              exit 1
+            fi
+            echo "ERRO: daemon do docker sem resposta em 900s; o user_data de infra/compute.tf nao terminou" >&2
             exit 1
           fi
 
@@ -984,9 +1016,14 @@ jobs:
           # `PingStatus=Online` so prova que o agente SSM da AMI subiu, e ele fica verde
           # antes de o `user_data` (infra/compute.tf) instalar o Docker. `command -v`
           # cobre "binario ausente"; `docker info` cobre "daemon ainda subindo".
+          #
+          # O `timeout` do empurrao do cloud-init nao e cosmetico: esse comando nao tem
+          # teto proprio, e um user_data travado seguraria o SSM ate o corte de 900s.
+          timeout 60 cloud-init status --wait > /dev/null 2>&1 || true
+
           docker_bin=0
           docker_daemon=0
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 180); do
             if command -v docker > /dev/null 2>&1; then
               docker_bin=1
             fi
@@ -994,15 +1031,26 @@ jobs:
               docker_daemon=1
               break
             fi
-            echo "docker: aguardando o user_data terminar (${attempt}/60)"
+            echo "docker: aguardando o user_data terminar (${attempt}/180)"
             sleep 5
           done
-          if [ "$docker_bin" -ne 1 ]; then
-            echo "ERRO: docker nao instalado no host apos 300s; o user_data de infra/compute.tf nao terminou" >&2
-            exit 1
-          fi
-          if [ "$docker_daemon" -ne 1 ]; then
-            echo "ERRO: daemon do docker sem resposta em 300s; o user_data de infra/compute.tf nao terminou" >&2
+          if [ "$docker_bin" -ne 1 ] || [ "$docker_daemon" -ne 1 ]; then
+            echo "--- diagnostico do user_data ---" >&2
+            if command -v cloud-init > /dev/null 2>&1; then
+              cloud-init status --long 2>&1 | sed 's/^/  /' >&2 || true
+            else
+              echo "  cloud-init ausente" >&2
+            fi
+            cloud_init_log=/var/log/cloud-init-output.log
+            echo "--- ultimas 40 linhas de ${cloud_init_log} ---" >&2
+            tail -40 "$cloud_init_log" 2>&1 | sed 's/^/  /' >&2 || true
+            echo "--- apt travado? ---" >&2
+            ps -eo pid,etime,cmd 2> /dev/null | grep -E 'apt|dpkg|cloud-init' | grep -v grep | sed 's/^/  /' >&2 || echo "  nenhum processo de apt/cloud-init" >&2
+            if [ "$docker_bin" -ne 1 ]; then
+              echo "ERRO: docker nao instalado no host apos 900s; o user_data de infra/compute.tf nao terminou" >&2
+              exit 1
+            fi
+            echo "ERRO: daemon do docker sem resposta em 900s; o user_data de infra/compute.tf nao terminou" >&2
             exit 1
           fi
 
@@ -1110,9 +1158,14 @@ jobs:
           # `PingStatus=Online` so prova que o agente SSM da AMI subiu, e ele fica verde
           # antes de o `user_data` (infra/compute.tf) instalar o Docker. `command -v`
           # cobre "binario ausente"; `docker info` cobre "daemon ainda subindo".
+          #
+          # O `timeout` do empurrao do cloud-init nao e cosmetico: esse comando nao tem
+          # teto proprio, e um user_data travado seguraria o SSM ate o corte de 900s.
+          timeout 60 cloud-init status --wait > /dev/null 2>&1 || true
+
           docker_bin=0
           docker_daemon=0
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 180); do
             if command -v docker > /dev/null 2>&1; then
               docker_bin=1
             fi
@@ -1120,15 +1173,26 @@ jobs:
               docker_daemon=1
               break
             fi
-            echo "docker: aguardando o user_data terminar (${attempt}/60)"
+            echo "docker: aguardando o user_data terminar (${attempt}/180)"
             sleep 5
           done
-          if [ "$docker_bin" -ne 1 ]; then
-            echo "ERRO: docker nao instalado no host apos 300s; o user_data de infra/compute.tf nao terminou" >&2
-            exit 1
-          fi
-          if [ "$docker_daemon" -ne 1 ]; then
-            echo "ERRO: daemon do docker sem resposta em 300s; o user_data de infra/compute.tf nao terminou" >&2
+          if [ "$docker_bin" -ne 1 ] || [ "$docker_daemon" -ne 1 ]; then
+            echo "--- diagnostico do user_data ---" >&2
+            if command -v cloud-init > /dev/null 2>&1; then
+              cloud-init status --long 2>&1 | sed 's/^/  /' >&2 || true
+            else
+              echo "  cloud-init ausente" >&2
+            fi
+            cloud_init_log=/var/log/cloud-init-output.log
+            echo "--- ultimas 40 linhas de ${cloud_init_log} ---" >&2
+            tail -40 "$cloud_init_log" 2>&1 | sed 's/^/  /' >&2 || true
+            echo "--- apt travado? ---" >&2
+            ps -eo pid,etime,cmd 2> /dev/null | grep -E 'apt|dpkg|cloud-init' | grep -v grep | sed 's/^/  /' >&2 || echo "  nenhum processo de apt/cloud-init" >&2
+            if [ "$docker_bin" -ne 1 ]; then
+              echo "ERRO: docker nao instalado no host apos 900s; o user_data de infra/compute.tf nao terminou" >&2
+              exit 1
+            fi
+            echo "ERRO: daemon do docker sem resposta em 900s; o user_data de infra/compute.tf nao terminou" >&2
             exit 1
           fi
 
