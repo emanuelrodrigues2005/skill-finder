@@ -16,6 +16,10 @@ echo "volumes .......... $(aws ec2 describe-volumes \
   --filters "Name=tag:project,Values=skill-finder" \
   --query 'length(Volumes)' --output text 2>&1)"
 echo "security groups .. $(aws ec2 describe-security-groups \
-  --filters "Name=group-name,Values=skill-finder-app" \
+  --filters "Name=tag:project,Values=skill-finder" \
   --query 'length(SecurityGroups)' --output text 2>&1)"
+echo "load balancers ... $(aws elbv2 describe-load-balancers \
+  --query 'length(LoadBalancers)' --output text 2>&1)"
+echo "target groups .... $(aws elbv2 describe-target-groups \
+  --query 'length(TargetGroups)' --output text 2>&1)"
 echo "bucket de state .. $(aws s3 ls "s3://bcc-cloud-tfstate-794399909334/projeto2/" 2>&1 | head -1)"
