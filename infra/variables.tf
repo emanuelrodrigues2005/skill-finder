@@ -3,12 +3,6 @@ variable "project_name" {
   type        = string
 }
 
-variable "instance_type" {
-  description = "Tipo da instância EC2, restrito às famílias liberadas pelo lab (t2/t3)."
-  type        = string
-  default     = "t3.small"
-}
-
 variable "key_name" {
   description = "Key pair já criado na F0, usado no acesso SSH à instância."
   type        = string

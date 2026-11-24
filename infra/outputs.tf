@@ -1,6 +1,28 @@
+output "instance_ids" {
+  description = "Id da instancia de cada papel (web, api, db)."
+  value       = { for role, instance in aws_instance.role : role => instance.id }
+}
+
+output "web_private_ip" {
+  description = "IPv4 privado da web; alvo do balanceador (#70)."
+  value       = aws_instance.role["web"].private_ip
+}
+
+output "api_private_ip" {
+  description = "IPv4 privado da api; alvo do balanceador (#70)."
+  value       = aws_instance.role["api"].private_ip
+}
+
+output "db_private_ip" {
+  description = "IPv4 privado do db; alvo 5432 alcancado pela api."
+  value       = aws_instance.role["db"].private_ip
+}
+
+# A api e a unica camada com IP publico e com a regra 22 opcional: o smoke atual
+# a alcanca por IP ate a #74 passar a usar o DNS do balanceador.
 output "host_public_ip" {
-  description = "IPv4 publico da instancia; muda a cada stop/start."
-  value       = aws_instance.app.public_ip
+  description = "IPv4 publico da api; muda a cada stop/start."
+  value       = aws_instance.role["api"].public_ip
 }
 
 locals {
