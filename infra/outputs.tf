@@ -51,3 +51,13 @@ output "target_port" {
   description = "Porta publicada pelo nginx da borda no host."
   value       = 80
 }
+
+output "alb_dns_name" {
+  description = "DNS do balanceador; e o BASE_URL do smoke e da demo."
+  value       = aws_lb.this.dns_name
+}
+
+output "alb_arn" {
+  description = "ARN do balanceador; a varredura de orfaos da F7.9 consulta por ele."
+  value       = aws_lb.this.arn
+}
