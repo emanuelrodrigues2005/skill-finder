@@ -9,11 +9,11 @@
  *
  * **D2 — bucket por `client_hash`.** A chave é `sha256(IP_HASH_SALT:ip)` — a
  * mesma função que grava `search_request.client_hash` (`client-hash.ts`), então
- * o limite conta exatamente o cliente que o histórico identifica. O IP vem de
- * `X-Real-IP`, que o nginx **sobrescreve** com `$remote_addr`
- * (`frontend/nginx.conf`); `X-Forwarded-For` nunca é lido porque é uma lista que
- * o cliente escolhe — confiar nele daria um bucket novo a cada requisição.
- * `req.ip` é só o fallback de quem fala direto com a API (dev, testes).
+ * o limite conta exatamente o cliente que o histórico identifica. O IP é
+ * `req.ip`, que com `trust proxy = 1` (`main.ts`) é a **última** entrada do
+ * `X-Forwarded-For` — a que o ALB anexa, e portanto não forjável (ADR-015).
+ * Header de IP mandado pelo cliente não entra na conta: o ALB não o sobrescreve,
+ * então confiar nele daria um bucket novo a cada requisição.
  *
  * **D3 — o 429 do contrato (§5.5), não o do `ThrottlerException`.** O guard de
  * fábrica responde `"ThrottlerException: Too Many Requests"`, sem
@@ -41,8 +41,6 @@ import { clientHash, resolveClientIp } from './client-hash';
 
 /** Mensagem do 429: fala de busca (o único recurso limitado), não de "requests". */
 const RATE_LIMITED_MESSAGE = 'Too many searches from this client. Try again later.';
-
-/** Cabeçalho que o nginx grava com `$remote_addr` (nunca o `X-Forwarded-For`). */
 
 @Injectable()
 export class SearchThrottlerGuard extends ThrottlerGuard {
@@ -117,11 +115,6 @@ export class SearchThrottlerGuard extends ThrottlerGuard {
    * `client_hash` — senão o bucket e o histórico falam de clientes diferentes.
    */
   private clientIp(req: Record<string, unknown>): string {
-    return resolveClientIp({
-      headers: req.headers as Record<string, unknown> | undefined,
-      ip: typeof req.ip === 'string' ? req.ip : undefined,
-    });
+    return resolveClientIp({ ip: typeof req.ip === 'string' ? req.ip : undefined });
   }
-
-
 }

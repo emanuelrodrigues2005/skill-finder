@@ -179,13 +179,19 @@ describe('log redaction (§8.5)', () => {
     }
   });
 
-  it('redacts the client IP that nginx forwards (§8.5: IP em claro é PII)', () => {
+  it('redacts the client IP that the edge forwards (§8.5: IP em claro é PII)', () => {
     const { logger, output } = captureLogger();
 
     logger.info(
       {
         req: {
-          headers: { 'x-forwarded-for': '203.0.113.9', 'x-real-ip': '203.0.113.9' },
+          headers: {
+            'x-forwarded-for': '203.0.113.9',
+            // ADR-015: o ALB não escreve este header, então ele chega como o
+            // cliente mandou. Deixou de ser lido pela identidade e continua
+            // redigido — o valor é escolhido por quem faz a requisição.
+            'x-real-ip': '198.51.100.7',
+          },
           remoteAddress: '203.0.113.9',
         },
       },
@@ -193,6 +199,7 @@ describe('log redaction (§8.5)', () => {
     );
 
     expect(output()).not.toContain('203.0.113.9');
+    expect(output()).not.toContain('198.51.100.7');
   });
 
   /**

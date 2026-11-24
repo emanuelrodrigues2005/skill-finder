@@ -77,8 +77,12 @@ Os três ficam **fora** de `/api/v1` (prefixo global). Swagger em `/docs` só fo
   `dependencies` porque o runtime roda `pnpm prisma:deploy` (`make migrate`).
 - **Headers e proxy.** `X-Content-Type-Options`, `Referrer-Policy` e
   `X-Frame-Options` saem de um middleware (a API só serve JSON; o CSP da SPA é do
-  nginx) e `trust proxy` é 1, o salto do nginx: `req.ip` não vem de um
-  `X-Forwarded-For` forjado pelo cliente.
+  nginx) e `trust proxy` é 1 — **um** salto até o processo, que hoje é o nginx e na
+  arquitetura distribuída é o ALB (ADR-015). `req.ip` é a última entrada do
+  `X-Forwarded-For`, a que o salto confiável anexa; `X-Real-IP` não é lido. A
+  garantia é de rede, não de código: a porta 8000 só é alcançável pelo security
+  group do balanceador — se ela abrir para um CIDR, o IP passa a ser escolhido pelo
+  cliente.
 - **Migrations.** `prisma/migrations/` está vazio de propósito: a migration inicial
   precisa de um Postgres vivo. Os pontos que o Prisma não expressa (`CHECK`,
   `tsvector`/GIN, `pg_trgm`, índice único parcial do lock de ingestão) entram como

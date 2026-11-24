@@ -222,10 +222,10 @@ async function createApp(options: { clock?: FakeClock } = {}): Promise<Harness> 
   return { app, store, budget, clock };
 }
 
-function postSearch(app: INestApplication, realIp: string): request.Test {
+function postSearch(app: INestApplication, forwardedFor: string): request.Test {
   return request(app.getHttpServer())
     .post('/api/v1/search')
-    .set('X-Real-IP', realIp)
+    .set('X-Forwarded-For', forwardedFor)
     .send({ query: QUERY });
 }
 

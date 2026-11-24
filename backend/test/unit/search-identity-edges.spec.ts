@@ -9,9 +9,10 @@
  *   que os 100 bits do corpo devolveria um id que o próprio `decode` não lê, e a
  *   rota `/skills/{skill_id}` viraria 500 em vez de 404;
  * - `resolveClientIp` é o que faz o **bucket do rate limit** e o `client_hash` do
- *   histórico falarem do mesmo cliente. Header em lista (o Express entrega
- *   `string[]` para header repetido), header vazio e `req.ip` ausente são os
- *   casos em que duas implementações divergiriam em silêncio;
+ *   histórico falarem do mesmo cliente. Depois da ADR-015 ele lê só `req.ip`
+ *   (com `trust proxy = 1`, a última entrada do `X-Forwarded-For`): `X-Real-IP`
+ *   é header que o cliente escolhe e o ALB não apaga, então ignorá-lo é o que
+ *   impede o atacante de escolher o próprio bucket;
  * - `requestIdOf` devolve o id do middleware ou cunha um novo — nunca `undefined`
  *   no corpo da resposta.
  *
@@ -71,20 +72,17 @@ describe('ids — bordas do decode', () => {
 });
 
 describe('client-hash — resolução do IP e do hash', () => {
-  it('prefers the first value when the header arrives as a list', () => {
-    expect(
-      resolveClientIp({ headers: { 'x-real-ip': ['203.0.113.9', '198.51.100.1'] }, ip: '10.0.0.1' }),
-    ).toBe('203.0.113.9');
+  it('ignores a forged `X-Real-IP`: the identity is `req.ip` (ADR-015)', () => {
+    // O ALB não escreve `X-Real-IP` nem apaga o que o cliente mandou. Com
+    // `trust proxy = 1`, `req.ip` já é a última entrada do `X-Forwarded-For` —
+    // a que o ALB anexou —, e é a única fonte que o cliente não escolhe.
+    const request = { headers: { 'x-real-ip': '1.2.3.4' }, ip: '200.10.20.30' };
+
+    expect(resolveClientIp(request)).toBe('200.10.20.30');
   });
 
-  it('trims the header and falls back to `req.ip` when it is blank', () => {
-    expect(resolveClientIp({ headers: { 'x-real-ip': '  203.0.113.9  ' } })).toBe('203.0.113.9');
-    // Header só de espaço não é cliente: vale o `req.ip` do Express.
-    expect(resolveClientIp({ headers: { 'x-real-ip': '   ' }, ip: '10.0.0.1' })).toBe('10.0.0.1');
-  });
-
-  it('ignores a non-string header and answers an empty string without any source', () => {
-    expect(resolveClientIp({ headers: { 'x-real-ip': 42 }, ip: undefined })).toBe('');
+  it('answers `req.ip` as-is and an empty string when the request has none', () => {
+    expect(resolveClientIp({ ip: '203.0.113.9' })).toBe('203.0.113.9');
     expect(resolveClientIp({})).toBe('');
   });
 
