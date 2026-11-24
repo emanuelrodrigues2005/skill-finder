@@ -18,7 +18,10 @@
  *      Pina D1 (guard na rota, nunca `APP_GUARD` global): probe limitado faria o
  *      container reiniciar em loop.
  *   D. bucket por cliente (D2): esgotado o cliente default (`127.0.0.1`), um POST
- *      com `X-Real-IP: 10.0.0.7` responde 200 e o default continua 429.
+ *      com `X-Forwarded-For: 10.0.0.7` responde 200 e o default continua 429.
+ *   E/F. identidade (ADR-015): `X-Real-IP` forjado não muda o `client_hash`;
+ *      quem manda é a última entrada do `X-Forwarded-For`, e sem header nenhum
+ *      vale o `req.ip` do socket — estável entre requisições.
  *
  * `RATE_LIMIT_SEARCH_PER_MIN`/`PER_DAY` são lidas na **construção** do módulo
  * (`ThrottlerModule.forRootAsync` -> `AppConfigService`), por isso cada cenário
@@ -33,8 +36,10 @@ import request from 'supertest';
 
 import { AppModule } from '@/app.module';
 import type { CategoryItem, SkillDetail, SkillSummary } from '@/contract/dto/catalog.dto';
+import { AppConfigService } from '@/config/config.module';
 import { configureApp } from '@/main';
 import { PrismaService } from '@/prisma/prisma.service';
+import { clientHash } from '@/search/client-hash';
 import { decodeSkillId, encodeSkillId } from '@/search/ids';
 import type {
   ListSkillsInput,
@@ -178,9 +183,20 @@ async function createApp(): Promise<Harness> {
   return { app, store };
 }
 
-function postSearch(app: INestApplication, realIp?: string): request.Test {
+interface ClientHeaders {
+  readonly realIp?: string;
+  readonly forwardedFor?: string;
+}
+
+function postSearch(app: INestApplication, headers: ClientHeaders = {}): request.Test {
   const call = request(app.getHttpServer()).post('/api/v1/search').send({ query: QUERY });
-  return realIp === undefined ? call : call.set('X-Real-IP', realIp);
+  if (headers.realIp !== undefined) {
+    call.set('X-Real-IP', headers.realIp);
+  }
+  if (headers.forwardedFor !== undefined) {
+    call.set('X-Forwarded-For', headers.forwardedFor);
+  }
+  return call;
 }
 
 /** Asserções comuns de um 429 de §5.5 (D3), com o teto/janela do throttler. */
@@ -294,7 +310,7 @@ describe('POST /api/v1/search rate limit — per client (D2)', () => {
     await harness.app.close();
   });
 
-  it('D. keys the bucket by client: a new X-Real-IP is not blocked with the exhausted one', async () => {
+  it('D. keys the bucket by client: a new X-Forwarded-For is not blocked with the exhausted one', async () => {
     // Esgota o cliente default (`127.0.0.1`, sem header): 10 passam, o 11º não.
     for (let attempt = 0; attempt < MINUTE_LIMIT; attempt += 1) {
       await postSearch(harness.app).expect(200);
@@ -302,15 +318,72 @@ describe('POST /api/v1/search rate limit — per client (D2)', () => {
     const exhausted = await postSearch(harness.app);
     expectRateLimited(exhausted, { limit: MINUTE_LIMIT, window_seconds: 60 });
 
-    // D2: outro cliente tem bucket próprio — o IP do cliente vem do `X-Real-IP`
-    // (que o nginx sobrescreve com `$remote_addr`), não do `X-Forwarded-For`.
-    const other = await postSearch(harness.app, '10.0.0.7');
+    // D2: outro cliente tem bucket próprio — o IP vem de `req.ip`, que com
+    // `trust proxy = 1` é a entrada do `X-Forwarded-For` que a borda anexou.
+    const other = await postSearch(harness.app, { forwardedFor: '10.0.0.7' });
     expect(other.status).toBe(200);
     expect(harness.store.saved).toHaveLength(MINUTE_LIMIT + 1);
 
     // E o cliente esgotado continua bloqueado (o bucket do outro não o liberou).
     const stillBlocked = await postSearch(harness.app);
     expectRateLimited(stillBlocked, { limit: MINUTE_LIMIT, window_seconds: 60 });
+  }, 120_000);
+});
+
+describe('POST /api/v1/search — client identity (ADR-015)', () => {
+  let harness: Harness;
+  let salt: string | undefined;
+
+  const FORWARDED = '9.9.9.9, 200.10.20.30';
+  /** O que o cliente do último POST persistiu no histórico. */
+  function lastClientHash(): string {
+    const row = harness.store.saved[harness.store.saved.length - 1];
+    if (row === undefined) {
+      throw new Error('nenhuma busca persistida');
+    }
+    return row.client_hash;
+  }
+
+  beforeAll(async () => {
+    // Teto alto: aqui o alvo é a identidade, não o 429.
+    process.env.RATE_LIMIT_SEARCH_PER_MIN = '1000';
+    process.env.RATE_LIMIT_SEARCH_PER_DAY = String(PER_DAY_HIGH);
+    harness = await createApp();
+    salt = harness.app.get(AppConfigService).env.ipHashSalt;
+  }, 120_000);
+
+  afterAll(async () => {
+    await harness.app.close();
+  });
+
+  it('E. a forged X-Real-IP does not change the client_hash the bucket is keyed by', async () => {
+    // O cliente manda `X-Real-IP: 1.2.3.4` e um `X-Forwarded-For` forjado; o ALB
+    // anexa o IP real ao fim da lista (modo `append`, ADR-015).
+    await postSearch(harness.app, { realIp: '1.2.3.4', forwardedFor: FORWARDED }).expect(200);
+    const forged = lastClientHash();
+
+    await postSearch(harness.app, { forwardedFor: FORWARDED }).expect(200);
+    const plain = lastClientHash();
+
+    // O `client_hash` é a chave do bucket: hash igual = bucket igual.
+    expect(forged).toBe(plain);
+    // Quem manda é a ÚLTIMA entrada do XFF (a que o ALB anexou), nunca a
+    // primeira (forjada pelo cliente) nem o `X-Real-IP`.
+    expect(forged).toBe(clientHash('200.10.20.30', salt));
+    expect(forged).not.toBe(clientHash('9.9.9.9', salt));
+    expect(forged).not.toBe(clientHash('1.2.3.4', salt));
+  }, 120_000);
+
+  it('F. without any header (direct dev access) the identity is `req.ip`, stable across requests', async () => {
+    await postSearch(harness.app).expect(200);
+    const first = lastClientHash();
+    await postSearch(harness.app).expect(200);
+    const second = lastClientHash();
+
+    expect(first).toBe(second);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    // E é o IP do socket, não um header: o valor do XFF de E não vaza para cá.
+    expect(first).not.toBe(clientHash('200.10.20.30', salt));
   }, 120_000);
 });
 

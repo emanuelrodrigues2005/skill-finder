@@ -62,9 +62,9 @@ export function configureApp(app: INestApplication): INestApplication {
   const config = app.get(AppConfigService);
   const express = app as NestExpressApplication;
 
-  // Um único salto de proxy na frente (o nginx do compose): `req.ip` vem do
-  // `X-Forwarded-For` que o nginx escreveu, e não de um header forjado pelo
-  // cliente — do contrário o rate limit por IP (§8.4) seria burlável.
+  // Um único salto de proxy na frente (o ALB, ADR-015): `req.ip` é a última
+  // entrada do `X-Forwarded-For`, a que o ALB anexa, e não um header forjado
+  // pelo cliente — do contrário o rate limit por IP (§8.4) seria burlável.
   express.set('trust proxy', 1);
   // Fingerprint do framework fora do header; os demais headers vêm do middleware.
   express.disable('x-powered-by');

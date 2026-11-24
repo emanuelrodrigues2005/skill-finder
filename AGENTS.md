@@ -197,15 +197,15 @@ Inválidos: `Fix bug`, `ajustes`, `feat: Fixed the bug.`, `update stuff`, `WIP`.
 ## Issues: a interface do trabalho
 
 O tracker é o GitHub Issues deste repositório. Índice em `tasks/plan.md`; dados em
-`scripts/github/tracker.json`; corpos em `scripts/github/issues/f0–f6.md` e `f2-web.md`; publicação
+`scripts/github/tracker.json`; corpos em `scripts/github/issues/f0–f7.md` e `f2-web.md`; publicação
 por `scripts/github/publish-tracker.ps1` (`-ValidateOnly` confere a consistência sem rede, `-Apply`
 publica).
 
 Toda issue declara:
 
-1. **Milestone** — uma das sete: `F0` pré-requisitos · `F1` proposta e decisões · `F2` aplicação ·
-   `F3` infraestrutura como código · `F4` pipeline CI/CD · `F5` observabilidade e segredos ·
-   `F6` entrega.
+1. **Milestone** — uma das **oito milestones**: `F0` pré-requisitos · `F1` proposta e decisões ·
+   `F2` aplicação · `F3` infraestrutura como código · `F4` pipeline CI/CD · `F5` observabilidade e
+   segredos · `F6` entrega · `F7` arquitetura distribuída (ALB, três VMs, janela com `destroy`).
 2. **Labels** — exatamente uma de cada eixo: `type:` (`feat`/`fix`/`chore`/`docs`/`test`/`infra`/`gate`),
    `area:` (`api`/`web`/`infra`/`docs`/`observability`/`security`) e `priority:` (`p0`/`p1`/`p2`).
 3. **Critérios de aceitação verificáveis** — cada um com o comando que prova (`curl`, `pnpm …`,

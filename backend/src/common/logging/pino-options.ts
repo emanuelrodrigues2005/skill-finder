@@ -22,10 +22,16 @@ export const REDACT_PATHS: string[] = [
   'req.headers.cookie',
   'req.headers["x-api-key"]',
   'req.headers["x-admin-token"]',
-  // IP em claro: o nginx manda `X-Forwarded-For`/`X-Real-IP` e o socket traz
-  // `remoteAddress`; nenhum dos três pode ir para o log (§8.5).
-  'req.headers["x-forwarded-for"]',
+  // IP em claro: o `X-Forwarded-For` que a borda repassa (ADR-015) e o
+  // `remoteAddress` do socket identificam o cliente; nenhum dos dois pode ir
+  // para o log (§8.5).
+  //
+  // `x-real-ip` continua redigido mesmo tendo deixado de ser lido pela
+  // identidade: agora ele é header de cliente e chega intacto até aqui, então
+  // sem a redação o valor — escolhido por quem manda a requisição — entraria no
+  // log como se fosse o IP do cliente.
   'req.headers["x-real-ip"]',
+  'req.headers["x-forwarded-for"]',
   'req.remoteAddress',
   // payload cru (snake_case) e objeto de config (camelCase)
   'api_key',

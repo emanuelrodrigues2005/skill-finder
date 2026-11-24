@@ -6,7 +6,7 @@
 > o GitHub Issues (`AGENTS.md`). Não há GitHub Projects: o token do dono não tem o escopo `project`.
 >
 > Publicação: `scripts/github/publish-tracker.ps1` lê `scripts/github/tracker.json` e os corpos em
-> `scripts/github/issues/f0–f6.md`. `-ValidateOnly` confere a consistência sem rede; `-Apply` publica.
+> `scripts/github/issues/f0–f7.md`. `-ValidateOnly` confere a consistência sem rede; `-Apply` publica.
 
 ## Overview
 
@@ -14,7 +14,7 @@ O **Skill Finder** recebe uma descrição em linguagem natural, usa uma LLM para
 intenção, consulta o catálogo do **skills.sh** e devolve uma lista **ranqueada e explicada** de
 skills de agentes. A ordem é uma **função pura do backend**; a LLM só interpreta e redige o
 "porquê". Entrega acadêmica: aplicação no ar na AWS Academy, por Terraform, com pipeline CI/CD,
-testes em três níveis, segredos no cofre e observabilidade — fases **F0–F6** de
+testes em três níveis, segredos no cofre e observabilidade — fases **F0–F7** de
 `docs/04-plano-de-execucao.md` §2, avançando por **gates** (§8).
 
 ## Architecture Decisions
@@ -33,6 +33,11 @@ Todas **herdadas** — nenhuma é redecidida por este plano.
 | **ADR-006** — cache, rate limit e agendador na API, com Postgres | `docs/app/02` §10 | sem Redis/fila; lock em `ingest_run` |
 | **Sem autenticação de usuário** — identidade é `client_hash = sha256(ip + salt)` | `docs/app/01` §6.3 | nada de login/JWT/senha em nenhuma issue |
 | **Pesos do edital** C1 25% · C2 20% · C3 15% · C4 15% · C5 10% · C6 5% · C7 5% · C8 5% | `docs/00` §7 | a prioridade das issues segue estes pesos |
+| **ADR-010 a ADR-017** — arquitetura distribuída da F7: ALB com DNS estável, três VMs por papel, banco em EC2 (RDS inviável por medição), observabilidade na VM do back, roteamento por caminho no ALB, cliente pelo `X-Forwarded-For`, deploy em três alvos em série e operação em janela | `docs/app/02` §10; `docs/evidencias/f7-alb-probe.txt` | a URL é o `alb_dns_name`; **um** `compose.yaml` fatiado por profile; `destroy` no fim de cada sessão |
+
+**A F7 muda a topologia apenas na janela da demo** (ADR-017): três VMs + ALB enquanto a sessão estiver
+ligada, `destroy` no fim. Fora da janela, a Opção 1 continua sendo o padrão, e `var.enable_alb=false`
+é o plano B declarado — volta ao IP público com EIP + `sslip.io`.
 
 ## Task List
 
@@ -107,6 +112,24 @@ autenticado; seis segredos no Infisical e nenhum `.env` no host; prova em
 
 **Checkpoint F6:** ciclo `destroy`→`apply`→`deploy`→`smoke` em < 15 min registrado; demo ensaiada
 com vídeo de fallback; `gitleaks` e `fmt` limpos; checklist da §11 100%.
+
+### F7 — Arquitetura distribuída
+- [x] **F7.1** `chore(infra):` provar que o ALB cria, fica `active` e destrói no lab — #67, `3b3fb1a`
+- [ ] **F7.2** `docs(app):` ADR-010 a ADR-017 e a milestone F7 no tracker — #68
+- [ ] **F7.3** `feat(infra):` três instâncias por papel, quatro security groups e EBS — #69
+- [ ] **F7.4** `feat(infra):` ALB com três target groups e regras de caminho — #70
+- [ ] **F7.5** `feat(infra):` fatiar o compose por papel (web, api, db) — #71
+- [ ] **F7.6** `fix(api):` identificar o cliente pelo `X-Forwarded-For` do ALB — #72
+- [ ] **F7.7** `fix(web):` tirar do nginx do front o que o ALB passou a rotear — #73
+- [ ] **F7.8** `ci(deploy):` implantar nas três VMs por tag de papel e smoke pelo ALB — #74
+- [ ] **F7.9** `docs(infra):` runbook das três VMs, custo por hora e destroy sem órfãos — #75
+- [ ] **F7.10** `chore(release):` ensaio cronometrado do ciclo F7 — #76
+
+**Checkpoint F7:** veredito do ALB em `docs/evidencias/f7-alb-probe.txt` (`active` em 121 s, destruído
+em 153 s, sem órfão); três VMs por papel (`t3.micro` no front, `t3.small` no back e no banco) e
+`compose.yaml` único com profiles `web`/`api`/`db`/`obs`; deploy em série `db`→`api`→`web`; smoke pelo
+DNS do ALB; custo por hora **0,1147** (ADR-017) com `destroy` ao fim de cada sessão; ensaio da janela
+em `docs/evidencias/f7-ensaio.md`.
 
 ## Risks and Mitigations
 

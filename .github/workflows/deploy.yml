@@ -14,9 +14,15 @@
 # `sts get-caller-identity` antes de construir imagem. Elas servem só ao SSM e ao
 # `provision`: publicar imagem não fala com a AWS.
 #
-# Sem SSH: o security group da F3 abre só a 80, e a porta 22 nem existe na lista de
-# regras. O canal é o SSM RunCommand — o mesmo do ciclo da F3 —, então o runner não
-# guarda chave privada e o host não expõe shell na internet.
+# Sem SSH: o security group do balanceador abre só a 80, e nenhuma instância aceita
+# 22 (a lista de redes liberadas nasce vazia, então a regra nem é criada). O canal é
+# o SSM RunCommand — o mesmo do ciclo da F3 —, então o runner não guarda chave
+# privada e o host não expõe shell na internet.
+#
+# Três hosts, um por papel (ADR-016): cada id sai de `tag:role`, e os papéis sobem em
+# série `db` → `api` → `web` porque a api migra contra o banco e a borda só serve a
+# SPA depois de o schema existir. O `smoke` usa o DNS do ALB, o único endereço
+# estável: o IP público de uma instância muda a cada stop/start.
 #
 # As imagens são públicas no Docker Hub, e o pull no host é anônimo: nenhuma
 # credencial de registry fica na VM e o `pull_policy: always` do override de prod
@@ -319,9 +325,10 @@ jobs:
       (needs.build.result == 'success' || needs.build.result == 'skipped') &&
       (needs.provision.result == 'success' || needs.provision.result == 'skipped')
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Três hosts em série, cada um com o seu comando SSM (teto de 900 s por comando).
+    timeout-minutes: 45
     outputs:
-      public_ip: ${{ steps.target.outputs.public_ip }}
+      alb_dns_name: ${{ steps.alb.outputs.dns_name }}
       # O `smoke` só enxerga o `needs` das suas dependências diretas: o SHA que ele
       # publica no sumário tem de viajar de `gate` para `deploy` e de `deploy`
       # para `smoke`.
@@ -355,43 +362,102 @@ jobs:
         with:
           ref: ${{ needs.gate.outputs.sha }}
 
-      - name: Resolve the host
-        id: target
+      - name: Resolve the deploy targets
+        # Um id por papel, e não "a primeira instância do projeto": com três VMs pegar
+        # a primeira da lista mandaria o compose para um host arbitrário e o deploy
+        # ficaria verde tendo implantado um terço da topologia.
+        id: targets
         run: |
           set -euo pipefail
-          found="$(aws ec2 describe-instances \
-            --filters "Name=tag:project,Values=${PROJECT_NAME}" "Name=instance-state-name,Values=running" \
-            --query 'Reservations[].Instances[].[InstanceId,PublicIpAddress]' --output text)"
-          if [ -z "$found" ]; then
-            echo "::error::nenhuma instancia 'running' com tag project=${PROJECT_NAME}"
-            echo "Suba a infra (runbook §1) ou dispare com provision=true." >> "$GITHUB_STEP_SUMMARY"
+          missing=""
+          for role in db api web; do
+            found="$(aws ec2 describe-instances \
+              --filters "Name=tag:project,Values=${PROJECT_NAME}" "Name=tag:role,Values=${role}" \
+                "Name=instance-state-name,Values=running" \
+              --query 'Reservations[].Instances[].[InstanceId,PrivateIpAddress]' --output json)"
+            total="$(printf '%s' "$found" | jq 'length')"
+            if [ "${total:-0}" -eq 0 ]; then
+              missing="${missing} ${role}"
+              continue
+            fi
+            # Duas instâncias com o mesmo papel é ambiguidade, não escolha.
+            if [ "$total" -gt 1 ]; then
+              echo "::error::${total} instancias '${PROJECT_NAME}' running com tag role=${role}; o deploy exige uma por papel"
+              exit 1
+            fi
+            instance="$(printf '%s' "$found" | jq -r '.[0][0]')"
+            private_ip="$(printf '%s' "$found" | jq -r '.[0][1]')"
+            printf 'role %s: %s (%s)\n' "$role" "$instance" "$private_ip"
+            {
+              echo "instance_${role}=${instance}"
+              echo "private_ip_${role}=${private_ip}"
+            } >> "$GITHUB_OUTPUT"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::sem instancia running com tag role para:${missing}"
+            {
+              echo "## Faltam hosts"
+              echo ""
+              echo "O deploy fala com os três papéis (\`db\`, \`api\`, \`web\`) e nenhum é"
+              echo "opcional: implantar dois terços em silêncio é pior que falhar aqui."
+              echo "Suba a infraestrutura (runbook §1) ou dispare com \`provision=true\`."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          line="$(printf '%s\n' "$found" | head -1)"
-          {
-            echo "instance_id=$(printf '%s' "$line" | cut -f1)"
-            echo "public_ip=$(printf '%s' "$line" | cut -f2)"
-          } >> "$GITHUB_OUTPUT"
-          printf 'host: %s\n' "$line"
 
-      - name: Wait for the SSM agent
-        env:
-          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
+      - name: Resolve the ALB endpoint
+        id: alb
         run: |
-          set -euo pipefail
-          for attempt in $(seq 1 24); do
-            status="$(aws ssm describe-instance-information \
-              --filters "Key=InstanceIds,Values=${INSTANCE_ID}" \
-              --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || true)"
-            if [ "$status" = "Online" ]; then
-              echo "SSM online em ${attempt} tentativa(s)"
-              exit 0
+          set -uo pipefail
+          # O nome sai de `infra/alb.tf` (`${project_name}-alb`). O deploy não roda
+          # Terraform (ADR-016), então o DNS se lê da API do ELB.
+          alb="${PROJECT_NAME}-alb"
+          dns="$(aws elbv2 describe-load-balancers --names "$alb" \
+            --query 'LoadBalancers[0].DNSName' --output text 2> /dev/null || true)"
+          if [ -z "$dns" ] || [ "$dns" = "None" ]; then
+            echo "::error::balanceador '${alb}' ausente; o smoke precisa do DNS dele"
+            {
+              echo "## Sem ALB"
+              echo ""
+              echo "\`${alb}\` não existe na conta. O \`smoke\` usa \`BASE_URL\` = DNS do"
+              echo "balanceador: aplique a infra (\`provision=true\`) antes de implantar."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "dns_name=${dns}" >> "$GITHUB_OUTPUT"
+          echo "ALB: http://${dns}"
+
+      - name: Wait for the SSM agent on each host
+        # O agente aparece no SSM alguns minutos depois do boot, e os três hosts
+        # nascem no mesmo `apply`: esperar só o primeiro e mandar comando para os
+        # outros falharia em `InvalidInstanceId`.
+        env:
+          INSTANCE_DB: ${{ steps.targets.outputs.instance_db }}
+          INSTANCE_API: ${{ steps.targets.outputs.instance_api }}
+          INSTANCE_WEB: ${{ steps.targets.outputs.instance_web }}
+        run: |
+          set -uo pipefail
+          for pair in "db:${INSTANCE_DB}" "api:${INSTANCE_API}" "web:${INSTANCE_WEB}"; do
+            role="${pair%%:*}"
+            instance="${pair##*:}"
+            online=0
+            for attempt in $(seq 1 36); do
+              status="$(aws ssm describe-instance-information \
+                --filters "Key=InstanceIds,Values=${instance}" \
+                --query 'InstanceInformationList[0].PingStatus' --output text 2> /dev/null || true)"
+              if [ "$status" = "Online" ]; then
+                echo "${role}: SSM Online em ${attempt} tentativa(s) (${instance})"
+                online=1
+                break
+              fi
+              sleep 10
+            done
+            if [ "$online" -ne 1 ]; then
+              echo "::error::agente SSM nao ficou Online em 360s na instancia ${instance} (role ${role})"
+              echo "O canal do deploy e o SSM: confira o instance profile (LabInstanceProfile) e o servico amazon-ssm-agent." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
             fi
-            sleep 10
           done
-          echo "::error::agente SSM nao ficou Online em 240s na instancia ${INSTANCE_ID}"
-          echo "O canal do deploy e o SSM: confira o instance profile (LabInstanceProfile) e o servico amazon-ssm-agent." >> "$GITHUB_STEP_SUMMARY"
-          exit 1
 
       - name: Prepare the SSM runner
         run: |
@@ -433,30 +499,38 @@ jobs:
           HELPER
 
       - name: Ship the compose files and the obs config
-        # Payload em comando SSM proprio. O parametro `commands` do SendCommand para
-        # em ~24 KB e, num comando so, os 12,4 KB do tar (que ja vao em base64 dentro
-        # de um script que o helper ainda converte em base64) estourariam o teto junto
-        # do script do deploy. Aqui nao ha segredo: sao arquivos do commit.
+        # Payload em comando SSM próprio, repetido nos três hosts. O parâmetro
+        # `commands` do SendCommand para em ~24 KB e o helper ainda converte o script
+        # em base64 outra vez: medido, o script sai em 15,8 KB e o comando em 21,2 KB,
+        # com ~2,8 KB de folga. Num comando só, junto do script do deploy, passaria do
+        # teto.
+        # Aqui não há segredo: são arquivos do commit, e o mesmo payload é inofensivo
+        # no host cujo profile não usa metade dele.
         #
-        # `observability/README.md` fica de fora: e documentacao, nao configuracao.
+        # `observability/README.md` fica de fora: é documentação, não configuração.
+        # `frontend/nginx.conf` entra porque o serviço `web` o monta em
+        # `/etc/nginx/nginx.conf` e o host nasce com `/opt/app` vazio — bind mount de
+        # arquivo inexistente faz o Docker criar um diretório no lugar.
         env:
-          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
+          INSTANCE_DB: ${{ steps.targets.outputs.instance_db }}
+          INSTANCE_API: ${{ steps.targets.outputs.instance_api }}
+          INSTANCE_WEB: ${{ steps.targets.outputs.instance_web }}
         run: |
           set -euo pipefail
           . "$RUNNER_TEMP/ssm-run.sh"
           payload="$RUNNER_TEMP/payload.sh"
           {
             printf '#!/usr/bin/env bash\nset -euo pipefail\n'
-            printf 'COMPOSE_GZ=%q\n' "$(tar -cf - compose.yaml infra/deploy/compose.prod.yaml \
+            printf 'COMPOSE_GZ=%q\n' "$(tar -cf - compose.yaml infra/deploy/compose.prod.yaml frontend/nginx.conf \
               observability/grafana observability/loki observability/prometheus observability/promtail \
               | gzip -9 | base64 -w 0)"
             cat <<'PAYLOAD'
           # O tar preserva os caminhos relativos que o compose.yaml monta
-          # (`./observability/...` a partir de /opt/app).
+          # (`./observability/...` e `./frontend/nginx.conf` a partir de /opt/app).
           mkdir -p /opt/app
           cd /opt/app
           printf '%s' "$COMPOSE_GZ" | base64 -d | gzip -dc | tar -xf - -C /opt/app
-          for arquivo in compose.yaml infra/deploy/compose.prod.yaml \
+          for arquivo in compose.yaml infra/deploy/compose.prod.yaml frontend/nginx.conf \
             observability/prometheus/prometheus.yml observability/loki/loki.yml \
             observability/promtail/promtail.yml \
             observability/grafana/provisioning/datasources/datasources.yml \
@@ -467,25 +541,27 @@ jobs:
               exit 1
             fi
           done
-          echo "payload: $(sha256sum compose.yaml infra/deploy/compose.prod.yaml | cut -c1-12 | tr '\n' ' ')"
+          echo "payload: $(sha256sum compose.yaml infra/deploy/compose.prod.yaml frontend/nginx.conf | cut -c1-12 | tr '\n' ' ')"
           echo "obs: $(find observability -type f | wc -l) arquivos de configuracao em /opt/app"
           PAYLOAD
           } > "$payload"
-          ssm_run payload "$payload" "$INSTANCE_ID"
+          for pair in "db:${INSTANCE_DB}" "api:${INSTANCE_API}" "web:${INSTANCE_WEB}"; do
+            ssm_run "payload-${pair%%:*}" "$payload" "${pair##*:}"
+          done
 
-      - name: Deploy through SSM
-        # O trabalho acontece no host porque é lá que o Infisical entrega os segredos
-        # do `prod`: o runner nunca recebe `DATABASE_URL`, `ADMIN_TOKEN`,
-        # `IP_HASH_SALT` nem `LLM_API_KEY`. As credenciais da machine identity vão no
-        # comando (`printf %q` evita que um caractere especial quebre o script) e é
-        # isso que fica no histórico de invocações do SSM — risco documentado em
-        # `docs/app/06-pipeline-deploy.md` §4.
+      - name: Deploy the database (db)
+        # Primeiro da série `db` -> `api` -> `web`. A api migra contra este banco no
+        # passo seguinte: migrar contra um Postgres que ainda não subiu falha com
+        # "connection refused", e a ordem é o que separa uma coisa da outra.
+        #
+        # O host do banco lê o Infisical porque `POSTGRES_PASSWORD` é dele. A
+        # `DATABASE_URL` não é montada aqui: o endereço pertence ao host da api.
         env:
-          INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
+          INSTANCE_DB: ${{ steps.targets.outputs.instance_db }}
         run: |
           set -euo pipefail
           . "$RUNNER_TEMP/ssm-run.sh"
-          remote="$RUNNER_TEMP/deploy.sh"
+          remote="$RUNNER_TEMP/deploy-db.sh"
           {
             printf '#!/usr/bin/env bash\nset -euo pipefail\n'
             printf 'INFISICAL_CLIENT_ID=%q\n' "$INFISICAL_CLIENT_ID"
@@ -498,11 +574,11 @@ jobs:
           # O AWS-RunShellScript executa como root: `apt-get` e o instalador da CLI
           # abaixo rodam sem `sudo`.
           #
-          # `umask 077`: o login da CLI grava a sessao em `~/.infisical` do root; o
+          # `umask 077`: o login da CLI grava a sessão em `~/.infisical` do root; o
           # `trap` faz o logout seja qual for o desfecho, e o mesmo trap apaga o
-          # script intermediario.
+          # script intermediário.
           umask 077
-          step=/tmp/skill-finder-deploy-step.sh
+          step=/tmp/skill-finder-deploy-db-step.sh
           logged_in=0
           cleanup() {
             local rc=$?
@@ -514,15 +590,155 @@ jobs:
           }
           trap cleanup EXIT
 
-          # Os arquivos do compose e de `observability/` chegaram no passo anterior
-          # (`Ship the compose files and the obs config`). Aqui so se confere que
-          # estao no disco: o deploy nao depende do que sobrou de uma execucao antiga,
-          # e um bind mount sem arquivo viraria diretorio vazio dentro do container.
           cd /opt/app
-          for arquivo in compose.yaml infra/deploy/compose.prod.yaml \
-            observability/prometheus/prometheus.yml observability/loki/loki.yml \
-            observability/promtail/promtail.yml \
-            observability/grafana/provisioning/datasources/datasources.yml; do
+          for arquivo in compose.yaml infra/deploy/compose.prod.yaml; do
+            if [ ! -s "$arquivo" ]; then
+              echo "ERRO: ${arquivo} ausente em /opt/app; o passo do payload do SSM nao rodou" >&2
+              exit 1
+            fi
+          done
+
+          if ! command -v infisical > /dev/null 2>&1; then
+            echo "infisical: CLI ausente neste host, instalando pelo repositorio oficial"
+            if ! command -v curl > /dev/null 2>&1; then
+              echo "ERRO: curl ausente no host; sem ele nao da para instalar a CLI do Infisical" >&2
+              exit 1
+            fi
+            export DEBIAN_FRONTEND=noninteractive
+            curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/infisical-setup.sh 'https://artifacts-cli.infisical.com/setup.deb.sh'
+            bash /tmp/infisical-setup.sh && rm -f /tmp/infisical-setup.sh
+            apt-get install -y --no-install-recommends infisical
+          fi
+          if ! command -v infisical > /dev/null 2>&1; then
+            echo "ERRO: CLI do Infisical nao ficou disponivel apos a instalacao" >&2
+            exit 1
+          fi
+          echo "infisical: $(infisical --version 2>&1 | sed -n 1p)"
+
+          token="$(infisical login --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" --client-secret="$INFISICAL_CLIENT_SECRET" \
+            --silent --plain)"
+          if [ -z "$token" ]; then
+            echo "ERRO: Universal Auth nao devolveu token; confira a machine identity e o papel read no projeto" >&2
+            exit 1
+          fi
+          logged_in=1
+          export INFISICAL_TOKEN="$token"
+
+          # `POSTGRES_USER`/`POSTGRES_DB` não são segredo e não estão no cofre: é a
+          # identidade do banco que este host e o `api` precisam combinar.
+          #
+          # `POSTGRES_BIND` só vale neste host, porque só ele roda o profile `db`: o
+          # default do compose é loopback, e e a api que chega pela 5432, do IP privado
+          # (`sg-db` aceita essa porta so de `sg-api`).
+          export DOCKERHUB_USER IMAGE_TAG="$SHA" POSTGRES_USER=skills POSTGRES_DB=skills
+          export POSTGRES_BIND=0.0.0.0
+
+          cat > "$step" <<'STEP'
+          set -euo pipefail
+          cd /opt/app
+
+          env_file_args=()
+          if docker compose --help 2> /dev/null | grep -q -- '--env-file'; then
+            env_file_args=(--env-file /dev/null)
+          else
+            echo "AVISO: compose sem --env-file; um /opt/app/.env velho pode influenciar a interpolacao" >&2
+          fi
+
+          compose() {
+            docker compose "${env_file_args[@]}" -f compose.yaml -f infra/deploy/compose.prod.yaml --profile db "$@"
+          }
+
+          if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+            echo "ERRO: POSTGRES_PASSWORD ausente no ambiente do Infisical" >&2
+            exit 1
+          fi
+
+          compose pull
+          compose up -d --no-build
+          # `up -d` volta antes do healthcheck, e a migração acontece no comando SSM
+          # seguinte: sem esta espera o Prisma pode começar contra uma base ainda
+          # inicializando.
+          status=unknown
+          for _ in $(seq 1 30); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+              "$(compose ps -q postgres)" 2> /dev/null || echo missing)"
+            if [ "$status" = "healthy" ]; then
+              break
+            fi
+            sleep 4
+          done
+          if [ "$status" != "healthy" ]; then
+            echo "ERRO: postgres nao ficou healthy em 120s (ultimo estado: ${status})" >&2
+            compose ps
+            exit 1
+          fi
+          compose ps
+          echo "::db-ok:: postgres pronto"
+          STEP
+
+          infisical secrets-manager run --projectId "$INFISICAL_PROJECT_ID" --env "$INFISICAL_ENV" \
+            -- bash "$step"
+          REMOTE
+          } > "$remote"
+          ssm_run deploy-db "$remote" "$INSTANCE_DB"
+
+      - name: Deploy the backend (api)
+        # Segundo da série, e o único host que monta a `DATABASE_URL`: ela sai do IP
+        # privado do banco + `POSTGRES_PASSWORD`, aqui dentro do `secrets-manager run`.
+        # O endereço nunca entra no cofre (ADR-016) — cada `apply` recria a VM `db`
+        # com outro IP privado, e editar o vault à mão a cada janela seria a
+        # alternativa.
+        #
+        # O trabalho acontece no host porque é lá que o Infisical entrega os segredos:
+        # o runner nunca recebe `DATABASE_URL`, `ADMIN_TOKEN`, `IP_HASH_SALT` nem
+        # `LLM_API_KEY`. As credenciais da machine identity vão no comando
+        # (`printf %q` evita que um caractere especial quebre o script) e é isso que
+        # fica no histórico de invocações do SSM — risco documentado em
+        # `docs/app/06-pipeline-deploy.md` §4.
+        env:
+          INSTANCE_API: ${{ steps.targets.outputs.instance_api }}
+          DB_PRIVATE_IP: ${{ steps.targets.outputs.private_ip_db }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/ssm-run.sh"
+          remote="$RUNNER_TEMP/deploy-api.sh"
+          {
+            printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+            printf 'INFISICAL_CLIENT_ID=%q\n' "$INFISICAL_CLIENT_ID"
+            printf 'INFISICAL_CLIENT_SECRET=%q\n' "$INFISICAL_CLIENT_SECRET"
+            printf 'INFISICAL_PROJECT_ID=%q\n' "$INFISICAL_PROJECT_ID"
+            printf 'INFISICAL_ENV=%q\n' "$INFISICAL_ENV"
+            printf 'SHA=%q\n' "$SHA"
+            printf 'DOCKERHUB_USER=%q\n' "$DOCKERHUB_USER"
+            printf 'DB_PRIVATE_IP=%q\n' "$DB_PRIVATE_IP"
+            cat <<'REMOTE'
+          # O AWS-RunShellScript executa como root: `apt-get` e o instalador da CLI
+          # abaixo rodam sem `sudo`.
+          #
+          # `umask 077`: o login da CLI grava a sessao em `~/.infisical` do root; o
+          # `trap` faz o logout seja qual for o desfecho, e o mesmo trap apaga o
+          # script intermediario.
+          umask 077
+          step=/tmp/skill-finder-deploy-api-step.sh
+          logged_in=0
+          cleanup() {
+            local rc=$?
+            if [ "$logged_in" = 1 ]; then
+              infisical logout > /dev/null 2>&1 || true
+            fi
+            rm -f "$step" /tmp/infisical-setup.sh
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
+          # Os arquivos do compose chegaram no passo anterior (`Ship the compose files
+          # and the obs config`). Aqui so se confere que estao no disco: o deploy nao
+          # depende do que sobrou de uma execucao antiga, e um bind mount sem arquivo
+          # viraria diretorio vazio dentro do container. A config de
+          # `observability/` e checada no passo que a usa, o ultimo da serie.
+          cd /opt/app
+          for arquivo in compose.yaml infra/deploy/compose.prod.yaml; do
             if [ ! -s "$arquivo" ]; then
               echo "ERRO: ${arquivo} ausente em /opt/app; o passo do payload do SSM nao rodou" >&2
               exit 1
@@ -552,7 +768,7 @@ jobs:
             echo "ERRO: CLI do Infisical nao ficou disponivel apos a instalacao" >&2
             exit 1
           fi
-          echo "infisical: $(infisical --version 2>&1 | head -1)"
+          echo "infisical: $(infisical --version 2>&1 | sed -n 1p)"
 
           token="$(infisical login --method=universal-auth \
             --client-id="$INFISICAL_CLIENT_ID" --client-secret="$INFISICAL_CLIENT_SECRET" \
@@ -564,10 +780,20 @@ jobs:
           logged_in=1
           export INFISICAL_TOKEN="$token"
 
-          # Não são segredo e por isso não estão no Infisical: o registry público, a
-          # tag do commit, a porta da borda e a fonte real do catálogo.
-          export DOCKERHUB_USER IMAGE_TAG="$SHA" WEB_PORT=80 SKILL_SOURCE_KIND=html
+          # Não são segredo e por isso não estão no Infisical: a tag do commit, a fonte
+          # real do catálogo e as portas que o ALB usa.
+          # `API_BIND` abre a api na VM: no compose o default é loopback, e quem precisa
+          # expor é o deploy, não o teste local. O filtro real é o security group (só
+          # `sg-alb` alcança a porta), e `GRAFANA_BIND` é assunto do passo da obs.
+          #
+          # `API_PORT=8000` não é cosmético: o target group aponta para a porta
+          # **8000** da instância e o `sg-api` só libera 8000/3000 para `sg-alb`.
+          # Com o default do compose (8080) o target ficaria unhealthy e todo
+          # `/api/*` pelo ALB devolveria 503.
+          export DOCKERHUB_USER IMAGE_TAG="$SHA" SKILL_SOURCE_KIND=html
+          export API_BIND=0.0.0.0 API_PORT=8000
           export POSTGRES_USER=skills POSTGRES_DB=skills
+          export DB_PRIVATE_IP
 
           cat > "$step" <<'STEP'
           set -euo pipefail
@@ -585,53 +811,289 @@ jobs:
           fi
 
           compose() {
-            docker compose "${env_file_args[@]}" -f compose.yaml -f infra/deploy/compose.prod.yaml --profile prod "$@"
+            docker compose "${env_file_args[@]}" -f compose.yaml -f infra/deploy/compose.prod.yaml --profile api "$@"
           }
 
+          for name in POSTGRES_PASSWORD ADMIN_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              echo "ERRO: ${name} ausente no ambiente do Infisical" >&2
+              exit 1
+            fi
+          done
+
+          # A `DATABASE_URL` é montada aqui, e não lida do cofre: o IP privado do banco
+          # muda a cada `apply`. Caractere que precisa de escape em URL (`@ : / ? # & %`
+          # e espaço) quebraria a URL em silêncio, então ele reprova com a causa dita.
+          case "$POSTGRES_PASSWORD" in
+            *[!A-Za-z0-9._~-]*)
+              echo "ERRO: POSTGRES_PASSWORD tem caractere fora de [A-Za-z0-9._~-]; troque a senha no Infisical (ela entra na DATABASE_URL sem escape)" >&2
+              exit 1
+              ;;
+          esac
+          export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_PRIVATE_IP}:5432/${POSTGRES_DB}?schema=public"
+          echo "database: postgresql://${POSTGRES_USER}:***@${DB_PRIVATE_IP}:5432/${POSTGRES_DB}"
+
+          # A 5432 é a outra ponta da série `db` -> `api`: falhar aqui diz "o banco não
+          # responde deste host", que é diferente de "a migração falhou" — e é a
+          # mensagem que o Prisma só daria depois do timeout.
+          if ! timeout 5 bash -c "exec 3<>/dev/tcp/${DB_PRIVATE_IP}/5432" 2> /dev/null; then
+            echo "ERRO: ${DB_PRIVATE_IP}:5432 nao aceita conexao deste host (o profile db precisa publicar a porta para sg-api)" >&2
+            exit 1
+          fi
+
           # --no-build: a imagem vem do Docker Hub. Sem a flag o compose.yaml
-          # construiria api e web neste host (t3.small, 2 GB) em vez de baixar o que
-          # o build publicou; com pull_policy: always o digest e sempre o do registry.
+          # construiria a api neste host (t3.small, 2 GB) em vez de baixar o que o
+          # build publicou; com pull_policy: always o digest e sempre o do registry.
           compose pull
+          # Migração antes do `up`, e não depois: com a api já servindo, o ALB mandaria
+          # `/api/*` para um schema que ainda não existe. `-T` porque o SSM não tem
+          # terminal e o `run` aloca tty por padrão.
+          compose run -T --rm --no-deps api npm run --silent prisma:deploy
           compose up -d --no-build
           compose ps
-          compose exec -T api npm run --silent prisma:deploy
+          echo "::api-ok:: api implantada e migrada"
+
+          # `up -d` volta quando o container inicia, nao quando o Node escuta: sem esta
+          # espera o primeiro `connect()` da ingestao da ECONNREFUSED e o job reprova um
+          # deploy sadio (banco, migracao e api corretos), apontando para o lugar errado.
+          for _ in $(seq 1 30); do
+            curl -fsS -m 3 -o /dev/null http://127.0.0.1:8000/healthz && break
+            sleep 2
+          done
 
           # A imagem runtime nao tem scripts/ nem ts-node, entao a ingestao e a rota
           # admin. O ADMIN_TOKEN chega pelo ambiente do Infisical e nunca sai daqui.
-          if [ -z "${ADMIN_TOKEN:-}" ]; then
-            echo "ERRO: ADMIN_TOKEN ausente no ambiente do Infisical" >&2
+          #
+          # `127.0.0.1:8000` e a porta da api NESTE host: pela borda a chamada caia no
+          # fallback da SPA e respondia 200 sem ingerir nada — o cenario de deploy
+          # verde com catalogo vazio. Por isso qualquer resposta fora de 2xx (menos o
+          # 409 de run concorrente, que e sucesso idempotente) reprova o job.
+          # `--retry-connrefused` e cinto do laco acima: um restart do container no
+          # meio da espera nao pode custar o deploy.
+          code="$(curl -sS -m 180 --retry-connrefused --retry-delay 2 --retry 10 \
+            -o /tmp/ingest.json -w '%{http_code}' \
+            -X POST 'http://127.0.0.1:8000/api/v1/admin/ingest' \
+            -H "X-Admin-Token: ${ADMIN_TOKEN}" -H 'Content-Type: application/json' \
+            -d '{"source_keys":["vercel-labs/skills/find-skills","anthropics/skills/webapp-testing"]}' || true)"
+          head -c 400 /tmp/ingest.json 2> /dev/null; echo
+          case "$code" in
+            401) echo "ERRO: ADMIN_TOKEN recusado pela API (401)" >&2; exit 1 ;;
+            ''|0*) echo "ERRO: ingestao nao respondeu em 127.0.0.1:8000 (codigo '${code}')" >&2; exit 1 ;;
+            409) echo "::ingest-ok:: ingestao ${code} (run concorrente)" ;;
+            2??)
+              # O 202 so diz que o run COMECOU: fonte fora (`status:"failed"`) ou ciclo
+              # sem cobertura (`partial`) tambem voltam 202. Sem ler o corpo, o deploy
+              # ficaria verde com o catalogo vazio — o caso que a #74 existe para fechar.
+              # `items_upserted` e estavel em reingestao (`upsertSkills` devolve o
+              # tamanho do conjunto), entao > 0 nao gera falso vermelho.
+              if ! grep -q '"items_upserted":[1-9]' /tmp/ingest.json; then
+                echo "ERRO: ingestao ${code} nao gravou item ($(grep -o '"status":"[a-z]*"' /tmp/ingest.json 2> /dev/null || echo 'corpo vazio')); catalogo vazio" >&2
+                exit 1
+              fi
+              echo "::ingest-ok:: ingestao ${code}" ;;
+            *) echo "ERRO: ingestao respondeu '${code}'; o catalogo nao mudou e o ambiente subiria vazio" >&2; exit 1 ;;
+          esac
+          STEP
+
+          infisical secrets-manager run --projectId "$INFISICAL_PROJECT_ID" --env "$INFISICAL_ENV" \
+            -- bash "$step"
+          REMOTE
+          } > "$remote"
+          ssm_run deploy-api "$remote" "$INSTANCE_API"
+
+      - name: Deploy the frontend (web)
+        # Terceiro da série: o ALB manda `/` para esta VM e `/api/*` para a api, então a
+        # borda só entra depois de o banco estar de pé e a api migrada — servir a SPA
+        # antes disso daria 500 em toda busca com filtro. Ela vem antes da obs de
+        # propósito: a observabilidade é o único passo cuja falha pode chegar depois da
+        # borda no ar.
+        #
+        # Este host não instala Infisical e o comando não carrega segredo nenhum: a
+        # imagem do nginx é só estático e o único valor que entra é a tag do commit.
+        env:
+          INSTANCE_WEB: ${{ steps.targets.outputs.instance_web }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/ssm-run.sh"
+          remote="$RUNNER_TEMP/deploy-web.sh"
+          {
+            printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+            printf 'SHA=%q\n' "$SHA"
+            printf 'DOCKERHUB_USER=%q\n' "$DOCKERHUB_USER"
+            cat <<'REMOTE'
+          cd /opt/app
+          # `frontend/nginx.conf` faz parte do payload porque o serviço `web` o monta:
+          # num host recém-criado, sem o arquivo, o `up -d` falha no mount.
+          for arquivo in compose.yaml infra/deploy/compose.prod.yaml frontend/nginx.conf; do
+            if [ ! -s "$arquivo" ]; then
+              echo "ERRO: ${arquivo} ausente em /opt/app; o passo do payload do SSM nao rodou" >&2
+              exit 1
+            fi
+          done
+
+          # `WEB_PORT=80` porque o `tg-web` aponta para a 80 da instancia; o default do
+          # compose e 8081, que deixaria o alvo unhealthy e a raiz em 503.
+          # O aviso "GRAFANA_PASSWORD is not set" no `compose` e esperado: o profile
+          # `web` nao sobe o grafana, e segredo nao entra neste host.
+          export DOCKERHUB_USER IMAGE_TAG="$SHA" WEB_PORT=80
+
+          step=/tmp/skill-finder-deploy-web-step.sh
+          cleanup() {
+            local rc=$?
+            rm -f "$step"
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
+          cat > "$step" <<'STEP'
+          set -euo pipefail
+          cd /opt/app
+
+          env_file_args=()
+          if docker compose --help 2> /dev/null | grep -q -- '--env-file'; then
+            env_file_args=(--env-file /dev/null)
+          else
+            echo "AVISO: compose sem --env-file; um /opt/app/.env velho pode influenciar a interpolacao" >&2
+          fi
+
+          compose() {
+            docker compose "${env_file_args[@]}" -f compose.yaml -f infra/deploy/compose.prod.yaml --profile web "$@"
+          }
+
+          # --no-build: a imagem vem do Docker Hub, e um t3.micro de 1 GB nao tem como
+          # rodar o build do Vite.
+          compose pull
+          compose up -d --no-build
+          compose ps
+          echo "::web-ok:: nginx da borda aplicado"
+          STEP
+
+          bash "$step"
+          REMOTE
+          } > "$remote"
+          ssm_run deploy-web "$remote" "$INSTANCE_WEB"
+
+      - name: Deploy the observability (api)
+        # Quarto e último, e a posição é o contrato: a stack obs mora na VM da api
+        # (ADR-013) e depende de `GRAFANA_PASSWORD`, mas a falha dela não pode segurar
+        # a borda. Com o `web` já rodado, "observabilidade fora" é um deploy vermelho de
+        # app no ar — o inverso do que acontecia antes (obs no meio, borda fora).
+        #
+        # Só este host participa: o `web` não recebe `INFISICAL_*` nem comando extra.
+        env:
+          INSTANCE_API: ${{ steps.targets.outputs.instance_api }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/ssm-run.sh"
+          remote="$RUNNER_TEMP/deploy-obs.sh"
+          {
+            printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+            printf 'INFISICAL_CLIENT_ID=%q\n' "$INFISICAL_CLIENT_ID"
+            printf 'INFISICAL_CLIENT_SECRET=%q\n' "$INFISICAL_CLIENT_SECRET"
+            printf 'INFISICAL_PROJECT_ID=%q\n' "$INFISICAL_PROJECT_ID"
+            printf 'INFISICAL_ENV=%q\n' "$INFISICAL_ENV"
+            printf 'SHA=%q\n' "$SHA"
+            printf 'DOCKERHUB_USER=%q\n' "$DOCKERHUB_USER"
+            cat <<'REMOTE'
+          # Mesmo contrato do script da api: root no AWS-RunShellScript, `umask 077` na
+          # sessao da CLI e `trap` que faz `infisical logout` em qualquer desfecho.
+          #
+          # Todo desfecho daqui para baixo e "observabilidade fora": o banco, a api e a
+          # borda ja rodaram. Por isso o trap escreve o marcador em qualquer rc != 0 —
+          # e ele que o sumario le, e uma falha de instalacao da CLI ou de login nao
+          # pode sair sem marcador.
+          umask 077
+          step=/tmp/skill-finder-deploy-obs-step.sh
+          logged_in=0
+          cleanup() {
+            local rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "::obs-failed:: deploy da observabilidade falhou no host (rc=${rc})" >&2
+            fi
+            if [ "$logged_in" = 1 ]; then
+              infisical logout > /dev/null 2>&1 || true
+            fi
+            rm -f "$step" /tmp/infisical-setup.sh
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
+          # A config de `observability/` e checada aqui, e nao no passo da api: e este
+          # passo que a monta, e bind mount sem arquivo viraria diretorio vazio dentro
+          # do container, com `up -d` respondendo 0.
+          cd /opt/app
+          for arquivo in compose.yaml infra/deploy/compose.prod.yaml \
+            observability/prometheus/prometheus.yml observability/loki/loki.yml \
+            observability/promtail/promtail.yml \
+            observability/grafana/provisioning/datasources/datasources.yml; do
+            if [ ! -s "$arquivo" ]; then
+              echo "ERRO: ${arquivo} ausente em /opt/app; o passo do payload do SSM nao rodou" >&2
+              exit 1
+            fi
+          done
+
+          if ! command -v infisical > /dev/null 2>&1; then
+            echo "infisical: CLI ausente neste host, instalando pelo repositorio oficial"
+            if ! command -v curl > /dev/null 2>&1; then
+              echo "ERRO: curl ausente no host; sem ele nao da para instalar a CLI do Infisical" >&2
+              exit 1
+            fi
+            export DEBIAN_FRONTEND=noninteractive
+            curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/infisical-setup.sh 'https://artifacts-cli.infisical.com/setup.deb.sh'
+            bash /tmp/infisical-setup.sh && rm -f /tmp/infisical-setup.sh
+            apt-get install -y --no-install-recommends infisical
+          fi
+          if ! command -v infisical > /dev/null 2>&1; then
+            echo "ERRO: CLI do Infisical nao ficou disponivel apos a instalacao" >&2
             exit 1
           fi
-          code="$(curl -sS -m 120 -o /tmp/ingest.json -w '%{http_code}' \
-            -X POST "http://localhost:${WEB_PORT}/api/v1/admin/ingest" \
-            -H "X-Admin-Token: ${ADMIN_TOKEN}" -H 'Content-Type: application/json' \
-            -d '{"source_keys":["vercel-labs/skills/find-skills","anthropics/skills/webapp-testing"]}')"
-          head -c 400 /tmp/ingest.json; echo
-          case "$code" in
-            202|409) echo "ingestao: ${code}" ;;
-            401) echo "ERRO: ADMIN_TOKEN recusado pela API (401)" >&2; exit 1 ;;
-            *) echo "AVISO: ingestao respondeu ${code}; o deploy segue e o catalogo nao mudou" >&2 ;;
-          esac
+          echo "infisical: $(infisical --version 2>&1 | sed -n 1p)"
 
-          # Observabilidade depois da aplicacao, e de proposito no fim: se a stack obs
-          # nao subir, api, postgres e web ja estao implantados, migrados e ingeridos —
-          # o app nao volta atras, o job falha e o sumario diz "app no ar,
-          # observabilidade fora". O marcador `::obs-failed::` e o unico sinal que o
-          # sumario usa; sem ele, uma falha anterior (payload, pull, migrate) nao pode
-          # ser confundida com esta.
+          token="$(infisical login --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" --client-secret="$INFISICAL_CLIENT_SECRET" \
+            --silent --plain)"
+          if [ -z "$token" ]; then
+            echo "ERRO: Universal Auth nao devolveu token; confira a machine identity e o papel read no projeto" >&2
+            exit 1
+          fi
+          logged_in=1
+          export INFISICAL_TOKEN="$token"
+
+          # `GRAFANA_BIND` pelo mesmo motivo de `API_BIND` no passo da api: no compose o
+          # default e loopback e o `tg-grafana` do ALB aponta para a 3000 da instancia.
+          # `DOCKERHUB_USER`/`IMAGE_TAG` nao sao usados pela stack obs, mas o override
+          # de prod os exige (`:?`) na interpolacao do arquivo inteiro.
+          export DOCKERHUB_USER IMAGE_TAG="$SHA" GRAFANA_BIND=0.0.0.0
+
           if [ -z "${GRAFANA_PASSWORD:-}" ]; then
             echo "::obs-failed:: GRAFANA_PASSWORD ausente no ambiente do Infisical" >&2
             exit 1
           fi
-          # `--no-build` tambem aqui: as duas imagens de prod ja foram baixadas pelo
-          # `compose pull` e o host nao pode reconstruir nenhuma delas.
-          if ! compose --profile obs up -d --no-build; then
-            echo "::obs-failed:: compose --profile obs up -d falhou no host" >&2
+
+          cat > "$step" <<'STEP'
+          set -euo pipefail
+          cd /opt/app
+
+          env_file_args=()
+          if docker compose --help 2> /dev/null | grep -q -- '--env-file'; then
+            env_file_args=(--env-file /dev/null)
+          else
+            echo "AVISO: compose sem --env-file; um /opt/app/.env velho pode influenciar a interpolacao" >&2
+          fi
+
+          compose() {
+            docker compose "${env_file_args[@]}" -f compose.yaml -f infra/deploy/compose.prod.yaml --profile obs "$@"
+          }
+
+          # `--no-build` porque as cinco imagens do profile sao pinadas e vem prontas do
+          # registry; o `up -d` baixa o que faltar.
+          if ! compose up -d --no-build; then
+            echo "::obs-failed:: compose up -d da stack obs falhou no host" >&2
             exit 1
           fi
           # `up -d` responde 0 mesmo com container em restart loop: o `ps` fica no log
           # do SSM e e a prova de vida que `observability/README.md` cobre.
-          compose --profile obs ps
+          compose ps
           echo "::obs-ok:: stack obs aplicada"
           STEP
 
@@ -639,12 +1101,11 @@ jobs:
             -- bash "$step"
           REMOTE
           } > "$remote"
-          # O retorno do comando vai para um arquivo alem do log: o passo *Summary*
-          # le o marcador `::obs-failed::` de la para separar "app no ar,
-          # observabilidade fora" de uma falha anterior a aplicacao.
+          # O retorno vai para um arquivo além do log: o *Summary* lê o marcador de lá
+          # para separar "app e borda no ar; observabilidade fora" de "passo não rodou".
           rc=0
           set +e
-          ssm_run deploy "$remote" "$INSTANCE_ID" 2>&1 | tee "$RUNNER_TEMP/deploy-ssm.log"
+          ssm_run deploy-obs "$remote" "$INSTANCE_API" 2>&1 | tee "$RUNNER_TEMP/deploy-obs.log"
           rc="${PIPESTATUS[0]}"
           set -e
           exit "$rc"
@@ -652,13 +1113,17 @@ jobs:
       - name: Summary
         if: ${{ !cancelled() }}
         env:
-          PUBLIC_IP: ${{ steps.target.outputs.public_ip }}
+          ALB_DNS: ${{ steps.alb.outputs.dns_name }}
+          INSTANCE_DB: ${{ steps.targets.outputs.instance_db }}
+          INSTANCE_API: ${{ steps.targets.outputs.instance_api }}
+          INSTANCE_WEB: ${{ steps.targets.outputs.instance_web }}
           EVENT_NAME: ${{ github.event_name }}
-          SSM_LOG: ${{ runner.temp }}/deploy-ssm.log
+          # O quarto `ssm_run` é quem escreve o marcador; sem arquivo, o passo não rodou.
+          SSM_LOG: ${{ runner.temp }}/deploy-obs.log
         run: |
           set -uo pipefail
           # "nao executada" e o veredicto quando o deploy morreu antes do passo obs
-          # (payload, pull, migracao): sem marcador nenhum, afirmar "no ar" seria mentira.
+          # (db, payload, api, web): sem marcador nenhum, afirmar "no ar" seria mentira.
           obs='nao executada'
           if [ -f "${SSM_LOG}" ]; then
             if grep -q -- '::obs-failed::' "${SSM_LOG}"; then
@@ -673,17 +1138,21 @@ jobs:
             echo "| item | valor |"
             echo "| --- | --- |"
             echo "| commit | \`${SHA}\` |"
-            echo "| IP publico | \`${PUBLIC_IP:-desconhecido}\` |"
+            echo "| URL | \`http://${ALB_DNS:-desconhecido}\` (DNS do ALB) |"
+            echo "| hosts | \`db\` \`${INSTANCE_DB:-?}\`, \`api\` \`${INSTANCE_API:-?}\`, \`web\` \`${INSTANCE_WEB:-?}\` |"
+            echo "| ordem | \`db\` -> \`api\` (migracao + ingestao) -> \`web\` -> \`obs\` (na \`api\`) |"
             echo "| imagens | \`${DOCKERHUB_USER}/skill-finder-api:${SHA}\`, \`${DOCKERHUB_USER}/skill-finder-web:${SHA}\` |"
             echo "| registry | \`docker.io/${DOCKERHUB_USER}\` (publico, pull anonimo) |"
-            echo "| segredos | \`Infisical prod\` lido no host |"
+            echo "| segredos | \`Infisical prod\` lido nos hosts \`db\`, \`api\` e \`obs\`; o \`web\` nao tem segredo |"
             echo "| observabilidade | \`${obs}\` |"
             echo "| gatilho | \`${EVENT_NAME}\` |"
             echo ""
             if [ "$obs" = 'fora' ]; then
-              echo "app no ar, observabilidade fora: a aplicacao foi implantada e migrada, e"
-              echo "\`--profile obs up -d\` falhou no host. Corrija e repita o dispatch; nao ha"
-              echo "rollback da aplicacao a fazer por causa disto."
+              echo "App e borda no ar; observabilidade fora: o banco, a api e o nginx da borda"
+              echo "foram implantados, migrados e ingeridos, e só o \`up -d\` da stack obs no host"
+              echo "da api falhou. O \`web\` já tinha rodado, então a borda está no ar e o app"
+              echo "atende; o vermelho é a stack obs. Corrija e repita o dispatch; não há"
+              echo "rollback de banco a fazer."
               echo ""
             fi
             echo "Rollback: dispare com \`image_tag=<SHA anterior>\` e \`skip_build=true\`."
@@ -695,38 +1164,51 @@ jobs:
     # do grafo terminou `skipped` — e todo dispatch pula um: `provision` no caminho
     # normal, `build` no rollback. Foi assim que o run verde de 2026-11-21 entregou
     # `deploy: success` e `smoke: skipped` sem rodar um passo (o `deploy` escapou por
-    # declarar a condicao abaixo; o `smoke` herdou o padrao). A condicao depende so do
-    # veredicto do `deploy`, que e quem sabe se a aplicacao foi implantada.
-    if: ${{ !cancelled() && needs.deploy.result == 'success' }}
+    # declarar condicao propria; o `smoke` herdou o padrao).
+    #
+    # A condicao olha o que o `deploy` entregou, nao o veredicto dele: quando o
+    # vermelho e a stack obs (o ultimo passo), o banco, a api e a borda ja estao no
+    # ar e a unica prova disso e este job rodando. Os `outputs` de um job que falhou
+    # continuam disponiveis: sem `alb_dns_name` nao ha o que sondar.
+    if: ${{ !cancelled() && needs.deploy.outputs.alb_dns_name != '' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # 40 x (`-m 5` + 10 s) = 600 s no pior caso, e ainda o sumario do job: com o
+    # teto de 10 min o run morreria por timeout e a mensagem "nao respondeu" nunca
+    # apareceria.
+    timeout-minutes: 12
     env:
-      BASE_URL: http://${{ needs.deploy.outputs.public_ip }}
+      # O DNS do ALB é o único endereço estável da topologia: o IP público de uma
+      # instância muda a cada stop/start da janela. A borda é o balanceador, e é ele
+      # que precisa responder — `/`, `/api/*`, `/healthz`, `/readyz` e `/grafana/`
+      # chegam por caminhos diferentes (ADR-014).
+      BASE_URL: http://${{ needs.deploy.outputs.alb_dns_name }}
     steps:
-      - name: Fail fast when the deployed host is unknown
-        # O contrato de `outputs` do `deploy` e o que da URL ao smoke: sem o IP o
-        # `curl` falharia em `http://` e o erro diria "resposta vazia", nao "contrato".
+      - name: Fail fast when the ALB endpoint is unknown
+        # O contrato de `outputs` do `deploy` é o que dá URL ao smoke: sem o DNS o
+        # `curl` falharia em `http://` e o erro diria "resposta vazia", não "contrato".
         env:
-          PUBLIC_IP: ${{ needs.deploy.outputs.public_ip }}
+          ALB_DNS: ${{ needs.deploy.outputs.alb_dns_name }}
         run: |
           set -uo pipefail
-          if [ -z "${PUBLIC_IP:-}" ]; then
-            echo '::error::needs.deploy.outputs.public_ip vazio: o contrato de outputs do job deploy quebrou'
+          if [ -z "${ALB_DNS:-}" ]; then
+            echo '::error::needs.deploy.outputs.alb_dns_name vazio: o contrato de outputs do job deploy quebrou'
             exit 1
           fi
-          echo "alvo: http://${PUBLIC_IP}"
+          echo "alvo: http://${ALB_DNS}"
 
       - name: Wait for the edge
         run: |
           set -uo pipefail
-          for attempt in $(seq 1 24); do
+          # 40 x 10 s: o ALB novo leva alguns minutos entre o DNS propagar e o alvo
+          # passar no health check (`/healthz`, intervalo de 30 s, 2 sucessos).
+          for attempt in $(seq 1 40); do
             if curl -fsS -m 5 -o /dev/null "${BASE_URL}/healthz"; then
               echo "borda respondendo (tentativa ${attempt})"
               exit 0
             fi
-            sleep 5
+            sleep 10
           done
-          echo "::error::${BASE_URL}/healthz nao respondeu em 120s"
+          echo "::error::${BASE_URL}/healthz nao respondeu em 600s (40 x 15s)"
           exit 1
 
       - name: smoke /healthz is JSON and ok

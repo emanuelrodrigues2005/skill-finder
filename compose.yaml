@@ -1,12 +1,17 @@
 name: skills-search
 
-# Profiles: `make up` sobe o stack de desenvolvimento (`api-dev`, target `dev`, com
-# devDependencies e hot reload) e `make PROFILE=prod up` sobe o de produção (`api`,
-# target `runtime`, sem devDependencies). `ENV` é **fixo por serviço**, nunca
-# interpolado do `.env`: um `.env` copiado do exemplo (`ENV=` vazio) ou um
-# `--profile prod` sobre um `.env` de dev não podem resultar num "prod em modo dev".
-# O schema (`backend/src/config/env.schema.ts`) ainda aborta o boot se
-# `NODE_ENV=production` com `ENV!=prod`.
+# Profiles são **papéis**, não ambientes: na topologia de três VMs (ADR-011) cada
+# host roda só o seu — `db` (`postgres`), `api` (`api`, mais o `obs`, que vive na
+# mesma VM por ADR-013) e `web` —, e `dev` é o laço local, com os três num host só.
+# Um arquivo por papel duplicaria healthcheck, `logging` e as ~20 variáveis da API
+# em três lugares, que é o que um profile evita. `prod` continua como a composição
+# de stack inteira que o `deploy.yml` e o runbook ainda invocam; sai quando a
+# ADR-016 (deploy em três alvos, `db` → `api` → `web`) estiver no workflow.
+#
+# `ENV` é **fixo por serviço**, nunca interpolado do `.env`: um `.env` copiado do
+# exemplo (`ENV=` vazio) ou um `--profile prod` sobre um `.env` de dev não podem
+# resultar num "prod em modo dev". O schema (`backend/src/config/env.schema.ts`)
+# ainda aborta o boot se `NODE_ENV=production` com `ENV!=prod`.
 #
 # Segredo entra por **variável de ambiente**, nunca por um arquivo injetado no
 # container: em produção quem preenche o ambiente é o Infisical no host
@@ -18,19 +23,19 @@ name: skills-search
 # `docker compose config` válido numa árvore limpa.
 #
 # Dois serviços de API porque o profile precisa escolher o `build.target`: `api`
-# mantém o nome que o upstream do nginx (`frontend/nginx.conf`: `api:8000`) espera,
-# e `api-dev` declara o alias `api` na rede do compose.
+# mantém o nome `api` que o Prometheus e o `frontend/nginx.dev.conf` (`api:8000`)
+# esperam, e `api-dev` declara o alias `api` na rede do compose.
 #
-# `obs` é o terceiro profile e só sobe a pedido (`--profile obs`): nada em `dev` ou
-# `prod` muda por causa dele. A stack mora **aqui**, e não num `compose.obs.yaml`
-# separado, porque `/metrics` responde `404` na borda (`frontend/nginx.conf`) e a
-# `api` publica em loopback: o Prometheus só alcança `api:8000` de dentro da rede
-# `skills-search_default`. Um segundo arquivo criaria outra rede e nenhum alvo.
+# `obs` só sobe a pedido (`--profile obs`): nada em `dev` ou `prod` muda por causa
+# dele. A stack mora **aqui**, e não num `compose.obs.yaml` separado, porque
+# `/metrics` responde `404` na borda (`frontend/nginx.conf`) e o Prometheus só
+# alcança `api:8000` de dentro da rede `skills-search_default`. Um segundo arquivo
+# criaria outra rede e nenhum alvo.
 
 x-api-base: &api-base
-  depends_on:
-    postgres:
-      condition: service_healthy
+  # Sem `depends_on: postgres`: o banco deixou de ser vizinho (ADR-011) e não existe
+  # no profile `api`. A prontidão passa a ser o `/readyz`, que já faz `SELECT 1` — a
+  # API sobe sem banco e responde 503 controlado em vez de não subir.
   healthcheck:
     test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8000/healthz"]
     interval: 15s
@@ -77,7 +82,12 @@ x-api-env: &api-env
 services:
   postgres:
     image: postgres:16-alpine
-    profiles: ["dev", "prod"]
+    profiles: ["db", "dev", "prod"]
+    ports:
+      # O banco vive numa VM só dele (ADR-011); quem chega é a api, pelo IP privado.
+      # O bind de loopback é o default para o dev não expor a 5432; o deploy exporta
+      # `POSTGRES_BIND=0.0.0.0` porque é ele que precisa da porta aberta.
+      - "${POSTGRES_BIND:-127.0.0.1}:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-skills}
       POSTGRES_DB: ${POSTGRES_DB:-skills}
@@ -112,6 +122,11 @@ services:
       dockerfile: Dockerfile
       target: dev
     profiles: ["dev"]
+    # Em `dev` o banco é vizinho: os três sobem no mesmo `docker compose up`, e a
+    # espera que saiu da âncora continua valendo aqui.
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       default:
         aliases: ["api"]
@@ -137,7 +152,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
       target: runtime
-    profiles: ["prod"]
+    profiles: ["api", "prod"]
     environment:
       <<: *api-env
       ENV: prod
@@ -146,10 +161,19 @@ services:
       # conferido no boot.
       NODE_ENV: production
     ports:
-      # O nginx é a borda. Publicar em 0.0.0.0 tornaria o nginx contornável e
-      # exporia `/metrics` e `/docs` direto na internet; com `127.0.0.1` o acesso
-      # do host (smoke em `localhost`) continua funcionando.
-      - "127.0.0.1:${API_PORT:-8080}:8000"
+      # O bind não é o controle de acesso: com a API numa VM só dela (ADR-011) quem
+      # filtra a 8080 é o security group, que aceita a porta **apenas** de `sg-alb`.
+      # `/metrics` sai no mesmo servidor (`/docs` só existe fora de prod), e a borda
+      # do nginx não cobre essa porta.
+      #
+      # O default é loopback de propósito: um default permissivo vaza para todo
+      # ambiente que não o sobrescreve. Quem precisa da 8000 aberta — o deploy —
+      # exporta `API_BIND=0.0.0.0` explicitamente.
+      #
+      # Mais grave que `/metrics`: a partir do ALB a **chave do rate limit** também
+      # passa a depender deste filtro. `X-Real-IP` é forjável sem o nginx na frente,
+      # então o ALB não pode entrar no ar antes da ADR-015 no código.
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8080}:8000"
     logging:
       driver: json-file
       options:
@@ -160,11 +184,11 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    profiles: ["dev", "prod"]
+    profiles: ["web", "dev", "prod"]
     depends_on:
-      # Um único `web` serve os dois profiles: `required: false` ignora o serviço
-      # que o profile atual não habilita (o compose falharia com "depends on
-      # undefined service" se a dependência fosse obrigatória).
+      # Um único `web` serve `web`, `dev` e `prod`: `required: false` ignora o
+      # serviço que o profile atual não habilita (o compose falharia com "depends
+      # on undefined service" se a dependência fosse obrigatória).
       api:
         condition: service_healthy
         required: false
@@ -180,6 +204,12 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+    volumes:
+      # O default é o arquivo de produção, que é só estático: quem pede o proxy de
+      # dev é o `make`, que exporta `NGINX_CONF` apenas no profile `dev`. A escolha
+      # não vem do `.env` — um `.env` de dev copiado para uma VM não pode montar o
+      # proxy num stack `prod`.
+      - "${NGINX_CONF:-./frontend/nginx.conf}:/etc/nginx/nginx.conf:ro"
     logging:
       driver: json-file
       options:
@@ -308,7 +338,15 @@ services:
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+      # Na VM do back o `/grafana/` entra pelo ALB (ADR-013): o filtro é o security
+      # group, não o loopback. O default fica em loopback pelo mesmo motivo da `api`;
+      # o deploy exporta `GRAFANA_BIND=0.0.0.0`.
+      #
+      # O Grafana lê **todos** os logs de container do host pelo Loki, então expô-lo
+      # numa rede compartilhada (Wi-Fi de faculdade, VLAN de lab) entrega histórico de
+      # log de graça — `GF_SECURITY_ADMIN_PASSWORD` não tem default e vem vazio sem
+      # `.env`, o que deixaria `admin`/vazio.
+      - "${GRAFANA_BIND:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
     restart: unless-stopped
     mem_limit: 384M
     logging:

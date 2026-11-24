@@ -775,6 +775,98 @@ forma.
 
 **Consequências.** O profile `obs` é **aditivo**: `make up` e `make PROFILE=prod up` continuam subindo exatamente o que subiam, e só `--profile obs` acrescenta os cinco. Não há métrica por container nem plugin de Postgres do Telegraf — quem responde "o container está gastando muita memória" é `docker stats` no deploy, e `db_pool_in_use` (§9.1) cobre o banco quando existir. O Promtail precisa de `/var/run/docker.sock` **somente leitura** para traduzir `<id>-json.log` no rótulo `service`; é acesso equivalente a root na leitura do host, aceito porque o host já é o da aplicação, e registrado em `observability/README.md`. O teto somado (1,22 GiB) não autoriza ligar `obs` junto de `prod` num `t3.small` sem medir: a #62 decide isso com `docker stats` na mão.
 
+### ADR-010 — O ALB na frente: DNS estável em vez do IP público de uma EC2
+
+**Contexto.** O `docs/01` §5.1 fixou a Opção 1 — uma EC2 com IP público — e o critério C2 (serviços AWS integrados) sempre foi o ponto fraco dela. Com três VMs por papel (ADR-011), o endereço deixa de ser detalhe: um IP público identifica **um** host, muda a cada `apply` e não sobrevive a um `destroy`. A #67 mediu o que faltava, em `docs/evidencias/f7-alb-probe.txt` (conta `794399909334`, `us-east-1`): ALB `probe-f71` criado, `State.Code = active` em **121 s**, target group HTTP:80, listener HTTP:80 e regra `path-pattern /api/*` na prioridade 10; no fim, tudo destruído (ALB removido em **153 s**) sem órfão — `describe-load-balancers` = 0, `describe-target-groups` = 0, ENIs do ELB = 0 e o security group default idêntico. A conta tem **6 subnets default em 6 AZs** (`us-east-1a`…`1f`), então há de onde escolher.
+
+**Decisão.** Um **ALB application, `internet-facing`**, em 2 das 6 subnets default, com três target groups (ADR-013 e ADR-014). A URL pública do projeto passa a ser o **`alb_dns_name`** (saída do Terraform), nunca um IP: o IP público some do contrato, do `smoke` e do runbook.
+
+**Alternativas.** (a) **IP público da EC2:** descartada — endereço instável a cada `apply`, "só uma EC2" derruba o critério C2 e um host único serve todos os papéis. (b) **Elastic IP + `sslip.io`:** vira o **plano B**, declarado e registrado na ADR-017 — é ~27% mais barato e não depende de `elbv2`, mas volta a ter um único ponto de entrada e a amarrar URL a IP. (c) **Route 53:** descartada — exige domínio pago e `route53 create-hosted-zone` não foi medido no lab (`scripts/dev/academy-probe.sh` só lista zonas; o `list-hosted-zones` não prova escrita). (d) **NLB:** descartada — camada 4, sem roteamento por caminho: para separar web, api e obs seriam três portas ou três NLBs, e a decisão da ADR-014 ficaria sem lugar.
+
+**Consequências.** Custo fixo de hora ociosa (`$0,0225/h` + LCU, ADR-017), que a Opção 1 não tinha. O `apply` ganha ~2 min (121 s medidos) e o `destroy` ~2,5 min (153 s medidos) — o runbook precisa esperar o ALB sair antes de seguir. **Ressalva medida:** a service-linked role `AWSServiceRoleForElasticLoadBalancing` **já existia** na conta (`CreateDate` 2024-06-27, `LastUsedDate` 2025-10-19), então a prova **não exercitou `iam:CreateServiceLinkedRole`** — numa conta nova o ALB pode falhar exatamente ali; fica **não medido**. Também **não medido**: registro de instância no target group (não havia nenhuma `running`), uma requisição HTTP real ao DNS do ALB (a prova é de plano de controle: o listener respondia `fixed-response` 200) e HTTPS/ACM/WAF.
+
+### ADR-011 — Três VMs, uma por papel, fatiadas por profile do mesmo `compose.yaml`
+
+**Contexto.** Uma EC2 com borda, API, banco e observabilidade (o teto somado de 1,22 GiB da ADR-009) num `t3.small` de 2 GB obriga a negociar memória e mistura exposições que não têm nada a ver: a borda precisa da 80 aberta ao mundo, o banco não precisa de porta nenhuma. Com o ALB (ADR-010) existe um lugar fora da instância para terminar a conexão — o que só vale se houver mais de uma instância atrás dele.
+
+**Decisão.** Três `aws_instance` por `for_each` sobre `{web, api, db}`, tagueadas `role` e `project`; **front em `t3.micro`**, **back e banco em `t3.small`**. Continua **um único `compose.yaml`**, fatiado por profile: `web` (a SPA), `api` (a API) mais `obs` (a stack da ADR-009), `db` (`postgres`) e `dev` (os três no mesmo host, para o laço local). O `x-api-base` **perde `depends_on: postgres`**: o banco deixou de ser vizinho. O controle de rede deixa de ser o bind em `127.0.0.1` e passa a ser o security group (F7.3).
+
+**Alternativas.** (a) **Manter uma EC2 só:** descartada — é o desenho que o ALB existe para superar, e o host de 2 GB não comporta os quatro papéis com a observabilidade ligada. (b) **Um compose por papel:** descartada — três arquivos que divergem na primeira mudança de env; o profile já dá o isolamento sem duplicar YAML. (c) **ECS/Fargate:** `[não medido]` — o lab não foi sondado para ECS, e a troca de orquestrador sairia do escopo de `docs/01` §5.1.
+
+**Consequências.** A prontidão deixa de ser `depends_on` e passa a ser `/readyz` (que já faz `SELECT 1`): a API sobe sem banco e responde 503 controlado em vez de não subir — o `smoke` lê esse código, e o health check do ALB deliberadamente não (ADR-014). Compute passa a `0,0520/h` (ADR-017). O runbook ganha três hosts e a ordem de subida importa (ADR-016). O laço de desenvolvimento não muda: `make up` sobe o profile `dev` no mesmo host, sem rede entre VMs.
+
+### ADR-012 — O banco continua em EC2 com Postgres em Docker; RDS está fora por medição
+
+**Contexto.** RDS daria backup automático, PITR e patch de graça operacional — e o `docs/02` já registrava o bloqueio no K14. A sonda de laboratório mediu: `scripts/dev/academy-probe.sh` roda `aws rds describe-db-subnet-groups` e devolveu **0 grupos**. Sem DB subnet group o `create-db-instance` não passa, e o lab não oferece VPC própria para criar um (a VPC é a default, por `data`). A saída da sonda não foi arquivada em `docs/evidencias/`: a evidência datada da F7 é a do ALB (`f7-alb-probe.txt`); a de RDS é o próprio comando, reexecutável.
+
+**Decisão.** **PostgreSQL 16 em container na VM `db`** (profile `db`), com volume EBS de dados dedicado — o mesmo Postgres da ADR-002, com `tsvector` + `pg_trgm`. O `DATABASE_URL` é montado **no deploy** a partir do IP privado da VM `db` (ADR-016). O backup é **snapshot manual do EBS**, com o comando no runbook (F7.9), e não há PITR.
+
+**Alternativas.** (a) **RDS:** inviável por medição — 0 DB subnet groups. (b) **Aurora:** mesma família e o mesmo bloqueio de subnet group. (c) **Postgres gerenciado fora da AWS** (Supabase/Neon): exige rede e conta externas, e o edital premia C2 — serviços AWS. (d) **Réplica em outra EC2:** complexidade de replicação e failover sem requisito que a pague. (e) **SQLite:** descartada — perde `tsvector`/`pg_trgm` e a busca lexical da ADR-002.
+
+**Consequências.** Patch, retenção e failover são nossos; a janela de perda é a do último snapshot manual — **aceita e declarada**, porque o catálogo é reconstruível pela ingestão e o que importa é o histórico de busca. **Restore não medido**: nenhum restore cronometrado foi feito até aqui, e o runbook só promete o comando, não um tempo. A ADR-006 continua válida sem mudança: rate limit em memória e lock em `ingest_run` pressupõem **uma** instância, e o banco continua sendo um.
+
+### ADR-013 — A observabilidade vive na VM do back, e `/grafana/` é regra do ALB
+
+**Contexto.** A ADR-009 pôs os cinco containers no host da aplicação **porque** o Prometheus precisa alcançar `api:8000`: `/metrics` responde 404 na borda (`frontend/nginx.conf`) e a API publica a porta em loopback. Com três VMs (ADR-011), escolher o host da observabilidade é decisão nova — e o mesmo motivo técnico da ADR-009 decide: o Prometheus só enxerga `api:8000` pela rede do compose, logo tem de estar **na mesma VM da API**.
+
+**Decisão.** Os cinco containers (**Prometheus, Loki, Promtail, node-exporter, Grafana**) sobem na VM do **back**, no mesmo `compose.yaml`, sob `profiles: ["obs"]` — a ADR-009 fica **intocada** na composição e nos limites de memória. O `/grafana/` **sai** do nginx do front e passa a ser regra do listener do ALB para o **terceiro target group** (`tg-obs` :3000, health check `/grafana/api/health`), e continua **público com login** — decisão do dono.
+
+**Alternativas.** (a) **Na VM do front:** descartada — o alvo `api` do Prometheus ficaria `down` para sempre, que é exatamente o motivo pelo qual o `compose.obs.yaml` separado foi descartado na ADR-009. (b) **Uma quarta VM só de observabilidade:** mais `0,0208/h` e mais um host no runbook, sem requisito que pague. (c) **Grafana Cloud / Prometheus em modo agente:** já descartado na ADR-009 — o sandbox não tem orçamento para SaaS.
+
+**Consequências.** A VM do back carrega API + os cinco containers: o teto somado da ADR-009 (1,22 GiB) **não foi remedido** para esse host e vira item de medição da janela (`docker stats`, ADR-017). Se a VM do back cair, API e painel caem juntos — aceito, porque é o host da aplicação. O front não tem nenhuma dependência da observabilidade, e o Promtail continua lendo `/var/run/docker.sock` só daquela VM.
+
+### ADR-014 — O ALB roteia por caminho; o nginx do front não fala com o backend
+
+**Contexto.** Hoje a borda é **um** nginx no mesmo host da API: `upstream api` + `proxy_pass http://api:8000` para `/api/`, `/api/v1/admin/`, `/healthz`, `/readyz` e `/grafana/` (F3.5 e F5). Com o backend em outra VM (ADR-011), o nome `api` não resolve na rede do compose do front — e o nginx **resolve `upstream` no boot**: `host not found in upstream "api"` derruba o processo, ou seja, **leva a borda inteira junto**. Um `tg-web` saudável apontando para `/healthz` drenaria um front que não serve.
+
+**Decisão.** O roteamento é do **listener do ALB**: `default` → `tg-web` :80; `/api/*`, `/healthz`, `/readyz` → `tg-api` :8000; `/grafana/*` → `tg-obs` :3000, com `idle_timeout = 240` (o `admin/ingest` passa de 60 s e o default cortaria a conexão em silêncio — **não medido** em tráfego real). O `frontend/nginx.conf` **perde** `upstream api`, `/api/`, `/api/v1/admin/`, `/healthz`, `/readyz` e `/grafana/`, e **mantém** o estático, `/metrics → 404`, os `add_header` de segurança e o fallback da SPA. O health check do `tg-api` é **`/healthz`, nunca `/readyz`**.
+
+**Alternativas.** (a) **Manter o nginx do front como proxy e apontá-lo para o ALB:** proxy atrás de proxy, dois timeouts e `X-Forwarded-For` de duas pontas, para economizar uma regra de listener. (b) **`upstream` pelo IP privado da VM da API:** funciona até o próximo `apply` e transforma mudança de infraestrutura em edição de `nginx.conf`. (c) **NLB + nginx roteando:** camada 4, exigiria uma porta por serviço e traz de volta o problema do `upstream`.
+
+**Consequências.** `/readyz` fica fora do health check **de propósito**: ele responde 503 com catálogo velho, e o ALB tiraria uma API sadia do ar por causa de dado atrasado — degradação é visível ao usuário (§9.3), não motivo de drenagem. `/metrics` continua 404 na borda, e a ADR-009 continua verdadeira. `X-Real-IP` deixa de existir como contrato (ADR-015). O `/grafana/` deixa de passar pelo nginx do front e passa a ter um salto só (ALB → Grafana).
+
+### ADR-015 — O cliente é identificado pelo `X-Forwarded-For` do ALB; `X-Real-IP` deixa de ser confiável
+
+**Contexto.** `resolveClientIp` lê `X-Real-IP` e cai para `req.ip`. Esse contrato existe **porque o nginx sobrescreve o header** (`proxy_set_header X-Real-IP $remote_addr`): a borda era nossa. O ALB **não escreve `X-Real-IP`** e **não remove headers do cliente** — no desenho novo o header chegaria com o valor que o atacante mandou, e `sha256(sal:ip)`, que é a chave do rate limit §8.2 e a coluna `client_hash` da §4.1, passaria a ser **escolhida pelo atacante**: rate limit por IP deixaria de existir e o histórico de busca perderia o sentido.
+
+**Decisão.** A identidade do cliente passa a ser **`req.ip` com `trust proxy = 1`** — isto é, a **última** entrada do `X-Forwarded-For`, a que o ALB anexa. O código deixa de **ler** `X-Real-IP`; a entrada dele em `REDACT_PATHS` **permanece**, porque agora é header de cliente e o valor forjado não pode entrar no log. A verificação é `bash scripts/dev/check-xff.sh` (zero *usos* para identidade, redação presente), e o `openapi.yaml` fica **inalterado** (é mudança de comportamento, não de contrato). **Exige revisão `security` em adição ao `reviewer`**, porque toca o rate limit.
+
+**Alternativas.** (a) **Continuar em `X-Real-IP`:** descartada — forjável, e sem borda própria que o sobrescreva. (b) **Ler `x-forwarded-for[0]`:** descartada — a primeira entrada é a do cliente, é o pior dos dois. (c) **Abandonar `client_hash`:** descartada — quebra o histórico por cliente e o rate limit que a §4.1 e o §8.2 especificam.
+
+**Consequências.** **Não há descontinuidade no estado atual:** o nginx escreve `X-Forwarded-For: $remote_addr` (valor único, sobrescrito), então `req.ip` entrega exatamente o mesmo IP que `X-Real-IP` entregava — o `client_hash` não muda. A descontinuidade só apareceria com dois saltos (ALB → nginx → api), que é justamente o que a ADR-014 proíbe. Atrás do ALB, um IP público pode virar N clientes (NAT compartilhado), o que só deixa o limite mais conservador. `trust proxy = 1` é uma **suposição sobre o número de hops**: pôr CDN ou proxy na frente exige revisar o número — gatilho de revisão explícito, registrado no teste de unidade que prova os dois headers.
+
+**A garantia é de rede, não de código.** `trust proxy = 1` confia no salto: se a porta 8000 ficar alcançável fora do `sg-alb`, o cliente escolhe o próprio `client_hash` direto. Três atributos do ALB podem desfazer a correção sem tocar em código — `xff_header_processing.mode` tem de ser `append`, `xff_client_port` tem de ficar desligado, e `/api/*` nunca pode rotear para o `tg-web` (o `$remote_addr` que o nginx escreveria seria o IP do ALB, colapsando todos os clientes num bucket).
+
+### ADR-016 — Deploy em três alvos por `tag:role`, em série `db` → `api` → `web`
+
+**Contexto.** O `deploy.yml` da F4 fala com **um** host: resolve o id da instância, envia o payload por SSM RunCommand e roda um único script. Com três VMs, uma corrida em paralelo aplicaria migration no banco na mesma hora em que sobe a API, e o `DATABASE_URL` — que hoje é um endereço fixo no cofre — muda a cada `apply`, porque o IP privado da VM `db` é novo.
+
+**Decisão.** O job resolve os **três** ids por `Name=tag:role,Values=<web|api|db>`, espera `PingStatus = Online` em cada, envia o payload de composes aos três e roda **um `ssm_run` por papel, em série**: **`db` → `api`** (com `prisma:deploy` antes do `compose up`) **→ `web`**. A **`DATABASE_URL` é montada no script** a partir do **IP privado** do banco + `POSTGRES_PASSWORD` do Infisical: o endereço **nunca entra no cofre**. O front **não instala Infisical** — a imagem dele não tem segredo. O `smoke` passa a usar `BASE_URL` = `alb_dns_name`, com as asserções existentes **como estão**.
+
+**Alternativas.** (a) **Um `ssm_run` com os três ids:** descartada — a ordem de execução não é garantida, e é a ordem que evita migração sem banco. (b) **Descobrir os alvos por `terraform output`:** descartada — o deploy não roda Terraform (decisão da F4), e `apply` e deploy passariam a acoplar. (c) **`DATABASE_URL` no Infisical:** descartada — cada recreate do banco exigiria editar o vault à mão, e a janela tem `destroy` no fim. (d) **`ssh`/`scp` para cada host:** descartada — a porta 22 nasce fechada e o SSM já substituiu esse caminho.
+
+**Consequências.** Se faltar qualquer um dos três `role`, o job falha com mensagem explícita em vez de implantar dois terços. O deploy fica mais lento: três idas ao SSM em série, com o tempo total **não medido** até a janela da F7.10. O segredo do banco existe apenas nas VMs `api` e `db`. Rollback é o mesmo caminho com a tag do SHA anterior, na mesma ordem.
+
+### ADR-017 — Operação em janela: `apply` antes da demo, `destroy` no fim
+
+**Contexto.** Com a stack no ar o custo é contínuo, e o crédito do laboratório é de **$50 para o semestre**. O ALB cobra por **hora ociosa** (`$0,0225/h` de referência, com o custo da prova de 160 s registrado em `docs/evidencias/f7-alb-probe.txt`), coisa que a Opção 1 não fazia — esquecer a janela aberta por uma semana custa 39% do crédito.
+
+**Decisão.** A arquitetura distribuída existe **durante a janela**: `apply` antes da demonstração, `destroy` ao fim de cada sessão, com snapshot do volume do banco **antes** (ADR-012) e varredura de órfãos incluindo `describe-load-balancers` e `describe-target-groups`. **`var.enable_alb=false` é o plano B**: sem ALB, a URL volta a ser o IP público com EIP + `sslip.io` — registrado, **não usado** enquanto o ALB estiver de pé.
+
+**Alternativas.** (a) **Deixar ligado no semestre:** descartada — 18,2 dias de crédito e o projeto acaba antes da banca. (b) **Agendar `start`/`stop` das instâncias:** `[não medido]` — o lab não expõe scheduler sondado, e o `stop` preserva EBS e endereços, que continuam cobrando. (c) **Duas VMs em vez de três:** descartada — perde o fatiamento da ADR-011 e a separação de exposição por security group.
+
+**Consequências.** Custo por hora (referência de preço de tabela da `us-east-1`; **a fatura do lab não foi lida**, então é referência, não medição):
+
+| Recurso | Conta | US$/h |
+| --- | --- | --- |
+| Compute — `t3.micro` + 2 × `t3.small` | 0,0104 + 0,0208 + 0,0208 | **0,0520** |
+| ALB + LCU | 0,0225 + 0,0080 | **0,0305** |
+| IPv4 — 3 VMs + 2 nós do ALB | 5 × 0,0050 | **0,0250** |
+| EBS — 64 GiB gp3 | 64 × 0,0001096 | **0,0070** |
+| **Total** | | **0,1147** |
+
+`$50 ÷ 0,1147 = 436 h ≈ **18,2 dias**` ligado; demo de **4 h = $0,46**; **uma semana esquecida (168 h) = $19,30**, 39% do crédito. O ciclo ganha ~2 min no `apply` e ~2,5 min no `destroy` (121 s e 153 s medidos), então o teto de 15 min da F6 precisa ser remedido na janela (F7.10). O `destroy` tem de esperar o ALB sair, senão o Terraform falha com "resource in use".
+
 ---
 
 ## 11. Questões abertas com o dono (priorizadas)
@@ -803,3 +895,5 @@ forma.
 | Custo/complexidade de `docs/01` §5.3 | Nenhum serviço extra (sem Redis, sem fila, sem vector DB) | `compose.yaml` com 4 serviços de app |
 
 **Não decidido aqui (deliberadamente):** tamanho de instância, security group, bucket de estado, workflow do Actions, topologia do nginx — pertencem a F3/F4/F5 em `docs/04`. Qualquer número deste documento que conflite com `docs/00`–`docs/04` deve ser resolvido a favor daqueles documentos, exceto onde este documento registra uma decisão de software (ADR-001 a ADR-009). A retenção de 7 dias da observabilidade saiu desta lista na ADR-009: ela é decisão de software, não de infraestrutura.
+
+**A cláusula acima vale agora para ADR-001 a ADR-017.** A partir da F7 este documento também registra decisão de software na arquitetura distribuída — ALB na frente com DNS estável (ADR-010), três VMs por papel sobre o **mesmo** `compose.yaml` fatiado por profile (ADR-011), banco em EC2 com RDS descartado por medição (ADR-012), observabilidade na VM do back e `/grafana/` roteado pelo ALB (ADR-013), roteamento por caminho no listener em vez de `upstream` no nginx do front (ADR-014), identidade do cliente pelo `X-Forwarded-For` (ADR-015), deploy em três alvos em série `db` → `api` → `web` (ADR-016) e operação em janela com `destroy` no fim (ADR-017). A evidência medida da F7 é `docs/evidencias/f7-alb-probe.txt` e os comandos de `scripts/dev/academy-probe.sh`; o que não foi medido está escrito como "não medido" em cada ADR. O que continua **fora** deste documento não mudou: security group, bucket de estado, workflow do Actions e os detalhes de nginx pertencem a `infra/`, a `docs/04` e ao runbook.
