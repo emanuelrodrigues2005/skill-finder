@@ -1,0 +1,350 @@
+================================================================
+Issue #67 — AWS Academy: cria, ativa e destrói um ALB?
+Execução iniciada em 2026-11-24T00:26:56Z (UTC), duração 160s. Roteiro: /tmp/probe-f71.sh (cópia em /mnt/c/Users/Lima02/AppData/Local/Temp/probe-f71.sh).
+Conta: 794399909334 · Região: us-east-1
+Sessão: arn:aws:sts::794399909334:assumed-role/voclabs/user5696546=emanuelrodrigues112358@gmail.com
+CLI: aws-cli/2.40.3 Python/3.14.8 Linux/6.6.87.2-microsoft-standard-WSL2 exe/x86_64.ubuntu.26
+Duração da prova: 160s · Custo estimado: US$ 0.0010 (ALB $0,0225/h)
+================================================================
+
+===== 0. identidade, região e estado inicial =====
+
+$ aws --region us-east-1 sts get-caller-identity
+{
+    "UserId": "AROA3R5PMUXLKIEGD7LLH:user5696546=emanuelrodrigues112358@gmail.com",
+    "Account": "794399909334",
+    "Arn": "arn:aws:sts::794399909334:assumed-role/voclabs/user5696546=emanuelrodrigues112358@gmail.com"
+}
+[exit=0]
+
+$ aws --region us-east-1 elbv2 describe-load-balancers --query 'length(LoadBalancers)' --output text
+0
+[exit=0]
+
+$ aws --region us-east-1 elbv2 describe-target-groups --query 'length(TargetGroups)' --output text
+0
+[exit=0]
+
+$ aws --region us-east-1 ec2 describe-instances --filters Name=instance-state-name,Values=running,pending --query 'length(Reservations)' --output text
+0
+[exit=0]
+
+$ aws --region us-east-1 iam get-role --role-name AWSServiceRoleForElasticLoadBalancing
+{
+    "Role": {
+        "Path": "/aws-service-role/elasticloadbalancing.amazonaws.com/",
+        "RoleName": "AWSServiceRoleForElasticLoadBalancing",
+        "RoleId": "AROA3R5PMUXLNK4JW3WAU",
+        "Arn": "arn:aws:iam::794399909334:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing",
+        "CreateDate": "2024-06-27T04:21:33+00:00",
+        "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "elasticloadbalancing.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        },
+        "Description": "Allows ELB to call AWS services on your behalf.",
+        "MaxSessionDuration": 3600,
+        "RoleLastUsed": {
+            "LastUsedDate": "2025-10-19T16:55:44+00:00",
+            "Region": "us-east-1"
+        }
+    }
+}
+[exit=0]
+
+$ aws --region us-east-1 elbv2 describe-load-balancers --names probe-f71
+
+aws: [ERROR]: An error occurred (LoadBalancerNotFound) when calling the DescribeLoadBalancers operation: Load balancers '[probe-f71]' not found
+[exit=254]
+
+$ aws --region us-east-1 elbv2 describe-target-groups --names probe-f71-tg
+
+aws: [ERROR]: An error occurred (TargetGroupNotFound) when calling the DescribeTargetGroups operation: One or more target groups not found
+[exit=254]
+
+VPC default: vpc-0838f8a7d51c833f1
+security group default: sg-09cb57147b03d07c7
+
+$ aws --region us-east-1 ec2 describe-subnets --filters Name=default-for-az,Values=true --query 'Subnets[*].[SubnetId,AvailabilityZone]' --output text
+subnet-05df5c55769c4c646	us-east-1e
+subnet-0d95c111c4abefeb5	us-east-1c
+subnet-06546bb6138420dd2	us-east-1d
+subnet-0780eb38ee8e9858b	us-east-1b
+subnet-0be82cdf89239d6c0	us-east-1a
+subnet-0945fe499328e654a	us-east-1f
+[exit=0]
+subnets escolhidas: subnet-05df5c55769c4c646 e subnet-0d95c111c4abefeb5
+
+===== 1. criar o ALB probe-f71 (2 subnets default, SG default) =====
+
+$ aws --region us-east-1 elbv2 create-load-balancer --name probe-f71 --subnets subnet-05df5c55769c4c646 subnet-0d95c111c4abefeb5 --type application --scheme internet-facing --tags Key=Project,Value=bcc-cloud Key=Issue,Value=67 Key=Purpose,Value=alb-probe --output json
+{
+    "LoadBalancers": [
+        {
+            "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:794399909334:loadbalancer/app/probe-f71/55685700c97f6139",
+            "DNSName": "probe-f71-1345483753.us-east-1.elb.amazonaws.com",
+            "CanonicalHostedZoneId": "Z35SXDOTRQ7X7K",
+            "CreatedTime": "2026-11-24T00:27:18.948000+00:00",
+            "LoadBalancerName": "probe-f71",
+            "Scheme": "internet-facing",
+            "VpcId": "vpc-0838f8a7d51c833f1",
+            "State": {
+                "Code": "provisioning"
+            },
+            "Type": "application",
+            "AvailabilityZones": [
+                {
+                    "ZoneName": "us-east-1e",
+                    "SubnetId": "subnet-05df5c55769c4c646",
+                    "LoadBalancerAddresses": []
+                },
+                {
+                    "ZoneName": "us-east-1c",
+                    "SubnetId": "subnet-0d95c111c4abefeb5",
+                    "LoadBalancerAddresses": []
+                }
+            ],
+            "SecurityGroups": [
+                "sg-09cb57147b03d07c7"
+            ],
+            "IpAddressType": "ipv4"
+        }
+    ]
+}
+[exit=0]
+ALB ARN: arn:aws:elasticloadbalancing:us-east-1:794399909334:loadbalancer/app/probe-f71/55685700c97f6139
+
+===== 2. service-linked role do ELB =====
+
+$ aws --region us-east-1 iam get-role --role-name AWSServiceRoleForElasticLoadBalancing
+{
+    "Role": {
+        "Path": "/aws-service-role/elasticloadbalancing.amazonaws.com/",
+        "RoleName": "AWSServiceRoleForElasticLoadBalancing",
+        "RoleId": "AROA3R5PMUXLNK4JW3WAU",
+        "Arn": "arn:aws:iam::794399909334:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing",
+        "CreateDate": "2024-06-27T04:21:33+00:00",
+        "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "elasticloadbalancing.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        },
+        "Description": "Allows ELB to call AWS services on your behalf.",
+        "MaxSessionDuration": 3600,
+        "RoleLastUsed": {
+            "LastUsedDate": "2025-10-19T16:55:44+00:00",
+            "Region": "us-east-1"
+        }
+    }
+}
+[exit=0]
+
+===== 3. esperar State.Code = active (até 300 s) =====
+State.Code = active (t=121s)
+
+$ aws --region us-east-1 elbv2 describe-load-balancers --load-balancer-arns arn:aws:elasticloadbalancing:us-east-1:794399909334:loadbalancer/app/probe-f71/55685700c97f6139 --query 'LoadBalancers[0].[LoadBalancerName,State.Code,DNSName,Scheme,Type]' --output text
+probe-f71	active	probe-f71-1345483753.us-east-1.elb.amazonaws.com	internet-facing	application
+[exit=0]
+DNSName: probe-f71-1345483753.us-east-1.elb.amazonaws.com
+
+-- ...pequena espera de propagação --
+
+===== 4. target group probe-f71-tg (HTTP:80, instance, health check /) =====
+
+$ aws --region us-east-1 elbv2 create-target-group --name probe-f71-tg --protocol HTTP --port 80 --target-type instance --vpc-id vpc-0838f8a7d51c833f1 --health-check-path / --health-check-protocol HTTP --health-check-interval-seconds 30 --healthy-threshold-count 2 --unhealthy-threshold-count 2 --tags Key=Project,Value=bcc-cloud Key=Issue,Value=67 Key=Purpose,Value=alb-probe --output json
+{
+    "TargetGroups": [
+        {
+            "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:794399909334:targetgroup/probe-f71-tg/f49885c18795ba1f",
+            "TargetGroupName": "probe-f71-tg",
+            "Protocol": "HTTP",
+            "Port": 80,
+            "VpcId": "vpc-0838f8a7d51c833f1",
+            "HealthCheckProtocol": "HTTP",
+            "HealthCheckPort": "traffic-port",
+            "HealthCheckEnabled": true,
+            "HealthCheckIntervalSeconds": 30,
+            "HealthCheckTimeoutSeconds": 5,
+            "HealthyThresholdCount": 2,
+            "UnhealthyThresholdCount": 2,
+            "HealthCheckPath": "/",
+            "Matcher": {
+                "HttpCode": "200"
+            },
+            "TargetType": "instance",
+            "ProtocolVersion": "HTTP1",
+            "IpAddressType": "ipv4"
+        }
+    ]
+}
+[exit=0]
+TG ARN: arn:aws:elasticloadbalancing:us-east-1:794399909334:targetgroup/probe-f71-tg/f49885c18795ba1f
+
+nenhuma instância running na conta — registro no target group PULADO (nada foi criado):
+
+===== 5. listener HTTP:80 + regra /api/* (prioridade 10) =====
+
+$ aws --region us-east-1 elbv2 create-listener --load-balancer-arn arn:aws:elasticloadbalancing:us-east-1:794399909334:loadbalancer/app/probe-f71/55685700c97f6139 --protocol HTTP --port 80 --default-actions 'Type=fixed-response,FixedResponseConfig={StatusCode=200,ContentType=text/plain}' --output json
+{
+    "Listeners": [
+        {
+            "ListenerArn": "arn:aws:elasticloadbalancing:us-east-1:794399909334:listener/app/probe-f71/55685700c97f6139/612579fb2512f9b7",
+            "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:794399909334:loadbalancer/app/probe-f71/55685700c97f6139",
+            "Port": 80,
+            "Protocol": "HTTP",
+            "DefaultActions": [
+                {
+                    "Type": "fixed-response",
+                    "FixedResponseConfig": {
+                        "StatusCode": "200",
+                        "ContentType": "text/plain"
+                    }
+                }
+            ]
+        }
+    ]
+}
+[exit=0]
+listener ARN: arn:aws:elasticloadbalancing:us-east-1:794399909334:listener/app/probe-f71/55685700c97f6139/612579fb2512f9b7
+
+$ aws --region us-east-1 elbv2 create-rule --listener-arn arn:aws:elasticloadbalancing:us-east-1:794399909334:listener/app/probe-f71/55685700c97f6139/612579fb2512f9b7 --priority 10 --conditions '[{"Field":"path-pattern","PathPatternConfig":{"Values":["/api/*"]}}]' --actions '[{"Type":"forward","TargetGroupArn":"arn:aws:elasticloadbalancing:us-east-1:794399909334:targetgroup/probe-f71-tg/f49885c18795ba1f"}]' --output json
+{
+    "Rules": [
+        {
+            "RuleArn": "arn:aws:elasticloadbalancing:us-east-1:794399909334:listener-rule/app/probe-f71/55685700c97f6139/612579fb2512f9b7/d96038edb553177c",
+            "Priority": "10",
+            "Conditions": [
+                {
+                    "Field": "path-pattern",
+                    "Values": [
+                        "/api/*"
+                    ],
+                    "PathPatternConfig": {
+                        "Values": [
+                            "/api/*"
+                        ]
+                    }
+                }
+            ],
+            "Actions": [
+                {
+                    "Type": "forward",
+                    "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:794399909334:targetgroup/probe-f71-tg/f49885c18795ba1f",
+                    "ForwardConfig": {
+                        "TargetGroups": [
+                            {
+                                "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:794399909334:targetgroup/probe-f71-tg/f49885c18795ba1f",
+                                "Weight": 1
+                            }
+                        ],
+                        "TargetGroupStickinessConfig": {
+                            "Enabled": false
+                        }
+                    }
+                }
+            ],
+            "IsDefault": false,
+            "Transforms": []
+        }
+    ]
+}
+[exit=0]
+regra ARN: arn:aws:elasticloadbalancing:us-east-1:794399909334:listener-rule/app/probe-f71/55685700c97f6139/612579fb2512f9b7/d96038edb553177c
+
+-- regras do listener no fim da criação --
+
+$ aws --region us-east-1 elbv2 describe-rules --listener-arn arn:aws:elasticloadbalancing:us-east-1:794399909334:listener/app/probe-f71/55685700c97f6139/612579fb2512f9b7 --query 'Rules[*].[Priority,IsDefault,Actions[0].Type]' --output text
+10	False	forward
+default	True	fixed-response
+[exit=0]
+
+===== 6. LIMPEZA (ordem inversa: regra -> listener -> TG -> ALB) =====
+
+$ aws --region us-east-1 elbv2 delete-rule --rule-arn arn:aws:elasticloadbalancing:us-east-1:794399909334:listener-rule/app/probe-f71/55685700c97f6139/612579fb2512f9b7/d96038edb553177c
+(sem saída)
+[exit=0]
+
+$ aws --region us-east-1 elbv2 delete-listener --listener-arn arn:aws:elasticloadbalancing:us-east-1:794399909334:listener/app/probe-f71/55685700c97f6139/612579fb2512f9b7
+(sem saída)
+[exit=0]
+
+$ aws --region us-east-1 elbv2 delete-target-group --target-group-arn arn:aws:elasticloadbalancing:us-east-1:794399909334:targetgroup/probe-f71-tg/f49885c18795ba1f
+(sem saída)
+[exit=0]
+
+$ aws --region us-east-1 elbv2 delete-load-balancer --load-balancer-arn arn:aws:elasticloadbalancing:us-east-1:794399909334:loadbalancer/app/probe-f71/55685700c97f6139
+(sem saída)
+[exit=0]
+
+-- aguardando o ALB sair de cena (até 180 s) --
+ALB removido após 153s
+===== fim da limpeza =====
+
+===== 7. provas de que nada sobrou =====
+
+$ aws --region us-east-1 elbv2 describe-load-balancers --query 'length(LoadBalancers)' --output text
+0
+[exit=0]
+
+$ aws --region us-east-1 elbv2 describe-target-groups --query 'length(TargetGroups)' --output text
+0
+[exit=0]
+
+$ aws --region us-east-1 elbv2 describe-listeners --listener-arns arn:aws:elasticloadbalancing:us-east-1:794399909334:listener/app/probe-f71/55685700c97f6139/612579fb2512f9b7
+
+aws: [ERROR]: An error occurred (ListenerNotFound) when calling the DescribeListeners operation: One or more listeners not found
+[exit=254]
+
+$ aws --region us-east-1 ec2 describe-instances --filters Name=instance-state-name,Values=running,pending --query 'length(Reservations)' --output text
+0
+[exit=0]
+
+security group default sg-09cb57147b03d07c7: idêntico (nenhuma regra nova)
+SHA das regras de entrada antes: 7009c340ab7c0a11
+SHA das regras de entrada depois: 7009c340ab7c0a11
+
+================================================================
+RESUMO
+================================================================
+VEREDITO: ALB viável — criação, State.Code=active, listener, regra /api/* e destruição confirmados na conta 794399909334 (us-east-1)
+ALBs antes/depois: 0 / 0
+Target groups antes/depois: 0 / 0
+Instâncias running+pending antes/depois: 0 / 0
+describe-listeners do ARN criado depois da limpeza: exit=254 — An error occurred (ListenerNotFound) when calling the DescribeListeners operation: One or more listeners not found
+Security group default sg-09cb57147b03d07c7: idêntico (nenhuma regra nova)
+Recursos criados nesta issue: ALB probe-f71, TG probe-f71-tg, listener HTTP:80, regra /api/* prioridade 10; nenhuma instância, nenhuma regra de SG.
+
+CUSTO
+ALB alocado: $0,0225/h. A prova durou 160s ≈ US$ 0.0010. Nenhum recurso ficou de pé, portanto o custo recorrente é zero.
+
+O QUE NÃO FOI TESTADO
+- Não houve requisição HTTP de fora para o DNS do ALB: o listener responde fixed-response 200 e a prova é de plano de controle (criar/ativar/destruir), não de tráfego.
+- Registro de instância no target group: não havia nenhuma instância running para registrar (nenhuma foi criada).
+- HTTPS/ACM, WAF e Auto Scaling não fazem parte desta issue.
+
+CONFERÊNCIA EXTRA (pós-execução, 2026-11-24T00:31:01Z)
+As ENIs do ALB (descrição "ELB app/probe-f71/...") saem junto com o load balancer; nenhuma sobrou.
+$ aws --region us-east-1 ec2 describe-network-interfaces --filters Name=description,Values='ELB app/probe-f71*' --query 'length(NetworkInterfaces)' --output text
+0
+$ aws --region us-east-1 ec2 describe-addresses --query 'length(Addresses)' --output text
+0
+$ aws --region us-east-1 ec2 describe-security-groups --filters Name=group-name,Values='probe*' --query 'length(SecurityGroups)' --output text
+0
+
+COMO REPRODUZIR
+wsl.exe -e bash -lc 'bash /mnt/c/Users/Lima02/AppData/Local/Temp/probe-f71.sh'  # exige ~/.local/bin/academy-env válido
+================================================================
