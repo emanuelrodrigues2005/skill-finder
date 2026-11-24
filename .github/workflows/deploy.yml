@@ -598,6 +598,31 @@ jobs:
             fi
           done
 
+          # `PingStatus=Online` so prova que o agente SSM da AMI subiu, e ele fica verde
+          # antes de o `user_data` (infra/compute.tf) instalar o Docker. `command -v`
+          # cobre "binario ausente"; `docker info` cobre "daemon ainda subindo".
+          docker_bin=0
+          docker_daemon=0
+          for attempt in $(seq 1 60); do
+            if command -v docker > /dev/null 2>&1; then
+              docker_bin=1
+            fi
+            if [ "$docker_bin" = 1 ] && docker info > /dev/null 2>&1; then
+              docker_daemon=1
+              break
+            fi
+            echo "docker: aguardando o user_data terminar (${attempt}/60)"
+            sleep 5
+          done
+          if [ "$docker_bin" -ne 1 ]; then
+            echo "ERRO: docker nao instalado no host apos 300s; o user_data de infra/compute.tf nao terminou" >&2
+            exit 1
+          fi
+          if [ "$docker_daemon" -ne 1 ]; then
+            echo "ERRO: daemon do docker sem resposta em 300s; o user_data de infra/compute.tf nao terminou" >&2
+            exit 1
+          fi
+
           if ! command -v infisical > /dev/null 2>&1; then
             echo "infisical: CLI ausente neste host, instalando pelo repositorio oficial"
             if ! command -v curl > /dev/null 2>&1; then
@@ -751,6 +776,31 @@ jobs:
           # influencia o deploy. Não apago nada sem ordem — só aviso.
           if [ -f .env ]; then
             echo "AVISO: /opt/app/.env existe e NAO e lido por este deploy (segredos do Infisical). Apague depois de validar; o pipeline nao apaga." >&2
+          fi
+
+          # `PingStatus=Online` so prova que o agente SSM da AMI subiu, e ele fica verde
+          # antes de o `user_data` (infra/compute.tf) instalar o Docker. `command -v`
+          # cobre "binario ausente"; `docker info` cobre "daemon ainda subindo".
+          docker_bin=0
+          docker_daemon=0
+          for attempt in $(seq 1 60); do
+            if command -v docker > /dev/null 2>&1; then
+              docker_bin=1
+            fi
+            if [ "$docker_bin" = 1 ] && docker info > /dev/null 2>&1; then
+              docker_daemon=1
+              break
+            fi
+            echo "docker: aguardando o user_data terminar (${attempt}/60)"
+            sleep 5
+          done
+          if [ "$docker_bin" -ne 1 ]; then
+            echo "ERRO: docker nao instalado no host apos 300s; o user_data de infra/compute.tf nao terminou" >&2
+            exit 1
+          fi
+          if [ "$docker_daemon" -ne 1 ]; then
+            echo "ERRO: daemon do docker sem resposta em 300s; o user_data de infra/compute.tf nao terminou" >&2
+            exit 1
           fi
 
           if ! command -v infisical > /dev/null 2>&1; then
@@ -931,6 +981,31 @@ jobs:
             fi
           done
 
+          # `PingStatus=Online` so prova que o agente SSM da AMI subiu, e ele fica verde
+          # antes de o `user_data` (infra/compute.tf) instalar o Docker. `command -v`
+          # cobre "binario ausente"; `docker info` cobre "daemon ainda subindo".
+          docker_bin=0
+          docker_daemon=0
+          for attempt in $(seq 1 60); do
+            if command -v docker > /dev/null 2>&1; then
+              docker_bin=1
+            fi
+            if [ "$docker_bin" = 1 ] && docker info > /dev/null 2>&1; then
+              docker_daemon=1
+              break
+            fi
+            echo "docker: aguardando o user_data terminar (${attempt}/60)"
+            sleep 5
+          done
+          if [ "$docker_bin" -ne 1 ]; then
+            echo "ERRO: docker nao instalado no host apos 300s; o user_data de infra/compute.tf nao terminou" >&2
+            exit 1
+          fi
+          if [ "$docker_daemon" -ne 1 ]; then
+            echo "ERRO: daemon do docker sem resposta em 300s; o user_data de infra/compute.tf nao terminou" >&2
+            exit 1
+          fi
+
           # `WEB_PORT=80` porque o `tg-web` aponta para a 80 da instancia; o default do
           # compose e 8081, que deixaria o alvo unhealthy e a raiz em 503.
           # O aviso "GRAFANA_PASSWORD is not set" no `compose` e esperado: o profile
@@ -1031,6 +1106,31 @@ jobs:
               exit 1
             fi
           done
+
+          # `PingStatus=Online` so prova que o agente SSM da AMI subiu, e ele fica verde
+          # antes de o `user_data` (infra/compute.tf) instalar o Docker. `command -v`
+          # cobre "binario ausente"; `docker info` cobre "daemon ainda subindo".
+          docker_bin=0
+          docker_daemon=0
+          for attempt in $(seq 1 60); do
+            if command -v docker > /dev/null 2>&1; then
+              docker_bin=1
+            fi
+            if [ "$docker_bin" = 1 ] && docker info > /dev/null 2>&1; then
+              docker_daemon=1
+              break
+            fi
+            echo "docker: aguardando o user_data terminar (${attempt}/60)"
+            sleep 5
+          done
+          if [ "$docker_bin" -ne 1 ]; then
+            echo "ERRO: docker nao instalado no host apos 300s; o user_data de infra/compute.tf nao terminou" >&2
+            exit 1
+          fi
+          if [ "$docker_daemon" -ne 1 ]; then
+            echo "ERRO: daemon do docker sem resposta em 300s; o user_data de infra/compute.tf nao terminou" >&2
+            exit 1
+          fi
 
           if ! command -v infisical > /dev/null 2>&1; then
             echo "infisical: CLI ausente neste host, instalando pelo repositorio oficial"
