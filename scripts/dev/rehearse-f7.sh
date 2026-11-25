@@ -50,6 +50,14 @@ sleep 25
 RUN="$(gh run list --repo "$REPO" --workflow=deploy.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 echo "run: $RUN"
 gh run watch "$RUN" --repo "$REPO" --interval 30 > /tmp/watch-f7.txt 2>&1
+# `gh run watch` volta quando um job falha, nao quando o run termina: o `smoke`
+# continua tentando a borda. Destruir antes dele acaba deixa o job batendo num ALB
+# que nao existe mais e o log dele fica inutil — aconteceu no ensaio de 24/11.
+for _ in $(seq 1 40); do
+  st="$(gh run view "$RUN" --repo "$REPO" --json status --jq .status 2>/dev/null)"
+  [ "$st" = "completed" ] && break
+  sleep 20
+done
 gh run view "$RUN" --repo "$REPO" --json conclusion,jobs --jq '"conclusao: \(.conclusion)", (.jobs[] | "  \(.name): \(.conclusion)")'
 
 echo
