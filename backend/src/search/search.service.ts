@@ -266,8 +266,12 @@ export class SearchService {
       created_at: now,
       client_hash: clientHash(input.clientIp, this.config.env.ipHashSalt),
       query_hash: sha256Hex(input.query),
-      // §8.5: sem `SEARCH_LOG_STORE_TEXT` o histórico guarda só o hash.
-      query_text: this.config.env.searchLogStoreText ? input.query : null,
+      // O texto é guardado **sempre**: a resposta o devolve em `query`, e o
+      // permalink de §5.4 precisa da pergunta sem o cliente — link compartilhado
+      // e reload não têm de onde tirá-la. Por isso `SEARCH_LOG_STORE_TEXT`
+      // deixou de existir: não há mais caminho que guarde só o hash. O IP
+      // continua fora do histórico (só `client_hash` com sal, §8.5).
+      query_text: input.query,
       intent: parsed.intent,
       category_slug: input.category,
       result_ids: toBigIntIds(results),
@@ -287,6 +291,9 @@ export class SearchService {
     return {
       request_id: stored.request_id,
       search_id: stored.search_id,
+      // O que foi gravado, não o que chegou: a busca e o permalink respondem a
+      // mesma pergunta, sem divergir por um detalhe de armazenamento.
+      query: stored.query_text,
       intent: parsed.intent,
       llm: {
         status: parsed.status,
@@ -358,8 +365,8 @@ export class SearchService {
     const degradation = resolveDegradation(row.llm_status, ageMs > SOURCE_STALE_AFTER_MS);
 
     const { results, recommendation, warnings } = await this.rankAndExplain(
-      // O replay não explica, mas a assinatura é a mesma dos dois caminhos: a
-      // consulta gravada pode nem existir (`SEARCH_LOG_STORE_TEXT=false`).
+      // O replay não explica, e o passo 7 nunca é tentado aqui (nenhum provedor é
+      // chamado numa leitura de permalink): o texto só alimentaria o prompt.
       row.query_text ?? '',
       storedOrder,
       row.intent,
@@ -378,6 +385,9 @@ export class SearchService {
     return {
       request_id: row.request_id,
       search_id: row.search_id,
+      // `null` — nunca `''` — para uma busca gravada antes de o texto ser
+      // guardado: a tela mostra a pergunta ausente como ausente.
+      query: row.query_text,
       intent: row.intent,
       llm: {
         status: row.llm_status,

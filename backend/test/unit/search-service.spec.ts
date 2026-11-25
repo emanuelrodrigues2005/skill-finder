@@ -204,11 +204,10 @@ class StoreStub implements SearchStore {
 }
 
 /** Config validada de dev, com as duas chaves que a busca lê. */
-function appConfig(overrides: { storeText?: boolean } = {}): AppConfigService {
+function appConfig(): AppConfigService {
   return {
     env: {
       ...loadEnv({ ENV: 'dev' }),
-      searchLogStoreText: overrides.storeText ?? false,
       ipHashSalt: 'unit-test-salt',
     },
     isProd: false,
@@ -496,7 +495,6 @@ interface Harness {
 
 async function build(
   options: {
-    config?: { storeText?: boolean };
     parser?: IntentParser;
     catalog?: CatalogStub;
     store?: StoreStub;
@@ -531,7 +529,7 @@ async function build(
       SearchService,
       { provide: SEARCH_CATALOG, useValue: catalog },
       { provide: SEARCH_STORE, useValue: store },
-      { provide: AppConfigService, useValue: appConfig(options.config) },
+      { provide: AppConfigService, useValue: appConfig() },
       { provide: MetricsService, useValue: METRICS_STUB },
       ...liveProvider,
       ...budgetProvider,
@@ -934,13 +932,15 @@ describe('SearchService.search (F2.6)', () => {
       expect(stored.llm_status).toBe('ok');
     });
 
-    it('stores no query text by default and no raw IP (SEARCH_LOG_STORE_TEXT=false)', async () => {
+    it('stores the query text and no raw IP', async () => {
       const harness = await build({ parser: new OkIntentParser() });
 
       await harness.service.search(SEARCH_INPUT);
 
       const stored = first(harness.store.saved);
-      expect(stored.query_text).toBeNull();
+      // O texto é guardado porque a resposta o devolve (`query`), inclusive no
+      // permalink: sem ele um link compartilhado não teria a pergunta.
+      expect(stored.query_text).toBe(SEARCH_INPUT.query);
       expect(stored.query_hash).toMatch(/^[0-9a-f]{64}$/);
       expect(stored.client_hash).toMatch(/^[0-9a-f]{64}$/);
       expect(stored.client_hash).not.toContain(CLIENT_IP);
@@ -952,21 +952,42 @@ describe('SearchService.search (F2.6)', () => {
       expect(second(harness.store.saved).client_hash).toBe(stored.client_hash);
     });
 
-    it('stores the query text only when SEARCH_LOG_STORE_TEXT=true', async () => {
-      const harness = await build({ config: { storeText: true }, parser: new OkIntentParser() });
+    it('echoes the query on the search response', async () => {
+      const harness = await build({ parser: new OkIntentParser() });
 
-      await harness.service.search(SEARCH_INPUT);
+      const response = await harness.service.search(SEARCH_INPUT);
 
-      expect(first(harness.store.saved).query_text).toBe(SEARCH_INPUT.query);
+      expect(response.query).toBe(SEARCH_INPUT.query);
+    });
+
+    it('replays the stored query, so a shared link shows the question', async () => {
+      const harness = await build({ parser: new OkIntentParser() });
+      const created = await harness.service.search(SEARCH_INPUT);
+
+      const replay = await harness.service.replay(created.request_id);
+
+      expect(replay.query).toBe(SEARCH_INPUT.query);
+    });
+
+    it('answers query null for a row stored without text, never an empty string', async () => {
+      const harness = await build({ parser: new OkIntentParser() });
+      const created = await harness.service.search(SEARCH_INPUT);
+      // Linha gravada antes de o texto passar a ser guardado: só o hash.
+      harness.store.rows = harness.store.rows.map((row) => ({ ...row, query_text: null }));
+
+      const replay = await harness.service.replay(created.request_id);
+
+      expect(replay.query).toBeNull();
+      expect(replay.query).not.toBe('');
     });
 
     /**
-     * Issue #10 (revisão): com `SEARCH_LOG_STORE_TEXT=true` o texto é **gravado**
-     * no banco, mas a projeção JSON de log/auditoria continua sem ele — §8.5
-     * proíbe o texto da consulta em log, e é esta projeção que vai para o log.
+     * Issue #10 (revisão): o texto é **gravado** no banco, mas a projeção JSON de
+     * log/auditoria continua sem ele — §8.5 proíbe o texto da consulta em log, e
+     * é esta projeção que vai para o log.
      */
-    it('keeps the query text out of the JSON projection even when it is stored', async () => {
-      const harness = await build({ config: { storeText: true }, parser: new OkIntentParser() });
+    it('keeps the query text out of the JSON projection even though it is stored', async () => {
+      const harness = await build({ parser: new OkIntentParser() });
 
       await harness.service.search(SEARCH_INPUT);
 

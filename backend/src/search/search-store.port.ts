@@ -3,8 +3,8 @@
  *
  * A linha guardada é o que dá permalink à busca (`GET /api/v1/searches/{request_id}`)
  * e o que o *audit* de privacidade inspeciona: por isso **não** há IP em claro
- * aqui, só `client_hash`, e o texto da consulta só entra com
- * `SEARCH_LOG_STORE_TEXT=true`.
+ * aqui, só `client_hash`. O texto da consulta é guardado sempre — é ele que a
+ * resposta devolve em `query`, inclusive num link compartilhado.
  *
  * `result_ids` fala `bigint`: é `BIGINT[]` na coluna. A conversão para `sk_...`
  * acontece na resposta, não no banco (decisão D-B).
@@ -23,7 +23,10 @@ export interface StoredSearchFields {
   client_hash: string;
   /** sha256 do texto da consulta, para agrupar buscas iguais. */
   query_hash: string;
-  /** `null` quando `SEARCH_LOG_STORE_TEXT=false` (§8.5). */
+  /**
+   * Texto da consulta como o cliente enviou. `null` só numa linha gravada antes
+   * de o texto passar a ser guardado — nunca string vazia.
+   */
   query_text: string | null;
   intent: Intent;
   category_slug: string | null;
@@ -60,10 +63,9 @@ export interface StoredSearchRow extends StoredSearchInput {
  * Lista os campos um a um de propósito: é esta lista que prova que o IP não está
  * no histórico (só o hash com sal), e um `...record` copiaria o próprio `toJSON`
  * de volta — `JSON.stringify` chamaria a projeção de novo, para sempre.
- * `query_text` fica **fora** mesmo quando está gravado (`SEARCH_LOG_STORE_TEXT=true`):
- * §8.5 proíbe o texto da consulta em log, e esta projeção existe exatamente para
- * log e auditoria. `result_ids` sai como string decimal porque `JSON.stringify`
- * de `bigint` lança.
+ * `query_text` fica **fora** mesmo estando gravado: §8.5 proíbe o texto da
+ * consulta em log, e esta projeção existe exatamente para log e auditoria.
+ * `result_ids` sai como string decimal porque `JSON.stringify` de `bigint` lança.
  */
 export function storedSearchJson(
   record: StoredSearchFields & { readonly search_id?: string },

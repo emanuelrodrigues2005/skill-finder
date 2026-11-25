@@ -53,7 +53,6 @@ import { SEARCH_CATALOG, SEARCH_STORE } from '@/search/search.tokens';
 // Configuração de teste de `test/setup.ts`; reforçada porque um `.env` local não
 // pode mudar o cenário (mesma razão de `search.e2e-spec.ts`).
 process.env.LLM_ENABLED = 'false';
-process.env.SEARCH_LOG_STORE_TEXT = 'false';
 
 const ORIGINAL_LIMITS = {
   min: process.env.RATE_LIMIT_SEARCH_PER_MIN,

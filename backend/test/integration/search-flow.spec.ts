@@ -323,8 +323,9 @@ describe('search flow over real Postgres (issue #12)', () => {
         expect(row.request_id).toBe(body.request_id);
         expect(row.search_id).toBe(body.search_id);
         expect(row.query_hash).toBe(sha256Hex(QUERY));
-        // §8.5: sem `SEARCH_LOG_STORE_TEXT` o histórico guarda só o hash.
-        expect(row.query_text).toBeNull();
+        // A pergunta é guardada: o permalink a devolve como `query`.
+        expect(row.query_text).toBe(QUERY);
+        expect(replay.body.query).toBe(QUERY);
         expect(row.result_ids.map(String)).toEqual(resultIds(body).map((id) => String(mustDecode(id))));
         expect(row.candidates_count).toBeGreaterThanOrEqual(body.results.length);
         expect(row.llm_status).toBe('disabled');

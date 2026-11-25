@@ -26,7 +26,6 @@ describe('env schema (§3)', () => {
     expect(env.rankWInstalls).toBe(0.2);
     expect(env.rateLimitSearchPerMin).toBe(10);
     expect(env.rateLimitSearchPerDay).toBe(60);
-    expect(env.searchLogStoreText).toBe(false);
     // Em dev o token é opcional: sem ele a rota de admin falha **fechada** (401),
     // e é isso que os casos abaixo fixam.
     expect(env.adminToken).toBeUndefined();
@@ -68,12 +67,10 @@ describe('env schema (§3)', () => {
     const env = loadEnv({
       ENV: 'dev',
       LLM_ENABLED: 'FALSE',
-      SEARCH_LOG_STORE_TEXT: 'true',
       RATE_LIMIT_SEARCH_PER_MIN: '3',
     });
 
     expect(env.llmEnabled).toBe(false);
-    expect(env.searchLogStoreText).toBe(true);
     expect(env.rateLimitSearchPerMin).toBe(3);
   });
 
