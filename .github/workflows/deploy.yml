@@ -1229,14 +1229,18 @@ jobs:
           # de prod os exige (`:?`) na interpolacao do arquivo inteiro.
           export DOCKERHUB_USER IMAGE_TAG="$SHA" GRAFANA_BIND=0.0.0.0
 
+          cat > "$step" <<'STEP'
+          set -euo pipefail
+          cd /opt/app
+
+          # A guarda vive AQUI, nao no wrapper: so este `bash "$step"` roda dentro do
+          # `secrets-manager run`. No wrapper o `GRAFANA_PASSWORD` nunca existe — a
+          # checagem la reprovava sempre, com a mensagem "ausente no ambiente do
+          # Infisical" quando o segredo estava no cofre o tempo todo.
           if [ -z "${GRAFANA_PASSWORD:-}" ]; then
             echo "::obs-failed:: GRAFANA_PASSWORD ausente no ambiente do Infisical" >&2
             exit 1
           fi
-
-          cat > "$step" <<'STEP'
-          set -euo pipefail
-          cd /opt/app
 
           env_file_args=()
           if docker compose --help 2> /dev/null | grep -q -- '--env-file'; then
