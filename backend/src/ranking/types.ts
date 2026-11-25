@@ -6,7 +6,7 @@
  */
 
 /**
- * The three catalog numbers the ranking consumes for one skill.
+ * The catalog numbers the ranking consumes for one skill.
  *
  * `null` means *absent*, never zero: an absent field gets the neutral factor
  * and increments `missing_fields` (§5.5). `undefined` is accepted as a synonym
@@ -17,6 +17,14 @@ export interface RankingCandidate {
   readonly stars?: number | null;
   readonly installs?: number | null;
   readonly vulnerability_count?: number | null;
+  /**
+   * `ts_rank` of the query against `search_doc`, from the retrieval port (§5.6.2).
+   *
+   * Absent when the source produced no textual rank (the in-memory double); the
+   * comparator treats absence as `0`. It never enters the score formula — it
+   * only breaks ties, so `score` stays the number the UI shows.
+   */
+  readonly relevance?: number | null;
 }
 
 /**

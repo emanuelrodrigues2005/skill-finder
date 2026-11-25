@@ -180,11 +180,13 @@ describe('PrismaSearchCatalogRepository — recuperação', () => {
     const values = prisma.calls[0]?.values ?? [];
 
     // O `tsquery` e o `ts_rank` falam a mesma expressão, e é a inglesa: o
-    // fragmento aparece duas vezes (no `@@` e no `ts_rank`). Os termos vão unidos
-    // por `or` (Fase 2): espaço é AND no `websearch_to_tsquery` e devolvia zero.
+    // fragmento aparece três vezes (no `@@`, no `SELECT` da relevância e no
+    // `ORDER BY`). Os termos vão unidos por `or` (Fase 2): espaço é AND no
+    // `websearch_to_tsquery` e devolvia zero.
     expect(sql).toContain("websearch_to_tsquery('english'");
     expect(sql).toContain('ts_rank(s.search_doc');
-    expect(values.filter((value) => value === 'document or api')).toHaveLength(2);
+    expect(sql).toContain('AS relevance');
+    expect(values.filter((value) => value === 'document or api')).toHaveLength(3);
     // A consulta crua aparece uma vez só: no `ILIKE` do nome.
     expect(values.filter((value) => value === query)).toHaveLength(1);
     expect(sql).toContain("s.name ILIKE '%' ||");
@@ -199,8 +201,27 @@ describe('PrismaSearchCatalogRepository — recuperação', () => {
     await repo.search({ query: 'find skills', keywords: [], category: null, limit: 5 });
 
     const values = prisma.calls[0]?.values ?? [];
-    // Duas ocorrências no `tsquery` (`@@` + `ts_rank`) e uma no `ILIKE`.
-    expect(values.filter((value) => value === 'find skills')).toHaveLength(3);
+    // Três ocorrências no `tsquery` (`@@`, `SELECT` da relevância, `ts_rank` do
+    // `ORDER BY`) e uma no `ILIKE`.
+    expect(values.filter((value) => value === 'find skills')).toHaveLength(4);
+  });
+
+  it('carries the ts_rank back to the candidate as its relevance', async () => {
+    const { prisma, repo } = catalog();
+    prisma.queryRows = [{ ...row({ id: 3n }), relevance: 0.6079 }];
+
+    const [item] = await repo.search({
+      query: 'design frontend',
+      keywords: ['design', 'frontend'],
+      category: null,
+      limit: 5,
+    });
+
+    // §5.6.2: o ranking precisa do número, não só da ordem que o banco deu.
+    expect(item?.relevance).toBe(0.6079);
+    // O resto da linha continua o mesmo `SkillSummary` do contrato (D-B).
+    expect(item?.skill_id).toBe(encodeSkillId(3n));
+    expect(item?.installs).toBe(42);
   });
 
   it('does not query the database for an empty id set', async () => {

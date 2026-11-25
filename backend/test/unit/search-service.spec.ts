@@ -68,7 +68,11 @@ import {
   type BudgetRejection,
 } from '@/search/daily-llm-budget.service';
 import { LIVE_ENRICHER, type LiveEnricher, type LiveEnrichInput } from '@/search/live-enricher.port';
-import type { SearchCatalog, SearchCatalogInput } from '@/search/search-catalog.port';
+import type {
+  SearchCandidate,
+  SearchCatalog,
+  SearchCatalogInput,
+} from '@/search/search-catalog.port';
 import type { SearchStore, StoredSearchInput, StoredSearchRow } from '@/search/search-store.port';
 import { SearchService } from '@/search/search.service';
 import { SEARCH_CATALOG, SEARCH_STORE } from '@/search/search.tokens';
@@ -120,7 +124,7 @@ const CANDIDATES: readonly SkillSummary[] = [
 ];
 
 class CatalogStub implements SearchCatalog {
-  skills: readonly SkillSummary[] = CANDIDATES;
+  skills: readonly SearchCandidate[] = CANDIDATES;
   snapshotAt: Date | null = new Date(Date.now() - HOUR_MS);
   categories: string[] = ['backend', 'testing'];
   searchCalls = 0;
@@ -875,6 +879,37 @@ describe('SearchService.search (F2.6)', () => {
       await harness.service.search(PT_INPUT);
 
       expect(first(harness.catalog.searchInputs).keywords.length).toBeGreaterThan(0);
+    });
+  });
+
+  /**
+   * Sintoma de produção que motivou o critério: numa busca como "design frontend"
+   * quase tudo satura em 0,765 (S = 1, P = 1, I = 1) e o desempate por
+   * `installs` fazia `find-skills` (900 mil) vencer `frontend-design`. A
+   * relevância vem do recuperador e tem de atravessar o serviço até o ranking.
+   */
+  describe('relevância textual desempata o score (§5.6.2)', () => {
+    it('ranks the better textual match first among equal scores', async () => {
+      const harness = await build();
+      harness.catalog.skills = [
+        {
+          ...skill(42n, { stars: 20000, installs: 900000, vulnerability_count: 0 }),
+          relevance: 0.0001,
+        },
+        {
+          ...skill(43n, { stars: 20000, installs: 200000, vulnerability_count: 0 }),
+          relevance: 0.6079,
+        },
+      ];
+
+      const response = await harness.service.search(SEARCH_INPUT);
+      const ranked = response.results;
+
+      expect(ranked).toHaveLength(2);
+      // Pré-condição: score empatado — só o desempate decide.
+      expect(ranked[0]?.score).toBe(ranked[1]?.score);
+      expect(ranked[0]?.skill.skill_id).toBe(encodeSkillId(43n));
+      expect(ranked[1]?.skill.skill_id).toBe(encodeSkillId(42n));
     });
   });
 
