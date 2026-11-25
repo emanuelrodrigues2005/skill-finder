@@ -135,6 +135,15 @@ resource "aws_vpc_security_group_egress_rule" "web_https" {
   to_port           = 443
 }
 
+resource "aws_vpc_security_group_egress_rule" "web_apt_http" {
+  security_group_id = aws_security_group.web.id
+  description       = "Saida HTTP para os repositorios do apt no primeiro boot."
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "tcp"
+  from_port         = 80
+  to_port           = 80
+}
+
 resource "aws_vpc_security_group_ingress_rule" "api_from_alb_http" {
   security_group_id            = aws_security_group.api.id
   description                  = "8000 somente do balanceador."
@@ -167,6 +176,20 @@ resource "aws_vpc_security_group_ingress_rule" "api_ssh" {
   to_port           = 22
 }
 
+# O `apt` fala HTTP (porta 80) com `*.ec2.archive.ubuntu.com` e
+# `security.ubuntu.com`. Sem esta regra o `apt-get update` falha inteiro, a lista
+# de pacotes fica vazia e o `install docker.io` responde "no installation
+# candidate" — o host sobe sem Docker e o sintoma no deploy vira "daemon sem
+# resposta", que parece falha do compose.
+resource "aws_vpc_security_group_egress_rule" "api_apt_http" {
+  security_group_id = aws_security_group.api.id
+  description       = "Saida HTTP para os repositorios do apt no primeiro boot."
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "tcp"
+  from_port         = 80
+  to_port           = 80
+}
+
 resource "aws_vpc_security_group_egress_rule" "api_to_db" {
   security_group_id            = aws_security_group.api.id
   description                  = "5432 somente para o Postgres."
@@ -192,6 +215,15 @@ resource "aws_vpc_security_group_ingress_rule" "db_from_api" {
   ip_protocol                  = "tcp"
   from_port                    = 5432
   to_port                      = 5432
+}
+
+resource "aws_vpc_security_group_egress_rule" "db_apt_http" {
+  security_group_id = aws_security_group.db.id
+  description       = "Saida HTTP para os repositorios do apt no primeiro boot."
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "tcp"
+  from_port         = 80
+  to_port           = 80
 }
 
 resource "aws_vpc_security_group_egress_rule" "db_https" {
