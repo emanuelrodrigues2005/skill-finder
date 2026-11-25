@@ -7,7 +7,8 @@ import { STR } from "./ui/strings";
 import { color, focusRing, font, measure, space } from "./ui/tokens";
 
 /**
- * Foco visível, skip link e o papel da página (issue #28, `docs/app/01-spec-produto.md` §6.6).
+ * Foco visível, skip link, o papel da página (issue #28, `docs/app/01-spec-produto.md` §6.6) e o
+ * pulso do "pensando" (classe `.thinking-rule`, usada por `ThinkingTurn` e pela linha de status).
  *
  * O projeto não tem folha de estilo: cada componente carrega o próprio `style` inline e
  * `:focus-visible` não existe em estilo inline. Este bloco é o único CSS global — o contorno de
@@ -45,6 +46,29 @@ body {
 .skip-link:focus,
 .skip-link:focus-visible {
   left: 0;
+}
+.thinking-rule {
+  display: inline-block;
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 3px;
+  min-height: 1em;
+  background: ${color.link};
+  animation: thinking-pulse 1.1s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+/*
+ * A primeira media query do projeto, e a razão de o pulso não estar no estilo inline: o "pensando"
+ * respira em opacidade, e quem pediu menos movimento no sistema recebe a régua parada. Uma
+ * animação declarada inline venceria qualquer regra de media query — por isso a classe.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-rule {
+    animation: none;
+  }
 }
 `;
 

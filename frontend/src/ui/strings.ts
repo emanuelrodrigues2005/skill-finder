@@ -41,7 +41,6 @@ export const STR = {
       default: "Carregando…",
       categories: "Carregando categorias…",
       skill: "Carregando skill…",
-      search: "Buscando…",
     },
     empty: {
       default: "nenhuma skill correspondeu — tente palavras mais amplas",
@@ -89,47 +88,10 @@ export const STR = {
 
   results: {
     heading: "Resultados",
-    /** Identificador do contrato (`permalink`), não rótulo de produto. */
-    permalinkLabel: "permalink",
-    intentLine: (category: string, keywords: string, confidence: string): string =>
-      `categoria ${category} · palavras-chave ${keywords} · confiança ${confidence}`,
-    snapshotLine: (
-      snapshot: string,
-      source: string,
-      llmStatus: string,
-      cached: boolean,
-      model: string,
-    ): string =>
-      `snapshot do catálogo ${snapshot} · fonte ${source} · llm ${llmStatus}` +
-      `${cached ? " (em cache)" : ""} · modelo ${model}`,
-
-    degraded: {
-      /** Título por motivo do enum; motivo fora do enum cai no `fallback`. */
-      headline: {
-        source_stale: "O snapshot do catálogo está desatualizado",
-        llm_unavailable:
-          "O modelo de linguagem está indisponível — a intenção veio do fallback por palavras-chave",
-      } satisfies Readonly<Record<DegradedReason, string>>,
-      fallback: "Resultados degradados",
-      /** Nome do campo do contrato; o valor sai dentro de `<code>`. */
-      reasonLabel: "degraded_reason:",
-      snapshotLabel: "snapshot do catálogo",
-      ageSuffix: (hours: string, seconds: number): string =>
-        ` — ${hours} h de idade (${String(seconds)} s)`,
-    },
 
     rateLimit: {
       codeLabel: "código:",
       detail: "— os resultados abaixo são a resposta anterior, ainda válida.",
-    },
-
-    recommendation: {
-      heading: "Recomendação",
-      rankSuffix: (rank: number, total: number): string => ` · #${String(rank)} de ${String(total)}`,
-      skillIdLabel: "skill_id",
-      isTopPick: "— o resultado mais bem ranqueado",
-      isNotTopPick: (skillId: string): string =>
-        `— o resultado mais bem ranqueado é ${skillId}`,
     },
 
     empty: {
@@ -150,47 +112,6 @@ export const STR = {
        * eles preenchem é a caixa de busca, e a consulta em si pode estar em qualquer idioma.
        */
       examples: ["extrair tabelas de um pdf", "resumir um changelog"] as const,
-    },
-
-    card: {
-      recommendedBadge: "recomendada",
-      score: (value: string): string => `score ${value}`,
-      /**
-       * Linha de metadados do cartão. `category`, `stars`, `installs` e `vulnerability_count`
-       * são campos do contrato, mas a linha é rótulo de produto — daí a tradução.
-       */
-      meta: (
-        category: string,
-        stars: string,
-        installs: string,
-        vulnerabilities: string,
-        security: string,
-        skillMdPresent: boolean,
-      ): string =>
-        `categoria ${category} · estrelas ${stars} · instalações ${installs} · ` +
-        `vulns ${vulnerabilities} · segurança ${security}` +
-        `${skillMdPresent ? "" : " · SKILL.md n/a"}`,
-      noExplanation: "nenhuma explicação foi devolvida para este item",
-      /** Fatores normalizados do `score_breakdown`, exibidos como vieram da API. */
-      factors: (stars: string, installs: string, vulnerabilities: string): string =>
-        `estrelas ${stars} · instalações ${installs} · vulnerabilidades ${vulnerabilities}`,
-      factorsPrefix: "fatores do score",
-      caveat: (text: string): string => `ressalva: ${text}`,
-      evidenceGap: (missing: number): string =>
-        `lacuna de evidência — ${String(missing)} campo(s) do catálogo ausente(s)`,
-      /** `flags` é campo do contrato; os valores (`security_warn`, …) vêm do servidor. */
-      flags: (values: string): string => `flags: ${values}`,
-    },
-
-    evidence: {
-      completeLabel: "evidência completa",
-      completeDetail: "nenhum campo do catálogo ausente",
-      partialLabel: "evidência parcial",
-      partialNoMissing: (confidence: string): string =>
-        `nenhum campo ausente · confiança ×${confidence}`,
-      partialMissing: (missing: number, confidence: string): string =>
-        `${String(missing)} ${missing === 1 ? "campo ausente" : "campos ausentes"} · ` +
-        `confiança ×${confidence}`,
     },
 
     warnings: {
@@ -217,6 +138,78 @@ export const STR = {
         "Este permalink passou da janela de histórico (código HISTORY_EXPIRED), então a resposta " +
         "armazenada não pode mais ser reproduzida. Uma nova busca refaz o ranking a partir do " +
         "catálogo atual.",
+    },
+  },
+
+  /**
+   * A transcrição da resposta: a pergunta, a prosa de abertura, os tópicos e a nota de degradação.
+   *
+   * Fica separado de `results` porque é outro registro: `results` é a moldura da tela (título,
+   * limite de uso, avisos, expirado) e `transcript` é a conversa em si. Nada aqui é dado do
+   * catálogo — `name`, `explanation`, `caveats` e `recommendation.text` continuam como vieram.
+   */
+  transcript: {
+    /** Nome acessível da lista: o mesmo do título da região, para o leitor de tela ligar os dois. */
+    listLabel: "Resultados",
+
+    status: {
+      /** Linha de status única e persistente da tela de resultados (WCAG 4.1.3). */
+      thinking: "Pensando…",
+      found: (count: number): string =>
+        count === 1 ? "1 skill encontrada" : `${String(count)} skills encontradas`,
+    },
+
+    /**
+     * Linha de interpretação do `intent`. Os `keywords` são do servidor e vão como vieram; a
+     * categoria só entra quando existe (`null` não vira `n/a` aqui: a linha fala do que a busca
+     * entendeu, não de um campo do catálogo).
+     */
+    interpretation: (category: string | null, keywords: string): string =>
+      category === null
+        ? `palavras-chave: ${keywords}`
+        : `categoria: ${category} — palavras-chave: ${keywords}`,
+
+    lead: {
+      none: "Nenhuma skill encontrada.",
+      one: "Encontrei 1 skill:",
+      many: (count: number): string => `Encontrei ${String(count)} skills:`,
+      /**
+       * R3: `recommendation` é nullable no contrato. Sem prosa do servidor a abertura não fica
+       * num buraco — a frase diz onde está a explicação, em vez de repetir
+       * `results[0].explanation`, que aparece no tópico logo abaixo.
+       */
+      noProse: "O ranking abaixo traz a explicação de cada skill.",
+    },
+
+    topic: {
+      stars: "estrelas",
+      installs: "instalações",
+      vulnerabilities: "vulnerabilidades",
+      noExplanation: "nenhuma explicação foi devolvida para este item",
+      caveat: (text: string): string => `ressalva: ${text}`,
+      /** `flags` é campo do contrato; os valores (`security_warn`, …) vêm do servidor. */
+      flags: (values: string): string => `flags: ${values}`,
+    },
+
+    degraded: {
+      /** Título por motivo do enum; motivo fora do enum cai no `fallback`. */
+      headline: {
+        source_stale: "O snapshot do catálogo está desatualizado",
+        llm_unavailable:
+          "O modelo de linguagem está indisponível — a intenção veio do fallback por palavras-chave",
+      } satisfies Readonly<Record<DegradedReason, string>>,
+      /**
+       * R4: `low_confidence` chega rotulado como `llm_unavailable`, mas o modelo **respondeu** —
+       * só com pouca confiança. A frase é escolhida por `degraded_reason` **e** por `llm.status`,
+       * então aqui não se diz que o modelo está fora.
+       */
+      lowConfidence:
+        "A intenção veio com pouca confiança — os termos encontrados podem estar imprecisos",
+      fallback: "Resultados degradados",
+      /** Nome do campo do contrato; o valor sai dentro de `<code>`. */
+      reasonLabel: "degraded_reason:",
+      ageSuffix: (hours: string, seconds: number): string =>
+        ` — ${hours} h de idade (${String(seconds)} s)`,
     },
   },
 

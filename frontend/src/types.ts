@@ -97,6 +97,15 @@ export interface Recommendation {
 export interface SearchResponse {
   request_id: string;
   search_id: string;
+  /**
+   * A pergunta que originou a busca, ecoada pelo servidor para o primeiro turno
+   * da conversa. No contrato (`openapi.yaml`) é obrigatório e nullable; aqui é
+   * opcional enquanto os fixtures de teste não o declaram — o consumo é
+   * `response.query ?? null`, então ausente e `null` caem no mesmo caminho.
+   * `null` só em registro anterior à persistência do texto, nunca string vazia.
+   * Renderize como texto, nunca como HTML ou markdown (regra 2).
+   */
+  query?: string | null;
   intent: Intent;
   llm: Llm;
   data: SearchData;

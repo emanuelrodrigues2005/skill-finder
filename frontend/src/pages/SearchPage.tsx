@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError, describeApiError, getCategories, searchSkills } from "../api";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
+import { ThinkingTurn } from "../components/ThinkingTurn";
 import { QUERY_MAX_LENGTH, QUERY_MIN_LENGTH, type Category } from "../types";
 import { STR } from "../ui/strings";
 import { color, font, radius, space } from "../ui/tokens";
@@ -148,9 +149,11 @@ export default function SearchPage() {
     setSubmitFailure(null);
     try {
       const response = await searchSkills(trimmed, category === "" ? null : category);
-      // Só no sucesso: o permalink carrega o `request_id`, nunca o id interno da busca.
+      // Só no sucesso: o permalink carrega o `request_id`, nunca o id interno da busca. A consulta
+      // vai junto em `state` porque o contrato só passou a devolvê-la (`query`) agora: enquanto o
+      // campo não chega ao bundle do servidor, a transcrição lê o texto daqui.
       navigate(`/results?search=${encodeURIComponent(response.request_id)}`, {
-        state: { response },
+        state: { response, query: trimmed },
       });
     } catch (error) {
       // O 422 de categoria e o 503 de fonte caem no mesmo caminho; a exibição decide pelo
@@ -345,6 +348,17 @@ export default function SearchPage() {
             {submitting ? STR.search.submitting : STR.search.submit}
           </button>
         </div>
+
+        {/*
+          O "pensando" da busca: um turno da conversa abaixo do botão, que entra só depois de
+          250 ms (resposta rápida não faz indicador piscar) e sai quando o `POST` resolve — no
+          sucesso a navegação leva a resposta pronta para `/results`.
+        */}
+        {submitting ? (
+          <div style={{ marginTop: space.md }}>
+            <ThinkingTurn />
+          </div>
+        ) : null}
 
         {/* Carregando e vazio da lista de categorias (issue #28); o vazio agora só aparece
             quando houve falha — com o catálogo sem categorias, o seletor nem é renderizado. */}
