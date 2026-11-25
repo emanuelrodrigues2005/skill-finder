@@ -118,13 +118,48 @@ describe("estados por tela", () => {
     expect(screen.queryByText("Carregando categorias…")).toBeNull();
   });
 
+  /**
+   * O "pensando" mora no **formulário**, durante o `POST` (`ThinkingTurn`), e não na tela de
+   * resultados: entra depois de 250 ms — abaixo disso um indicador só pisca — e some quando a
+   * resposta chega, porque a navegação leva a transcrição pronta para `/results`.
+   */
+  it("Search: shows the thinking turn after the delay and clears it when the answer arrives", async () => {
+    server.use(
+      http.post(apiUrl("/search"), async () => {
+        await delay(400);
+        return HttpResponse.json(searchResponse);
+      }),
+    );
+
+    renderAt("/");
+    fireEvent.change(screen.getByLabelText(/o que você precisa que a skill faça/i), {
+      target: { value: "extract tables from a pdf" },
+    });
+    const form = screen.getByRole("button", { name: /^buscar$/i }).closest("form");
+    if (form === null) throw new Error("search form not found");
+    fireEvent.submit(form);
+
+    // Primeiro frame: nada. O turno só entra depois do limiar.
+    expect(screen.queryByText("Pensando…")).toBeNull();
+    const thinking = await screen.findByText("Pensando…");
+    expect(thinking.closest('[role="status"]')).not.toBeNull();
+
+    // A resposta chega: o turno sai da tela e a transcrição assume.
+    await screen.findByText("2 skills encontradas");
+    expect(screen.queryByText("Pensando…")).toBeNull();
+  });
+
   it("Results: shows the loading state while the replay is on its way", async () => {
     serveReplaySlowly();
 
     renderAt(PERMALINK);
 
-    expect(screen.getByText("Buscando…")).toBeVisible();
-    await expect(screen.findByRole("heading", { name: "Resultados" })).resolves.toBeVisible();
+    // A linha de status é a região viva da tela e nasce no carregamento.
+    expect(screen.getByText("Pensando…")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Resultados" })).toBeVisible();
+    // A mesma linha muda de texto quando a resposta chega — ela não é desmontada.
+    await expect(screen.findByText("2 skills encontradas")).resolves.toBeVisible();
+    expect(screen.queryByText("Pensando…")).toBeNull();
   });
 
   it("Detail: shows the loading state while the skill is on its way", async () => {
@@ -224,16 +259,24 @@ describe("estados por tela", () => {
     );
   });
 
-  it("Results: the results region is a named region with a polite live list", async () => {
+  /**
+   * WCAG 4.1.3 — o anúncio é de **uma** linha de status, não da lista.
+   *
+   * A asserção é a inversão da que existia aqui: o `<ol>` continua `role="list"` com nome
+   * acessível, mas fora de qualquer região viva; quem fala é a linha de status persistente da
+   * rota, que já existe no carregamento.
+   */
+  it("Results: the list is named but not live, and the status line is the region that announces", async () => {
     serveReplay(searchResponse);
 
     renderAt(PERMALINK);
 
-    const region = await screen.findByRole("region", { name: "Resultados" });
-    // O `<ol>` de resultados é o único `list` com nome; os `<ul>` de razões dos cartões não têm.
-    expect(within(region).getByRole("list", { name: "Resultados" })).toHaveAttribute(
+    await screen.findByText("2 skills encontradas");
+    const region = screen.getByRole("region", { name: "Resultados" });
+    // O `<ol>` de resultados é o único `list` com nome; os `<dl>` de números não são listas.
+    expect(within(region).getByRole("list", { name: "Resultados" })).not.toHaveAttribute(
       "aria-live",
-      "polite",
     );
+    expect(within(region).getByRole("status")).toHaveTextContent("2 skills encontradas");
   });
 });

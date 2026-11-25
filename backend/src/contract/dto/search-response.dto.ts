@@ -174,6 +174,15 @@ export class SearchResponse {
   })
   search_id!: string;
 
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'extrair tabelas de pdf',
+    description:
+      'The search text exactly as the client sent it, so the screen can show the question as the first turn of the conversation — including on a shared link and after a reload. Plain text from the client: render it escaped, never as HTML or markdown. null only for a search stored before the text was kept.',
+  })
+  query!: string | null;
+
   @ApiProperty({ type: () => Intent })
   intent!: Intent;
 

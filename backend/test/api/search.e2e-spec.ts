@@ -38,7 +38,6 @@ import { SEARCH_CATALOG, SEARCH_STORE } from '@/search/search.tokens';
 // Configuração de teste documentada em `test/setup.ts`; forçada aqui porque o
 // `test:e2e` roda com `--runInBand` e um `.env` local não pode mudar o cenário.
 process.env.LLM_ENABLED = 'false';
-process.env.SEARCH_LOG_STORE_TEXT = 'false';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -471,6 +470,30 @@ describe('search endpoints (e2e)', () => {
     expect(replay.body.llm.tokens).toBeNull();
     // Issue #42: o replay não tenta o passo 7 — nenhum provedor é chamado.
     expect(replay.body.llm.explain_status).toBeNull();
+  });
+
+  it('echoes the query on the search and on the shared permalink (contract change)', async () => {
+    const query = 'extrair tabelas de pdf';
+
+    const created = await postSearch({ query }).expect(200);
+
+    expect(created.body.query).toBe(query);
+    // Persistido de propósito: o permalink precisa da pergunta sem o cliente.
+    expect(first(store.saved).query_text).toBe(query);
+
+    const replay = await get(`/api/v1/searches/${created.body.request_id as string}`).expect(200);
+    expect(replay.body.query).toBe(query);
+  });
+
+  it('answers query null for a stored search without text, never an empty string', async () => {
+    const created = await postSearch({ query: OK_QUERY }).expect(200);
+    // Linha gravada antes de o texto passar a ser guardado: só o hash.
+    store.rows = store.rows.map((row) => ({ ...row, query_text: null }));
+
+    const replay = await get(`/api/v1/searches/${created.body.request_id as string}`).expect(200);
+
+    expect(replay.body.query).toBeNull();
+    expect(replay.body.query).not.toBe('');
   });
 
   it('answers 404 for an unknown permalink and 410 for one past the 30-day retention', async () => {

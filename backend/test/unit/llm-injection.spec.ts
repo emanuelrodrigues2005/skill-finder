@@ -76,7 +76,6 @@ const CONFIG = {
     rankWVulns: 0.3,
     rankWInstalls: 0.2,
     ipHashSalt: 'injection-test-salt',
-    searchLogStoreText: false,
   },
 } as unknown as AppConfigService;
 

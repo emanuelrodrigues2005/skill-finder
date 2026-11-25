@@ -172,7 +172,7 @@ describe("skip link and focus", () => {
     server.use(http.get(apiUrl(`/searches/${REQUEST_ID}`), () => HttpResponse.json(searchResponse)));
 
     renderAt(`/results?search=${REQUEST_ID}`);
-    await screen.findByRole("heading", { name: "Resultados" });
+    await screen.findByText("2 skills encontradas");
 
     const colors = textColors(document.body);
     expect(colors.length).toBeGreaterThan(0);
@@ -199,17 +199,28 @@ describe("skip link and focus", () => {
 });
 
 describe("live regions and state roles", () => {
-  it("marks the results list as a polite live region inside the named Results region", async () => {
+  /**
+   * WCAG 4.1.3 — uma região viva por mensagem, e ela é a linha de status.
+   *
+   * A asserção é **invertida** em relação à versão anterior, que exigia `aria-live` no `<ol>`:
+   * com a lista inteira numa região viva, cada busca anunciava de novo os N tópicos. Agora quem
+   * anuncia é a linha de status (montada desde o carregamento, nunca desmontada) e a lista é só
+   * uma lista, com nome acessível próprio.
+   */
+  it("announces the answer through one status line, not the results list", async () => {
     server.use(http.get(apiUrl(`/searches/${REQUEST_ID}`), () => HttpResponse.json(searchResponse)));
 
     renderAt(`/results?search=${REQUEST_ID}`);
 
-    const region = await screen.findByRole("region", { name: "Resultados" });
-    // O `<ol>` é o único `list` chamado "Resultados"; os `<ul>` de razões de cada cartão não têm nome.
-    expect(within(region).getByRole("list", { name: "Resultados" })).toHaveAttribute(
-      "aria-live",
-      "polite",
-    );
+    // A região existe desde o carregamento (a linha de status mora nela): esperar a resposta é o
+    // que garante que a lista já está na árvore.
+    await screen.findByText("2 skills encontradas");
+    const region = screen.getByRole("region", { name: "Resultados" });
+    // O `<ol>` é o único `list` chamado "Resultados"; os `<dl>` de números não são listas.
+    const list = within(region).getByRole("list", { name: "Resultados" });
+    expect(list).not.toHaveAttribute("aria-live");
+    // A linha de status existe desde o carregamento: `role="status"` (aria-live implícito).
+    expect(within(region).getByRole("status")).toHaveTextContent("2 skills encontradas");
   });
 
   it("gives each results state the role that announces it", async () => {

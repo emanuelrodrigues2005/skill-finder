@@ -43,7 +43,6 @@ import { DAILY_LLM_BUDGET_STORE, SEARCH_CATALOG, SEARCH_STORE } from '@/search/s
 // Configuração de teste de `test/setup.ts`; reforçada porque um `.env` local não
 // pode mudar o cenário.
 process.env.LLM_ENABLED = 'false';
-process.env.SEARCH_LOG_STORE_TEXT = 'false';
 
 /** O teto do cenário: o terceiro passo de intenção do dia não acontece. */
 const DAILY_BUDGET = 2;

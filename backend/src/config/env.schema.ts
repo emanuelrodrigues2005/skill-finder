@@ -115,7 +115,10 @@ const baseEnvSchema = z.object({
   RATE_LIMIT_SEARCH_PER_DAY: z.coerce.number().int().positive().default(60),
 
   // --- search history privacy ---
-  SEARCH_LOG_STORE_TEXT: booleanFromEnv.default(false),
+  // `SEARCH_LOG_STORE_TEXT` não existe mais: o texto da consulta é guardado
+  // sempre, porque a resposta o devolve em `query` — inclusive no permalink, que
+  // não tem o cliente para perguntar de novo. O que continua restrito é o IP:
+  // o histórico só carrega `client_hash` com sal (§8.5).
   IP_HASH_SALT: z.string().min(1).optional(),
 
   // --- admin ingestion (#49) ---
@@ -217,7 +220,6 @@ export const envSchema = baseEnvSchema
     rankWInstalls: value.RANK_W_INSTALLS,
     rateLimitSearchPerMin: value.RATE_LIMIT_SEARCH_PER_MIN,
     rateLimitSearchPerDay: value.RATE_LIMIT_SEARCH_PER_DAY,
-    searchLogStoreText: value.SEARCH_LOG_STORE_TEXT,
     ipHashSalt: value.IP_HASH_SALT,
     adminToken: value.ADMIN_TOKEN,
     postgres: {

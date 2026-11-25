@@ -70,14 +70,15 @@ describe("ResultsPage", () => {
 
     renderResults();
 
-    expect(
-      await screen.findByText(
-        /categoria n\/a · estrelas n\/a · instalações n\/a · vulns n\/a/,
-      ),
-    ).toBeVisible();
-    expect(screen.getByText(/3 campos ausentes · confiança ×0\.82/)).toBeVisible();
-    // O `score` existe no contrato e continua numérico: `n/a` é só para o que veio `null`.
-    expect(screen.getByText("score 0.5100")).toBeVisible();
+    // O tópico é a linha da skill: nome com o `rank` do servidor e os três números.
+    const topic = await screen.findByRole("listitem");
+    expect(within(topic).getByText("1. sparse-skill")).toBeVisible();
+    // Regra 3: os três `null` do catálogo saem como `n/a` — nunca como `0`.
+    expect(within(topic).getAllByText("n/a")).toHaveLength(3);
+    expect(within(topic).queryByText("0")).toBeNull();
+    // O número do score e os fatores dele saíram da tela de propósito: a ordem é a da API, e o
+    // argumento do produto é a explicação, não a conta que o ranking fez.
+    expect(screen.queryByText(/score/)).toBeNull();
   });
 
   it("loads the permalink with exactly one GET and never repeats the search POST", async () => {
@@ -96,9 +97,10 @@ describe("ResultsPage", () => {
 
     // 1) Permalink puro (aba nova, URL colada): um `GET`, nenhum `POST`.
     renderResults();
-    expect(await screen.findByRole("heading", { name: "Resultados" })).toBeVisible();
-    // O permalink é endereçado pelo `request_id` visível, nunca pelo `search_id` interno.
-    expect(screen.getByLabelText("permalink")).toHaveValue(`http://localhost:5173${permalinkPath}`);
+    // A linha de status é o fim observável do `GET`: o texto muda quando a resposta chega.
+    expect(await screen.findByText("2 skills encontradas")).toBeVisible();
+    // O permalink é endereçado pelo `request_id`, nunca pelo `search_id` interno — o GET acima
+    // prova isso (o handler só responde ao `request_id`).
     expect(currentLocation()).toBe(permalinkPath);
     expect(gets).toBe(1);
     expect(posts).toBe(0);
@@ -109,7 +111,7 @@ describe("ResultsPage", () => {
     // 2) Chegando da busca (`location.state` + `?search=`): o state pinta a tela e o servidor
     // revalida com **um** `GET` — a busca não é refeita, então segue zero `POST`.
     renderResults({ pathname: "/results", search: `?search=${REQUEST_ID}`, state: { response: searchResponse } });
-    expect(await screen.findByRole("heading", { name: "Resultados" })).toBeVisible();
+    expect(await screen.findByText("2 skills encontradas")).toBeVisible();
     expect(gets).toBe(1);
     expect(posts).toBe(0);
 
@@ -118,9 +120,20 @@ describe("ResultsPage", () => {
 
     // 3) Sem `?search=` não há permalink a revalidar: o state é a única fonte, zero chamada.
     renderResults({ pathname: "/results", state: { response: searchResponse } });
-    expect(await screen.findByRole("heading", { name: "Resultados" })).toBeVisible();
+    expect(await screen.findByText("2 skills encontradas")).toBeVisible();
     expect(gets).toBe(0);
     expect(posts).toBe(0);
+  });
+
+  it("shows the question the search screen carried when the response has no query yet", async () => {
+    // Outra frente está acrescentando `query` à resposta; enquanto ele não chega, a transcrição
+    // abre com o texto que a navegação trouxe em `location.state.query`.
+    renderResults({
+      pathname: "/results",
+      state: { response: searchResponse, query: "extract tables from a pdf" },
+    });
+
+    expect(await screen.findByText("extract tables from a pdf")).toBeVisible();
   });
 
   it("shows the rate-limit message with the retry delay in seconds", async () => {
