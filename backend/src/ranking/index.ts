@@ -4,7 +4,14 @@
  * Import from `src/ranking`; the submodules are implementation details.
  */
 
-export { compareScored, compareSkillIds, tieCount, tieVulnerability } from './compare';
+export {
+  compareScored,
+  compareSkillIds,
+  RELEVANCE_TIE_NEUTRAL,
+  tieCount,
+  tieRelevance,
+  tieVulnerability,
+} from './compare';
 export {
   COUNTED_FIELDS,
   INSTALLS_ANCHOR,

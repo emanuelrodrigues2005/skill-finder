@@ -1,0 +1,52 @@
+# Lista curada do seed do catálogo — uma `source_key` (`owner/repo/slug`) por linha.
+#
+# Só entra chave que aparece no sitemap do skills.sh: o adaptador `html` da fonte
+# descarta chave ausente do sitemap antes de gastar requisição, então uma linha
+# inventada aqui viraria seed silenciosamente menor.
+#
+# Primeiro as obrigatórias: são as que o dono demonstra, e a ordem do arquivo é a
+# ordem do seed — se o limite cortar, o que sai é o fim da lista.
+
+# obrigatórias
+anthropics/skills/frontend-design
+mattpocock/skills/tdd
+vercel-labs/skills/find-skills
+anthropics/skills/webapp-testing
+
+# segurança e revisão de código
+addyosmani/agent-skills/security-and-hardening
+getsentry/skills/security-review
+better-auth/skills/better-auth-security-best-practices
+addyosmani/agent-skills/code-review-and-quality
+mattpocock/skills/code-review
+obra/superpowers/requesting-code-review
+
+# testes
+obra/superpowers/test-driven-development
+addyosmani/agent-skills/test-driven-development
+addyosmani/agent-skills/browser-testing-with-devtools
+currents-dev/playwright-best-practices-skill/playwright-best-practices
+antfu/skills/vitest
+
+# documentação
+addyosmani/agent-skills/documentation-and-adrs
+github/awesome-copilot/documentation-writer
+riekelt/technical-writer/writing-design-docs
+mattpocock/skills/writing-for-agents
+
+# refactor
+addyosmani/agent-skills/code-simplification
+github/awesome-copilot/refactor
+mattpocock/skills/request-refactor-plan
+
+# performance e interface
+cloudflare/skills/web-perf
+vercel-labs/agent-skills/vercel-react-best-practices
+addyosmani/web-quality-skills/accessibility
+
+# dados, backend e observabilidade
+supabase/agent-skills/supabase-postgres-best-practices
+prisma/skills/prisma-postgres
+kadajett/agent-nestjs-skills/nestjs-best-practices
+addyosmani/agent-skills/api-and-interface-design
+addyosmani/agent-skills/observability-and-instrumentation

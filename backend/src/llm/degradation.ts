@@ -33,6 +33,13 @@ export interface Degradation {
 /**
  * Compõe a degradação do status da LLM com o frescor do catálogo.
  *
+ * `low_confidence` cai hoje no rótulo `llm_unavailable` junto com `unavailable`,
+ * embora sejam fatos diferentes: **uma** é "a LLM respondeu com pouca confiança",
+ * **outra** é "a LLM não respondeu". O contrato só tem dois motivos
+ * (`source_stale`, `llm_unavailable`); separar os dois exigiria um terceiro valor
+ * em `DEGRADED_REASONS`, o que é mudança de contrato — por isso o rótulo grosseiro
+ * fica até essa decisão.
+ *
  * @param status como o passo de intenção terminou.
  * @param catalogStale `true` quando o snapshot do catálogo passou do limite.
  */

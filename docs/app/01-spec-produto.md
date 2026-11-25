@@ -214,10 +214,13 @@ Pesos são configuração (`RANK_W_STARS`, `RANK_W_VULNS`, `RANK_W_INSTALLS`), c
 ### 5.6 Desempate (ordem total, sempre resolve)
 
 1. `score` decrescente (comparação no valor **arredondado** em 4 casas, para que o critério exibido seja o critério usado).
-2. `vulnerability_count` crescente, usando o valor tratado (`vulnerability_count ?? 2,5` — o neutro de `P = 0,5`).
-3. `installs` decrescente (tratado: ausente = `0` apenas para desempate, nunca para o score).
-4. `stars` decrescente (mesma regra de tratamento).
-5. `skill_id` crescente (lexicográfico) — garante ordem estável mesmo com empate absoluto.
+2. `relevance` decrescente — o `ts_rank` do casamento entre a consulta e o `search_doc` da skill, calculado pela recuperação (ausente = `0`: ausência de evidência textual, nunca vantagem).
+3. `vulnerability_count` crescente, usando o valor tratado (`vulnerability_count ?? 2,5` — o neutro de `P = 0,5`).
+4. `installs` decrescente (tratado: ausente = `0` apenas para desempate, nunca para o score).
+5. `stars` decrescente (mesma regra de tratamento).
+6. `skill_id` crescente (lexicográfico) — garante ordem estável mesmo com empate absoluto.
+
+**Por que `relevance` vem logo depois do `score`:** entre skills populares a fórmula satura (`S = 1`, `P = 1`, `I = 1` → `0,765`), então o empate de `score` é o caso **comum**, não a exceção — e sem relevância no desempate quem escolhia a ordem era a popularidade: numa busca por "design frontend", `find-skills` (4,5 M instalações) vinha antes de `frontend-design`. Casamento textual é a evidência de que a skill responde ao pedido; popularidade só decide quando o casamento também empata. É dado de entrada do comparador, como o `score`: `ts_rank` já era calculado para ordenar os candidatos no `SELECT` e passou a ser devolvido com eles. A fórmula do `score` (§5.4) **não** muda — `relevance` nunca entra nela, e o número mostrado na interface continua sendo o `score`.
 
 ### 5.7 Exemplos numéricos (casos de teste obrigatórios)
 

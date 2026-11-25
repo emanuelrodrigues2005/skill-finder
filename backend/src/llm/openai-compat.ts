@@ -266,13 +266,15 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
       // `low_confidence` que voltasse como `cached` sairia com `degraded: false`
       // e a regra 7 falharia em silêncio na segunda busca idêntica.
       //
-      // `model`/`tokens` voltam `null` porque **nesta** requisição não houve
-      // chamada ao provedor (contrato de `search-response.dto.ts`): recontar os
-      // tokens de uma chamada antiga a cada hit mentiria sobre o custo.
+      // `tokens` volta `null` porque **nesta** requisição não houve chamada ao
+      // provedor: recontar os tokens de uma chamada antiga a cada hit mentiria
+      // sobre o custo. `model` **não** segue essa regra — um hit de cache que
+      // devolvesse `null` esconderia qual modelo produziu a intenção, e a
+      // procedência do dado tem de ser visível (regra 7 do `AGENTS.md`).
       return {
         intent: cached.intent,
         status: DEGRADED_BY_STATUS[cached.status] ? cached.status : 'cached',
-        model: null,
+        model: cached.model,
         tokens: null,
         // Sem esta linha o hit do cache perdia os termos em inglês e o FTS
         // voltava a receber a consulta crua (em PT) contra um `search_doc` em
@@ -388,10 +390,12 @@ export class OpenAICompatParser implements IntentParser, ExplainParser {
     const cacheKey = explainCacheKey(request, this.options.model);
     const cached = this.explainCache.get(cacheKey);
     if (cached !== null) {
-      // Hit de cache nao paga provedor: `model`/`tokens` voltam `null`, como no
-      // passo de intencao. `repaired` sobrevive ao hit - sobrescrever sempre com
-      // `cached` esconderia que a prosa precisou de conserto, o mesmo defeito
-      // que a #40 corrigiu no passo de intencao.
+      // Hit de cache nao paga provedor: `tokens` volta `null` porque nao houve
+      // chamada nesta requisicao. `model` ainda volta `null` AQUI: o passo de
+      // explicacao ficou de fora da correcao que devolve o modelo no hit de
+      // intencao, entao os dois caminhos divergem hoje de proposito. `repaired`
+      // sobrevive ao hit - sobrescrever sempre com `cached` esconderia que a prosa
+      // precisou de conserto, o mesmo defeito que a #40 corrigiu na intencao.
       return {
         ...cached,
         status: cached.status === 'repaired' ? 'repaired' : 'cached',

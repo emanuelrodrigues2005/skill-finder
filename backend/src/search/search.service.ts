@@ -68,7 +68,12 @@ import {
 } from './explanation';
 import { decodeSkillId } from './ids';
 import { mintSearchRequestId } from './request-id';
-import type { ListSkillsInput, SearchCatalog, SkillPage } from './search-catalog.port';
+import type {
+  ListSkillsInput,
+  SearchCandidate,
+  SearchCatalog,
+  SkillPage,
+} from './search-catalog.port';
 import type {
   SearchStore,
   StoredSearchInput,
@@ -487,7 +492,7 @@ export class SearchService {
    */
   private async rankAndExplain(
     query: string,
-    candidates: readonly SkillSummary[],
+    candidates: readonly SearchCandidate[],
     intent: Intent,
     limit: number,
     extraWarnings: readonly string[],
@@ -505,6 +510,9 @@ export class SearchService {
         stars: skill.stars,
         installs: skill.installs,
         vulnerability_count: skill.vulnerability_count,
+        // Desempate por casamento textual (§5.6.2); ausente no catálogo em
+        // memória, onde o comparador usa o neutro `0`.
+        relevance: skill.relevance,
       })),
       { excludeWithVulnerabilities: intent.filters.exclude_with_vulnerabilities },
       this.weights(),

@@ -946,7 +946,9 @@ components:
         model:
           type: string
           nullable: true
-          description: Model that answered; null without a call.
+          description: Model that produced the intent; on a cache hit it is the model that
+            produced the cached answer. null only when no intent could be
+            produced.
         cached:
           type: boolean
           description: True when the answer came from the search cache.

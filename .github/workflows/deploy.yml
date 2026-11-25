@@ -753,6 +753,10 @@ jobs:
             printf 'SHA=%q\n' "$SHA"
             printf 'DOCKERHUB_USER=%q\n' "$DOCKERHUB_USER"
             printf 'DB_PRIVATE_IP=%q\n' "$DB_PRIVATE_IP"
+            # A lista curada vem do repositório em vez de duas chaves fixas: com
+            # chaves explícitas o `ingest` nunca monta o rodízio, então o seed é o
+            # único caminho pelo qual o catálogo cresce em produção.
+            printf 'export SEED_KEYS=%q\n' "$(grep -vE '^[[:space:]]*(#|$)' scripts/dev/seed-skills.txt | tr -d '\r' | paste -sd ' ' -)"
             cat <<'REMOTE'
           # O AWS-RunShellScript executa como root: `apt-get` e o instalador da CLI
           # abaixo rodam sem `sudo`.
@@ -948,33 +952,69 @@ jobs:
           #
           # `127.0.0.1:8000` e a porta da api NESTE host: pela borda a chamada caia no
           # fallback da SPA e respondia 200 sem ingerir nada — o cenario de deploy
-          # verde com catalogo vazio. Por isso qualquer resposta fora de 2xx (menos o
-          # 409 de run concorrente, que e sucesso idempotente) reprova o job.
+          # verde com catalogo vazio. Por isso qualquer resposta fora de 2xx reprova
+          # o job.
           # `--retry-connrefused` e cinto do laco acima: um restart do container no
           # meio da espera nao pode custar o deploy.
-          code="$(curl -sS -m 180 --retry-connrefused --retry-delay 2 --retry 10 \
-            -o /tmp/ingest.json -w '%{http_code}' \
-            -X POST 'http://127.0.0.1:8000/api/v1/admin/ingest' \
-            -H "X-Admin-Token: ${ADMIN_TOKEN}" -H 'Content-Type: application/json' \
-            -d '{"source_keys":["vercel-labs/skills/find-skills","anthropics/skills/webapp-testing"]}' || true)"
-          head -c 400 /tmp/ingest.json 2> /dev/null; echo
-          case "$code" in
-            401) echo "ERRO: ADMIN_TOKEN recusado pela API (401)" >&2; exit 1 ;;
-            ''|0*) echo "ERRO: ingestao nao respondeu em 127.0.0.1:8000 (codigo '${code}')" >&2; exit 1 ;;
-            409) echo "::ingest-ok:: ingestao ${code} (run concorrente)" ;;
-            2??)
-              # O 202 so diz que o run COMECOU: fonte fora (`status:"failed"`) ou ciclo
-              # sem cobertura (`partial`) tambem voltam 202. Sem ler o corpo, o deploy
-              # ficaria verde com o catalogo vazio — o caso que a #74 existe para fechar.
-              # `items_upserted` e estavel em reingestao (`upsertSkills` devolve o
-              # tamanho do conjunto), entao > 0 nao gera falso vermelho.
-              if ! grep -q '"items_upserted":[1-9]' /tmp/ingest.json; then
-                echo "ERRO: ingestao ${code} nao gravou item ($(grep -o '"status":"[a-z]*"' /tmp/ingest.json 2> /dev/null || echo 'corpo vazio')); catalogo vazio" >&2
-                exit 1
-              fi
-              echo "::ingest-ok:: ingestao ${code}" ;;
-            *) echo "ERRO: ingestao respondeu '${code}'; o catalogo nao mudou e o ambiente subiria vazio" >&2; exit 1 ;;
-          esac
+          #
+          # Lotes de 20: a rota valida `ArrayMaxSize(20)` e responde 422 acima disso.
+          # Um lote por vez: o limitador e do servidor (1 req/s) e a segunda chamada
+          # durante um run leva 409 — paralelo so queimaria tentativa.
+          if [ -z "${SEED_KEYS:-}" ]; then
+            echo "ERRO: lista curada vazia (scripts/dev/seed-skills.txt); o deploy nao pode semear" >&2
+            exit 1
+          fi
+          read -r -a curadas <<< "$SEED_KEYS"
+          por_lote=20
+          lotes=$(((${#curadas[@]} + por_lote - 1) / por_lote))
+          lote=0
+          rm -f /tmp/ingest-lotes.json
+          for ((i = 0; i < ${#curadas[@]}; i += por_lote)); do
+            lote=$((lote + 1))
+            payload='{"source_keys":['
+            for key in "${curadas[@]:i:por_lote}"; do
+              payload+="\"${key}\","
+            done
+            payload="${payload%,}]}"
+            code=""
+            for tentativa in 1 2 3; do
+              code="$(curl -sS -m 180 --retry-connrefused --retry-delay 2 --retry 10 \
+                -o /tmp/ingest.json -w '%{http_code}' \
+                -X POST 'http://127.0.0.1:8000/api/v1/admin/ingest' \
+                -H "X-Admin-Token: ${ADMIN_TOKEN}" -H 'Content-Type: application/json' \
+                -d "$payload" || true)"
+              case "$code" in
+                409|429)
+                  echo "lote ${lote}/${lotes}: ${code} (tentativa ${tentativa}/3), aguardando 15s"
+                  sleep 15
+                  ;;
+                *) break ;;
+              esac
+            done
+            head -c 300 /tmp/ingest.json 2> /dev/null || true; echo
+            case "$code" in
+              401) echo "ERRO: ADMIN_TOKEN recusado pela API (401)" >&2; exit 1 ;;
+              ''|0*) echo "ERRO: ingestao nao respondeu em 127.0.0.1:8000 no lote ${lote} (codigo '${code}')" >&2; exit 1 ;;
+              409|429) echo "ERRO: lote ${lote}/${lotes} preso em ${code} apos 3 tentativas; outro run segura o catalogo" >&2; exit 1 ;;
+              # O corpo entra sem espaço depois dos dois-pontos: se um dia ele vier
+              # indentado, a checagem de `items_upserted` abaixo continua valendo.
+              2??) tr -d ' ' < /tmp/ingest.json >> /tmp/ingest-lotes.json ;;
+              *) echo "ERRO: lote ${lote}/${lotes} respondeu '${code}'; o catalogo nao mudou" >&2; exit 1 ;;
+            esac
+          done
+          upsertados="$(grep -o '"items_upserted":[0-9]*' /tmp/ingest-lotes.json 2> /dev/null | cut -d: -f2 | awk '{s+=$1} END{print s+0}' || true)"
+          echo "::ingest-ok:: ${lotes} lote(s), items_upserted somado ${upsertados:-0}"
+          # O 202 so diz que o run COMECOU: fonte fora (`status:"failed"`) ou ciclo
+          # sem cobertura (`partial`) tambem voltam 202. Sem ler o corpo, o deploy
+          # ficaria verde com o catalogo vazio — o caso que a #74 existe para fechar.
+          # `items_upserted` e estavel em reingestao (`upsertSkills` devolve o
+          # tamanho do conjunto), entao > 0 nao gera falso vermelho. A checagem e
+          # sobre os lotes somados: um lote que gravou item ja prova o caminho, e
+          # nenhum gravando e catalogo vazio.
+          if ! grep -q '"items_upserted":[1-9]' /tmp/ingest-lotes.json; then
+            echo "ERRO: ingestao (${lotes} lote(s)) nao gravou item ($(grep -o '"status":"[a-z]*"' /tmp/ingest-lotes.json 2> /dev/null | head -1 || echo 'corpo vazio')); catalogo vazio" >&2
+            exit 1
+          fi
           STEP
 
           infisical secrets-manager run --projectId "$INFISICAL_PROJECT_ID" --env "$INFISICAL_ENV" \

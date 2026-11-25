@@ -85,9 +85,23 @@ export interface SkillPage {
   readonly total_items: number;
 }
 
+/**
+ * Um candidato da recuperação: a linha do catálogo mais o quanto ela casa o
+ * texto da consulta.
+ *
+ * `relevance` é o `ts_rank` que o adaptador Postgres já calcula para ordenar os
+ * candidatos; sem ele o ranking empatava quase tudo em 0,765 e a popularidade
+ * decidia a ordem (§5.6.2). É **opcional** de propósito: um adaptador que não
+ * produz relevância (o duplo em memória) devolve `SkillSummary` puro e o
+ * comparador usa o neutro `0` — ausência de evidência textual, nunca vantagem.
+ */
+export interface SearchCandidate extends SkillSummary {
+  readonly relevance?: number;
+}
+
 export interface SearchCatalog {
-  /** Candidatos ativos do snapshot; `skill_id` já no formato público. */
-  search(input: SearchCatalogInput): Promise<readonly SkillSummary[]>;
+  /** Candidatos ativos do snapshot, com a relevância textual quando a fonte a tem. */
+  search(input: SearchCatalogInput): Promise<readonly SearchCandidate[]>;
 
   /** Linhas por id do banco, para o replay de um permalink (ordem não importa). */
   findByIds(ids: readonly bigint[]): Promise<readonly SkillSummary[]>;

@@ -363,7 +363,7 @@ describe('ranking (§5.3–§5.7)', () => {
 
     it('ranks a null vulnerability as 2.5 for ties only', () => {
       // Empate exato de score entre um item sem vulnerabilidade reportada e um
-      // com 2 vulnerabilidades; o desempate usa 2,5 contra 2 (§5.6.2).
+      // com 2 vulnerabilidades; o desempate usa 2,5 contra 2 (§5.6.3).
       const missing = {
         skill_id: 'missing',
         stars: 20000,
@@ -417,6 +417,112 @@ describe('ranking (§5.3–§5.7)', () => {
 
       expect(ranked[0].score).toBe(ranked[1].score);
       expect(order(ranked)).toEqual(['with-installs', 'no-installs']);
+    });
+
+    it('breaks a score tie by textual relevance, before popularity', () => {
+      // O sintoma de produção: numa busca por "design frontend" quase tudo
+      // satura em 0,765 (S = 1, P = 1, I = 1) e o critério de instalações
+      // entregava `find-skills` antes de `frontend-design`. `I` satura em 1 a
+      // partir de 200.000 instalações, então as duas têm o MESMO score e só o
+      // desempate pode decidir — e quem casa o texto é a resposta certa.
+      const popular = {
+        skill_id: 'find-skills',
+        stars: 20000,
+        installs: 900000,
+        vulnerability_count: 0,
+        relevance: 0.0001,
+      };
+      const matched = {
+        skill_id: 'frontend-design',
+        stars: 20000,
+        installs: 200000,
+        vulnerability_count: 0,
+        relevance: 0.6079,
+      };
+      const ranked = rank([popular, matched]);
+
+      // Pré-condição do caso: empate de score, senão o critério 2 nunca é lido.
+      expect(ranked[0].score).toBe(ranked[1].score);
+      expect(order(ranked)).toEqual(['frontend-design', 'find-skills']);
+    });
+
+    it('falls back to the previous chain when relevance ties', () => {
+      // Mesma relevância dos dois lados: os critérios anteriores à mudança
+      // continuam decidindo, na mesma ordem — instalações, estrelas, `skill_id`.
+      const relevance = 0.42;
+
+      // `I` satura em 1 nos dois (>= 200.000 instalações), logo score igual.
+      const byInstalls = rank([
+        { skill_id: 'low', stars: 1000, installs: 200000, vulnerability_count: 0, relevance },
+        { skill_id: 'high', stars: 1000, installs: 900000, vulnerability_count: 0, relevance },
+      ]);
+      expect(byInstalls[0].score).toBe(byInstalls[1].score);
+      expect(order(byInstalls)).toEqual(['high', 'low']);
+
+      // `S` satura em 1 nos dois (>= 20.000 estrelas): score, instalações e
+      // relevância empatam, então as estrelas decidem.
+      const byStars = rank([
+        { skill_id: 'small', stars: 20000, installs: 1000, vulnerability_count: 0, relevance },
+        { skill_id: 'big', stars: 50000, installs: 1000, vulnerability_count: 0, relevance },
+      ]);
+      expect(byStars[0].score).toBe(byStars[1].score);
+      expect(order(byStars)).toEqual(['big', 'small']);
+
+      // Empate absoluto: `skill_id` crescente fecha a ordem total.
+      const same = { stars: 1200, installs: 8000, vulnerability_count: 0, relevance };
+      const byId = rank([
+        { skill_id: 'zed', ...same },
+        { skill_id: 'alfa', ...same },
+      ]);
+      expect(byId[0].score).toBe(byId[1].score);
+      expect(order(byId)).toEqual(['alfa', 'zed']);
+    });
+
+    it('treats an absent relevance as the neutral 0', () => {
+      // Caminho do catálogo em memória: `SkillSummary` não carrega `ts_rank`, então
+      // o candidato chega sem `relevance`. O neutro documentado é 0 — ausência de
+      // evidência textual nunca vira vantagem nem quebra a ordenação.
+      const withoutRelevance = {
+        skill_id: 'aaa-without',
+        stars: 20000,
+        installs: 200000,
+        vulnerability_count: 0,
+      };
+      const withRelevance = {
+        skill_id: 'zzz-with',
+        stars: 20000,
+        installs: 200000,
+        vulnerability_count: 0,
+        relevance: 0.2,
+      };
+      const ranked = rank([withoutRelevance, withRelevance]);
+
+      expect(ranked.map((item) => item.rank)).toEqual([1, 2]);
+      expect(ranked[0].score).toBe(ranked[1].score);
+      // `zzz-with` perde no `skill_id` e ganha na relevância: quem decide é o neutro.
+      expect(order(ranked)).toEqual(['zzz-with', 'aaa-without']);
+
+      // O ausente vale exatamente o mesmo que `relevance: 0` explícito.
+      expect(order(rank([{ ...withoutRelevance, relevance: 0 }, withRelevance]))).toEqual(
+        order(ranked),
+      );
+
+      // Sem relevância de nenhum lado, a cadeia antiga continua no comando.
+      const bothAbsent = rank([
+        {
+          skill_id: 'zzz-rich',
+          stars: 1000,
+          installs: 900000,
+          vulnerability_count: 0,
+        },
+        {
+          skill_id: 'aaa-poor',
+          stars: 1000,
+          installs: 200000,
+          vulnerability_count: 0,
+        },
+      ]);
+      expect(order(bothAbsent)).toEqual(['zzz-rich', 'aaa-poor']);
     });
   });
 

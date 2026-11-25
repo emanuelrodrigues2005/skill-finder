@@ -112,11 +112,12 @@ describe('intent cache', () => {
     // Veio do cache mesmo (uma requisicao so)...
     expect(scope.isDone()).toBe(true);
     expect(second.intent).toEqual(first.intent);
-    // Contrato do hit ("null without a call"): nesta requisicao nao houve chamada
-    // ao provedor, entao nada e atribuido a ela — nem modelo, nem tokens.
+    // `tokens` do hit e `null`: nesta requisicao nao houve chamada ao provedor e
+    // recontar os da chamada antiga mentiria sobre o custo. `model` NAO segue essa
+    // regra: um hit de cache nao pode esconder qual modelo produziu a intencao.
     expect(first.model).toBe(MODEL);
     expect(first.tokens).toEqual({ prompt: 120, completion: 45 });
-    expect(second.model).toBeNull();
+    expect(second.model).toBe(MODEL);
     expect(second.tokens).toBeNull();
     // ...e a degradacao sobreviveu ao hit.
     expect(second.status).toBe('low_confidence');
@@ -124,6 +125,28 @@ describe('intent cache', () => {
     const degradation = resolveDegradation(second.status);
     expect(degradation.degraded).toBe(true);
     expect(degradation.degraded_reason).toBe('llm_unavailable');
+  });
+
+  /**
+   * Defeito medido em 2026-11-25: duas buscas iguais respondiam `llm.model: null`
+   * na segunda, porque o hit do cache zerava o campo. O `model` e o que explica
+   * qual provedor produziu a intencao — esconder isto no hit e o mesmo defeito
+   * da regra 7 (degradacao invisivel), so que na procedencia do dado.
+   */
+  it('reports the model that produced the intent on a cache hit', async () => {
+    // Um unico interceptor: a segunda chamada tem de vir do cache.
+    const scope = nock(ORIGIN).post(CHAT_PATH).once().reply(200, completion(VALID_CONTENT));
+    const client = parser();
+
+    const first = await client.parse(QUERY, CATEGORIES);
+    const second = await client.parse(QUERY, CATEGORIES);
+
+    expect(first.model).toBe(MODEL);
+    expect(scope.isDone()).toBe(true);
+    expect(second.status).toBe('cached');
+    expect(second.model).toBe(MODEL);
+    // Tokens continuam nao atribuidos ao hit: so o modelo e procedencia.
+    expect(second.tokens).toBeNull();
   });
 
   /** Controle: intencao saudavel continua virando `cached` (e nao degrada). */

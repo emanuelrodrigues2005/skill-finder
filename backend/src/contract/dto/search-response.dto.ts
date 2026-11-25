@@ -101,7 +101,8 @@ export class LlmInfo {
   @ApiProperty({
     type: String,
     nullable: true,
-    description: 'Model that answered; null without a call.',
+    description:
+      'Model that produced the intent; on a cache hit it is the model that produced the cached answer. null only when no intent could be produced.',
   })
   model!: string | null;
 

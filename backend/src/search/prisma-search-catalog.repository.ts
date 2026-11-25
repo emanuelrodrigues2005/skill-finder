@@ -20,6 +20,7 @@ import type { CategoryItem, SkillDetail, SkillSummary } from '../contract/dto/ca
 import { encodeSkillId } from './ids';
 import type {
   ListSkillsInput,
+  SearchCandidate,
   SearchCatalog,
   SearchCatalogInput,
   SkillPage,
@@ -58,6 +59,11 @@ interface SkillRow {
   skill_md_present: boolean;
 }
 
+/** Linha da busca: as colunas do resumo mais o `ts_rank` que o `ORDER BY` usa. */
+interface SearchRow extends SkillRow {
+  relevance: number;
+}
+
 interface SkillDetailRow extends SkillRow {
   summary: string | null;
   repo_url: string | null;
@@ -77,11 +83,16 @@ export class PrismaSearchCatalogRepository implements SearchCatalog {
    * **em inglês** que o passo de intenção entrega em `keywords`. Mandar a consulta
    * crua em português para o `tsquery` era o que devolvia zero. A consulta crua
    * continua no `ILIKE` do nome, onde o idioma do usuário é o que vale.
+   *
+   * O `ts_rank` sai no `SELECT` e não só no `ORDER BY`: é ele o desempate por
+   * relevância textual do §5.6.2. Deixá-lo só na ordenação daqui descartava a
+   * informação — o ranking recebia candidatos sem relevância e a popularidade
+   * vencia todo empate de score.
    */
-  async search(input: SearchCatalogInput): Promise<readonly SkillSummary[]> {
+  async search(input: SearchCatalogInput): Promise<readonly SearchCandidate[]> {
     const tsQuery = Prisma.sql`websearch_to_tsquery('english', ${ftsTerms(input)})`;
-    const rows = await this.prisma.$queryRaw<SkillRow[]>`
-      SELECT ${SUMMARY_COLUMNS}
+    const rows = await this.prisma.$queryRaw<SearchRow[]>`
+      SELECT ${SUMMARY_COLUMNS}, ts_rank(s.search_doc, ${tsQuery}) AS relevance
         FROM "skill" AS s
        WHERE s.is_active = true
          AND (${input.category}::text IS NULL OR s.category_slug = ${input.category})
@@ -95,7 +106,7 @@ export class PrismaSearchCatalogRepository implements SearchCatalog {
                 s.id ASC
        LIMIT ${input.limit}
     `;
-    return rows.map(toSummary);
+    return rows.map((row) => ({ ...toSummary(row), relevance: Number(row.relevance) }));
   }
 
   /**

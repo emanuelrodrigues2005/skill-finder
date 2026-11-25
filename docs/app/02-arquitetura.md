@@ -431,7 +431,7 @@ com `status="ok"` — são caches distintos (`kind` diferente em `llm_cache`).
 ### 6.4 Passo 5–6 — recuperação e ranking determinístico
 
 1. **Filtro duro:** `skill.is_active = true`; `security_status <> 'fail'`; se `category` informada, `category_slug = category`.
-2. **Recuperação lexical:** `to_tsvector('english', …)` sobre `search_doc` (nome + resumo), casado com `websearch_to_tsquery('english', …)` dos **termos em inglês da intenção** (`keywords_en`, caindo em `keywords` quando ausente); ranqueia por `ts_rank_cd`; se o resultado tiver menos de 5 itens, completa com similaridade `pg_trgm` sobre `name`; se ainda faltar, completa com os top-N da categoria por `installs`.
+2. **Recuperação lexical:** `to_tsvector('english', …)` sobre `search_doc` (nome + resumo), casado com `websearch_to_tsquery('english', …)` dos **termos em inglês da intenção** (`keywords_en`, caindo em `keywords` quando ausente); ranqueia por `ts_rank` e devolve esse valor no candidato como `relevance`; se o resultado tiver menos de 5 itens, completa com similaridade `pg_trgm` sobre `name`; se ainda faltar, completa com os top-N da categoria por `installs`.
 3. **Score determinístico** (idêntico ao de `01-spec-produto.md` §4):
 
 ```
@@ -443,7 +443,7 @@ score = round( (0.5*S + 0.3*P + 0.2*I) * (1 - 0.10*m), 4 )      # m = nº de cam
 ```
 
 - Campo ausente (`stars`, `installs`, `vulnerability_count`) → fator neutro **0,5** e `m += 1` (penalidade de 10% por campo, máximo 30%). Dado ausente nunca vira nota máxima.
-- Ordem total: `(-score, vulnerability_count, -installs, -stars, skill_id)` — empate resolve sempre, o mesmo catálogo produz a mesma lista.
+- Ordem total: `(-score, -relevance, vulnerability_count, -installs, -stars, skill_id)` — empate resolve sempre, o mesmo catálogo produz a mesma lista. `relevance` é o `ts_rank` que a recuperação já calcula; entra **só** no desempate, depois do `score` e antes de popularidade, porque skill popular satura `S` e `I` e empata em 0,765 — sem ele, "design frontend" devolvia `find-skills` antes de `frontend-design`. A fórmula do score não muda.
 - Exemplo (confere com o response da §5.3): stars 1200 / 0 vulns / 8000 installs → `S=0.7160`, `P=1.0`, `I=0.7364`, `score=0.8053`; stars 3000 / 2 vulns / 15000 installs → `0.7418` (perde por vulnerabilidade); stars 250 / dados ausentes → `0.4232`.
 
 ### 6.5 Passo 7–8 — explicação com conjunto fechado de IDs
