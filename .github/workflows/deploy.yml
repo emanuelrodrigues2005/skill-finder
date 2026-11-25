@@ -1227,7 +1227,7 @@ jobs:
           # default e loopback e o `tg-grafana` do ALB aponta para a 3000 da instancia.
           # `DOCKERHUB_USER`/`IMAGE_TAG` nao sao usados pela stack obs, mas o override
           # de prod os exige (`:?`) na interpolacao do arquivo inteiro.
-          export DOCKERHUB_USER IMAGE_TAG="$SHA" GRAFANA_BIND=0.0.0.0
+          export DOCKERHUB_USER IMAGE_TAG="$SHA" GRAFANA_BIND=0.0.0.0 GRAFANA_ADMIN_USER=ejtr2005
 
           cat > "$step" <<'STEP'
           set -euo pipefail

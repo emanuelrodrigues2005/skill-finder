@@ -327,6 +327,11 @@ services:
     environment:
       # Nunca literal: em produção quem preenche é o Infisical no ambiente do host.
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      # O login do admin e configuracao de primeiro boot: o Grafana grava o usuario
+      # no banco dele (volume `grafana-data`), nao no ambiente. Trocar esta variavel
+      # numa instalacao existente nao renomeia ninguem — o volume precisa ser
+      # recriado (`docker volume rm`) para o par usuario/senha ser semeado de novo.
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
       # O host pode não ter saída para a internet: telemetria e checagem de versão
