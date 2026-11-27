@@ -1,0 +1,1220 @@
+﻿% =====================================================================
+%  Documentação de Arquitetura Cloud/DevOps — Skill Finder
+%  Relatório técnico (não é artigo acadêmico): sem resumo/abstract
+%  acadêmico e sem bibliografia; as fontes são ADRs e arquivos do
+%  repositório, citados inline.
+%
+%  Motor: XeTeX (Tectonic). Nada de inputenc/fontenc.
+%  Fontes: arquivos .otf do bundle do TeX, resolvidos por nome de arquivo.
+%  O `fontconfig` desta máquina não carrega a configuração padrão, então a
+%  busca por nome de família cairia em fallback silencioso.
+% =====================================================================
+\documentclass[11pt,a4paper]{article}
+% `hyphens`: o \path quebra tambem em "-", entao caminho longo nao estoura a
+% margem nem depende de hifenizacao dentro de \texttt.
+\PassOptionsToPackage{hyphens}{url}
+
+\usepackage{fontspec}
+\setmainfont{LibertinusSerif}[Extension=.otf, UprightFont=*-Regular,
+  BoldFont=*-Bold, ItalicFont=*-Italic, BoldItalicFont=*-BoldItalic, Ligatures=TeX]
+\setmonofont{Inconsolatazi4-Regular}[Extension=.otf, BoldFont=Inconsolatazi4-Bold,
+  Ligatures=TeX, Scale=0.90, HyphenChar=None]
+
+\usepackage[brazilian]{babel}
+\usepackage{geometry}
+\geometry{a4paper,top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,headsep=0.8cm}
+\usepackage{microtype}
+\usepackage{setspace}
+\setstretch{1.10}
+\usepackage{graphicx}
+% Caminho das figuras: o Tectonic resolve caminho relativo a partir do
+% DIRETORIO DO ARQUIVO PRINCIPAL (docs/arquitetura/), nao da raiz do repositorio
+% --- verificado com sonda em 26/11/2026. Por isso o caminho e
+% "build/figuras/<nome>.pdf", que tambem e alcancado pelo Pandoc via
+% --resource-path=docs/arquitetura. A extensao e explicita de proposito.
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+\urlstyle{tt}
+
+% ---------- tipografia e espaçamento ----------
+\setlength{\parindent}{1.25cm}
+\setlength{\parskip}{0pt}
+\setlength{\emergencystretch}{2em}
+\renewcommand{\arraystretch}{1.18}
+\setlength{\tabcolsep}{5pt}
+
+\titleformat{\section}{\large\bfseries}{\thesection}{0.7em}{}
+\titlespacing*{\section}{0pt}{1.4ex plus .3ex}{0.6ex}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\titlespacing*{\subsection}{0pt}{1.1ex plus .2ex}{0.4ex}
+\setcounter{secnumdepth}{2}
+\setcounter{tocdepth}{2}
+\renewcommand{\topfraction}{0.92}
+\renewcommand{\bottomfraction}{0.55}
+\renewcommand{\textfraction}{0.08}
+\renewcommand{\floatpagefraction}{0.95}
+
+% ---------- legendas: "Figura N — ..." e "Tabela N — ..." ----------
+\DeclareCaptionLabelSeparator{ptdash}{\space---\space}
+\captionsetup{font=small,labelfont=bf,labelsep=ptdash,justification=centering,skip=4pt}
+\captionsetup[table]{position=above,skip=3pt}
+
+% ---------- cabeçalho e rodapé ----------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize Skill Finder — Arquitetura Cloud/DevOps}
+\fancyhead[R]{\footnotesize UFRPE · Computação em Nuvem}
+\fancyfoot[C]{\footnotesize\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\renewcommand{\footrulewidth}{0pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\footnotesize\thepage}%
+  \renewcommand{\headrulewidth}{0pt}}
+
+% ---------- listas mais compactas ----------
+\setlist[itemize]{leftmargin=1.4em,itemsep=2pt,topsep=3pt,parsep=0pt}
+\setlist[enumerate]{leftmargin=1.7em,itemsep=2pt,topsep=3pt,parsep=0pt}
+
+% ---------- colunas de tabela ----------
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+
+
+\begin{document}
+
+% =====================================================================
+%  CAPA
+%  Escrita como bloco centralizado, e nao com o ambiente `titlepage`: o Pandoc
+%  joga o conteudo de `titlepage` para o fim do DOCX. Assim a capa fica na
+%  posicao certa nos dois formatos.
+% =====================================================================
+\thispagestyle{empty}
+\begin{center}
+  \vspace*{1.9cm}
+
+  {\large\bfseries Universidade Federal Rural de Pernambuco\par}
+  {\normalsize Departamento de Computação\par}
+  \vspace{0.3cm}
+  \rule{\textwidth}{0.4pt}
+  \vspace{1.5cm}
+
+  {\Large\bfseries Documentação de Arquitetura\par}
+  \vspace{0.35cm}
+  {\Large\bfseries Cloud/DevOps\par}
+  \vspace{0.9cm}
+  {\large Skill Finder --- busca em linguagem natural por\par}
+  {\large skills de agente no catálogo do skills.sh\par}
+
+  \vspace{2.3cm}
+  {\normalsize\bfseries Emanuel José Tenório Rodrigues\par}
+  \vspace{0.5cm}
+  {\normalsize Computação em Nuvem\par}
+  {\normalsize Projeto 2\par}
+
+  \vspace{2.6cm}
+  {\normalsize Recife\par}
+  {\normalsize 2026\par}
+\end{center}
+\clearpage
+
+% =====================================================================
+%  RESUMO EXECUTIVO
+% =====================================================================
+\thispagestyle{plain}
+\section*{Resumo executivo}
+\addcontentsline{toc}{section}{Resumo executivo}
+
+O Skill Finder é uma aplicação web que recebe, em linguagem natural, a descrição da skill de
+agente que o usuário procura, interpreta a intenção com um modelo de linguagem, consulta o catálogo
+do skills.sh e devolve uma lista ranqueada e explicada. Este documento descreve a arquitetura de
+nuvem e o processo de entrega que colocam essa aplicação em execução na AWS Academy, com três
+máquinas virtuais, um Application Load Balancer e implantação por SSM, sem acesso SSH.
+
+A arquitetura tem uma decisão central: o endereço público do projeto é o nome DNS do balanceador,
+não o endereço IP de uma instância (\path{infra/alb.tf}). Em torno dela organizam-se as demais:
+três instâncias, uma por papel --- borda nginx, API e banco ---, fatiadas por \emph{profiles} do
+mesmo \texttt{compose.yaml}; o PostgreSQL 16 em contêiner na própria instância do banco, porque o
+RDS está fora por medição e não por preferência (\path{docs/app/02-arquitetura.md}, ADR-012);
+quatro \emph{security groups} que se referenciam entre si, de modo que a porta 8000 só exista para
+o balanceador; e a stack de observabilidade na instância da API, porque só ela alcança
+\texttt{api:8000} pela rede do compose (ADR-009 e ADR-013).
+
+O documento é honesto sobre o que a arquitetura não é. As três instâncias ficam na mesma zona de
+disponibilidade, o banco é ponto único de falha e o balanceador é ponto único de entrada: isso é
+endereçamento e roteamento, não tolerância a falhas. A borda opera em HTTP puro, sem TLS, porque a
+conta do laboratório não oferece domínio nem certificado. E a infraestrutura não fica no ar: ela é
+criada por \texttt{apply} antes de cada demonstração e destruída ao fim da janela (ADR-017), o que
+mantém o custo de \textbf{0,1147 US\$ por hora} dentro do crédito de US\$ 50 do semestre ---
+436 horas, ou 18,2 dias, se a stack fosse deixada ligada.
+
+O texto cobre dezoito capítulos: contexto e objetivos, requisitos, visão geral, as dezessete
+decisões arquiteturais registradas em ADR, planejamento de rede, os seis componentes com o mesmo
+molde de sete blocos, controles de segurança, fluxo de comunicação, controle de acesso, rotas,
+escalabilidade, CI/CD, observabilidade, custos, rastreabilidade das 9 milestones e 64 issues,
+limitações e melhorias futuras. Quatro diagramas vetoriais em TikZ acompanham o texto. Toda
+afirmação numérica é rastreável a um arquivo do repositório, citado no ponto em que aparece.
+
+\clearpage
+{\small\tableofcontents}
+\clearpage
+
+% =====================================================================
+\section{Introdução}
+% =====================================================================
+
+O projeto nasceu como uma aplicação de página única com uma API própria, executada em um único
+hospedeiro com Docker Compose. A entrega final a transforma em uma arquitetura distribuída na AWS
+Academy: três máquinas virtuais com papéis distintos, um Application Load Balancer na frente e um
+pipeline que implanta por SSM RunCommand sem abrir a porta 22. A migração não reescreveu a
+aplicação --- reescreveu a infraestrutura, e é isso que este documento descreve.
+
+O produto é o Skill Finder. O usuário escreve o que precisa em português; a API interpreta a
+intenção com um modelo de linguagem, consulta o catálogo do skills.sh e devolve uma lista de skills
+ranqueada e explicada. Quatro invariantes definem a arquitetura tanto quanto o número de
+máquinas:
+o \emph{ranking} é determinístico, produzido por uma função pura em \path{backend/src/ranking},
+sem efeitos colaterais e sem relógio; o modelo interpreta e redige o porquê, nunca escolhe a ordem;
+e dado ausente é \texttt{null}, jamais zero, de modo que a interface mostra \texttt{n/a} em vez de
+inventar um número. A quarta invariante é de operação: a degradação é visível, e a resposta chega
+à tela com \texttt{degraded: true} quando a interpretação cai para o fallback por palavras-chave.
+
+A infraestrutura vive em \path{infra/}, em Terraform com \emph{state} remoto em S3. O pipeline
+vive em \path{.github/workflows/deploy.yml}. A operação vive em
+\path{docs/runbook-operacao.md}. As decisões que explicam o desenho estão registradas como
+dezessete ADRs em \path{docs/app/02-arquitetura.md} §10, e são citadas por número ao longo do
+texto em vez de repetidas.
+
+O documento cobre a arquitetura da janela F7: o que existe, por que existe, como é criado, como é
+validado e quanto custa. Não cobre o código da aplicação além do que a infraestrutura precisa saber
+--- portas, caminhos de sonda e variáveis de ambiente. Também não promete disponibilidade: a
+infraestrutura é efêmera por decisão, e o capítulo 12 e o capítulo 17 dizem exatamente o que isso
+significa.
+
+% =====================================================================
+\section{Objetivos da Arquitetura}
+% =====================================================================
+
+Seis objetivos guiam o desenho. Cada um deles tem uma consequência verificável em arquivo, e é por
+isso que eles aparecem aqui antes dos requisitos.
+
+\begin{enumerate}
+  \item \textbf{Endereço externo estável.} A aplicação precisa de um nome que sobreviva a
+        \texttt{stop}, \texttt{start} e a um \texttt{apply} de rotina. O nome DNS do balanceador
+        cumpre isso; o IP público de uma instância, não. É a ADR-010 e a razão de existir do
+        \path{infra/alb.tf}.
+  \item \textbf{Separação de camadas por exposição.} A borda precisa da porta 80 aberta ao mundo; o
+        banco não precisa de porta nenhuma. Três instâncias com um \emph{security group} cada uma
+        transformam essa diferença em regra de rede, e não em disciplina de operador (ADR-011).
+  \item \textbf{Dado fora da internet.} O PostgreSQL só aceita conexão da camada da API, na porta
+        5432, referenciando o \emph{security group} de origem --- nunca um bloco CIDR
+        (\path{infra/network.tf}).
+  \item \textbf{Comunicação controlada.} O navegador fala apenas com a borda; a chave do provedor
+        de modelo vive só no processo da API; a saída das instâncias é limitada a 80 (repositório do
+        \texttt{apt}) e 443 (Docker Hub e provedor do modelo).
+  \item \textbf{Custo de laboratório.} A stack precisa caber em um crédito de US\$ 50 por semestre.
+        O desenho escolhe instâncias \texttt{t3.micro} e \texttt{t3.small}, um volume de 20 GiB em cada
+        instância com estado e uma janela com \texttt{destroy} no fim (ADR-017).
+  \item \textbf{Repetibilidade.} Qualquer pessoa com a sessão do laboratório aberta recria o
+        ambiente a partir do repositório: \texttt{apply} cria os 38 recursos, o pipeline publica as
+        imagens e o \texttt{smoke} prova a borda. Nada é configurado à mão no console.
+\end{enumerate}
+
+% =====================================================================
+\section{Requisitos da Solução}
+% =====================================================================
+
+Este capítulo fixa o que a arquitetura tem de atender, separado em cinco grupos. Os requisitos
+funcionais vêm do contrato da API; os não funcionais, dos limites do laboratório; os de segurança,
+do edital e das ADRs; os de disponibilidade, do que o desenho realmente entrega; e os de custo, do
+crédito do semestre.
+
+\subsection{Requisitos funcionais}
+
+\begin{itemize}
+  \item \textbf{Busca em linguagem natural} por \path{POST /api/v1/search}, com resposta
+        ranqueada e explicada, e \emph{permalink} por \texttt{GET /api/v1/searches/\{request\_id\}}.
+  \item \textbf{Catálogo consultável} por \path{GET /api/v1/skills} e
+        \texttt{GET /api/v1/skills/\{skill\_id\}}, com as categorias em
+        \path{GET /api/v1/categories}.
+  \item \textbf{Ingestão administrativa} do catálogo por \path{POST /api/v1/admin/ingest},
+        protegida por token, e o histórico das execuções em
+        \path{GET /api/v1/admin/ingest/runs}.
+  \item \textbf{Sondas de operação} em \path{/healthz} (processo vivo) e \path{/readyz}
+        (banco alcançável), ambas consumidas pelo balanceador e pelo \texttt{smoke}.
+  \item \textbf{Interface web} servida como página única na raiz do domínio da borda, em português.
+  \item \textbf{Painel de observabilidade} alcançável pela borda em \path{/grafana/}, atrás de
+        login.
+\end{itemize}
+
+Os nove caminhos de API listados acima, mais \path{/metrics}, são os que constam em
+\texttt{openapi.yaml}; \path{/grafana/} é rota do balanceador, não do contrato. O contrato é
+gerado pelos decoradores do \texttt{@nestjs/swagger} e a divergência entre o arquivo versionado e o
+gerado é tratada como erro de build.
+
+\subsection{Requisitos não funcionais}
+
+\begin{itemize}
+  \item \textbf{Portas e processos fixos}: borda em 80, API em 8000, painel em 3000, banco em 5432.
+        São eles que o balanceador, os \emph{security groups} e o \texttt{smoke} conhecem.
+  \item \textbf{Persistência fora do disco raiz}: o volume EBS de dados é montado em
+        \path{/var/lib/docker} inteiro, de modo que imagens, camadas e o volume nomeado do
+        PostgreSQL sobrevivam à recriação da instância (\path{infra/storage.tf}).
+  \item \textbf{Metadados por IMDSv2}: \texttt{http\_\allowbreak{}tokens = "required"} e \emph{hop limit} 1 em
+        todas as instâncias (\path{infra/compute.tf}).
+  \item \textbf{Idempotência de infraestrutura}: \texttt{terraform apply} duas vezes seguidas não
+        altera nada, e o \emph{state} remoto com \texttt{use\_lockfile} impede duas execuções
+        simultâneas.
+  \item \textbf{Registro de log com teto}: todos os nove serviços do compose declaram
+        \texttt{max-size: 10m} e \texttt{max-file: "3"}, senão o \emph{driver} \texttt{json-file}
+        cresce sem limite dentro dos 20 GiB de EBS.
+\end{itemize}
+
+\subsection{Requisitos de segurança}
+
+A superfície pública é uma só: a porta 80 do balanceador. A partir dela, cada salto é autorizado por
+referência a \emph{security group}, e não por endereço. Nenhum segredo de aplicação existe em disco
+no hospedeiro nem como variável do repositório: os seis valores vivem no Infisical e são injetados
+no ambiente do processo no momento do deploy (\path{docs/seguranca.md}). A porta 22 nasce fechada
+e o acesso administrativo é por SSM Session Manager. Os riscos que não puderam ser eliminados ---
+entre eles a ausência de TLS na borda --- estão declarados no capítulo 17 em vez de omitidos.
+
+\subsection{Disponibilidade e escalabilidade}
+
+Este é o requisito que a arquitetura \emph{não} atende no sentido corrente, e o documento não
+disfarça isso. As três instâncias ocupam a mesma subnet \emph{default}, na mesma zona de
+disponibilidade; o banco é ponto único de falha; o balanceador é ponto único de entrada. O que a
+arquitetura entrega é endereço estável, separação de camadas e substituição de instância por
+recriação --- não continuidade durante a queda de uma zona. O capítulo 12 detalha o que escala
+hoje, o que não escala e qual seria o caminho honesto para mudar isso.
+
+\subsection{Custo e restrição de laboratório}
+
+O crédito do semestre é de US\$ 50 e a stack custa 0,1147 US\$ por hora
+(\path{docs/runbook-operacao.md} §5). Isso compra 436 horas, ou 18,2 dias de stack ligada ---
+menos que o semestre. A restrição não é um detalhe administrativo: ela é a razão do
+\texttt{destroy} ao fim de cada janela (ADR-017), da escolha de tipos pequenos, do volume de 20 GiB
+e da ausência de qualquer recurso gerenciado que cobre por hora ociosa além do
+balanceador. O capítulo 15 apresenta a conta aberta.
+
+% =====================================================================
+\section{Visão Geral da Arquitetura}
+% =====================================================================
+
+Um pedido de busca percorre cinco saltos. O navegador resolve o nome DNS do balanceador e conecta na
+porta 80; o \emph{listener} aplica a regra de caminho e encaminha \path{/api/*} ao grupo de alvos
+\texttt{tg-api}; o \texttt{tg-api} entrega à instância da API na porta 8000, que valida a entrada,
+consulta o PostgreSQL na porta 5432 na instância do banco e responde. A página única é o destino
+padrão do \emph{listener}: qualquer caminho que não seja \path{/api/*}, \path{/healthz},
+\path{/readyz} ou \path{/grafana/*} vai para o \texttt{tg-web} e é servido pelo nginx da borda.
+O painel tem prefixo próprio, e por isso um único salto do balanceador chega ao Grafana
+(ADR-013 e ADR-014).
+
+A Figura~\ref{fig:visao} mostra o conjunto: as três instâncias na mesma subnet, os dois volumes EBS,
+os três grupos de alvos e a cadeia de suprimento que age sobre as máquinas --- GitHub Actions por
+SSM, Docker Hub no \emph{pull} das imagens, Infisical na injeção dos segredos e o bucket S3 que
+guarda o \emph{state} do Terraform.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{build/figuras/arquitetura.pdf}
+  \caption{Visão geral da arquitetura da janela: entrada pelo balanceador, três instâncias por
+  papel e a cadeia de suprimento que atua sobre elas.}
+  \label{fig:visao}
+  {\small\itshape Fonte: elaboração própria a partir de \path{infra/alb.tf}, \path{infra/network.tf},
+  \path{infra/compute.tf} e \path{infra/storage.tf}.}
+\end{figure}
+
+Nada nessa figura é redundante, e é importante que seja assim: cada caixa é um recurso que o
+\texttt{terraform plan} lista, ou um serviço externo que alguma credencial alcança. O que não existe
+está igualmente explícito --- não há NAT gateway, não há sub-rede privada criada pelo projeto, não
+há cache externo e não há segundo balanceador.
+
+% =====================================================================
+\section{Decisões Arquiteturais}
+% =====================================================================
+
+As dezessete decisões estão registradas como ADR em \path{docs/app/02-arquitetura.md} §10, cada
+uma com contexto, alternativas e consequências. A Tabela~\ref{tab:adr} resume o conjunto; em seguida,
+as oito decisões que estruturam a arquitetura distribuída são explicadas em três ou quatro linhas
+cada. As demais são decisões de aplicação e ficam na referência.
+
+\begin{table}[tb]
+\caption{As dezessete decisões arquiteturais registradas, na ordem em que foram tomadas.}
+\label{tab:adr}
+\centering\small
+\begin{tabularx}{\textwidth}{cX}
+\toprule
+\textbf{ADR} & \textbf{Decisão} \\
+\midrule
+001 & A LLM interpreta e explica; o ranking é determinístico. \\
+002 & Busca lexical em Postgres na v1; embeddings só com evidência de recall ruim. \\
+003 & \texttt{SkillSource} com adaptadores \texttt{json}, \texttt{html} e \texttt{fixture} por configuração. \\
+004 & Conjunto fechado de identificadores e \emph{placeholders} contra alucinação e injeção. \\
+005 & Monorepo com \path{backend/} e \path{frontend/} em um único compose. \\
+006 & Cache, rate limit e agendador dentro da API, com Postgres --- sem serviço externo. \\
+007 & Backend em NestJS em vez de FastAPI. \\
+008 & Categoria só existe quando uma fonte a publica. \\
+009 & Cinco contêineres de observabilidade no compose da raiz, sem Telegraf e sem cAdvisor. \\
+010 & O balanceador na frente: DNS estável em vez do IP público de uma instância. \\
+011 & Três VMs, uma por papel, fatiadas por \emph{profile} do mesmo compose. \\
+012 & O banco continua em instância com PostgreSQL em contêiner; RDS está fora por medição. \\
+013 & A observabilidade vive na VM da API, e \path{/grafana/} é regra do balanceador. \\
+014 & O balanceador roteia por caminho; o nginx da borda não fala com o backend. \\
+015 & O cliente é identificado pelo \texttt{X-Forwarded-For} do balanceador; \texttt{X-Real-IP} deixa de ser confiável. \\
+016 & Deploy em três alvos por \texttt{tag:role}, em série \texttt{db} $\rightarrow$ \texttt{api} $\rightarrow$ \texttt{web}. \\
+017 & Operação em janela: \texttt{apply} antes da demonstração, \texttt{destroy} no fim. \\
+\bottomrule
+\end{tabularx}
+{\small\itshape Fonte: \path{docs/app/02-arquitetura.md} §10.}
+\end{table}
+
+\textbf{Balanceador em vez de IP público (ADR-010).} O IP público identifica \emph{uma} instância,
+muda a cada \texttt{apply} e não sobrevive ao \texttt{destroy}. Com três VMs, o endereço deixaria de
+ser detalhe para virar contrato: o \texttt{smoke}, o runbook e a demonstração dependeriam de um valor
+que muda. O nome DNS do balanceador é o único endereço que sobrevive. A prova de que ele cria,
+fica ativo e destrói sem órfão está em \path{docs/evidencias/f7-alb-probe.txt}: ativo em 121
+segundos, removido em 153.
+
+\textbf{Três VMs em vez de uma (ADR-011).} Numa única \texttt{t3.small} de 2 GiB, a borda com a
+porta 80 aberta ao mundo, a API, o banco e cinco contêineres de observabilidade disputam memória ---
+os limites somados da stack de observabilidade são 1,22 GiB. E misturam-se exposições que não têm
+relação: a borda precisa ser pública, o banco não precisa de porta nenhuma. Três instâncias com um
+\emph{security group} cada transformam essa diferença em regra de rede.
+
+\textbf{PostgreSQL em instância, não em RDS (ADR-012).} RDS foi descartado por medição: a conta do
+laboratório não tem nenhum DB \emph{subnet group}, e o sandbox não permite criar o que faltaria.
+Aurora tem o mesmo bloqueio. O banco é o mesmo PostgreSQL 16 da v1, com \texttt{tsvector} e
+\texttt{pg\_trgm}, agora em contêiner na VM \texttt{db}, com volume EBS dedicado e \emph{snapshot}
+manual como único backup.
+
+\textbf{Roteamento por caminho (ADR-014).} Quatro regras de \emph{listener} separam
+\path{/api/*}, \path{/healthz}, \path{/readyz} e \path{/grafana/*}; todo o resto cai no
+grupo da borda. A consequência prática é que o \texttt{\$remote\_addr} que o nginx escreveria nunca
+vira a identidade do cliente, o que preserva o rate limit por IP da ADR-015.
+
+\textbf{X-Forwarded-For em vez de X-Real-IP (ADR-015).} O balanceador não escreve
+\texttt{X-Real-IP} e não remove cabeçalho do cliente: manter a leitura antiga entregaria ao atacante
+a escolha do próprio \texttt{client\_hash}. A identidade passa a ser a última entrada do
+\texttt{X-Forwarded-For}, com \texttt{trust proxy = 1}. A correção só vale porque a porta 8000 é
+inalcançável fora do \texttt{sg-alb} --- é garantia de rede, não de código.
+
+\textbf{Deploy por SSM em série (ADR-016).} Um \texttt{ssm\_run} por papel, na ordem
+\texttt{db} $\rightarrow$ \texttt{api} $\rightarrow$ \texttt{web}, com a migração do Prisma antes de
+subir a API. Em paralelo, a migração rodaria na mesma hora em que a API sobe, e o
+\texttt{DATABASE\_URL} --- montado no script a partir do IP privado do banco --- apontaria para um
+alvo que ainda não terminou de subir.
+
+\textbf{Observabilidade no hospedeiro da API (ADR-009 e ADR-013).} O Prometheus só alcança
+\texttt{api:8000} pela rede do compose, porque \path{/metrics} responde 404 na borda. Logo, a
+stack tem de estar na mesma máquina da API. Se ela cair, API e painel caem juntos --- aceito, porque
+é o hospedeiro da aplicação.
+
+\textbf{Janela com \texttt{destroy} (ADR-017).} Deixar ligado consome o crédito em 18,2 dias, e uma
+semana esquecida custa 19,30 US\$, isto é, 39\% do crédito. A operação é \texttt{apply} antes da
+demonstração, \emph{snapshot} do banco, demonstração, \texttt{destroy} e varredura de órfãos.
+
+% =====================================================================
+\section{Planejamento de Rede}
+% =====================================================================
+
+A rede não é criada pelo projeto: o Terraform lê a VPC \emph{default} da conta por \texttt{data},
+não por \texttt{resource}. Criar VPC, subnets e \emph{internet gateway} acrescentaria recursos que o
+\texttt{destroy} pode deixar órfãos, e o laboratório já entrega a rede pronta
+(\path{docs/02-aws-academy-limites-e-riscos.md} §3.1). O que o projeto controla é o
+posicionamento, a exposição e o fluxo entre camadas.
+
+\subsection{Estrutura de rede}
+
+A conta tem seis subnets \emph{default}, em seis zonas de disponibilidade de \texttt{us-east-1}
+(\texttt{us-east-1a} a \texttt{us-east-1f}). As três instâncias usam a primeira em ordem alfabética
+--- a ordenação fixa a subnet entre \texttt{apply}s, porque a ordem devolvida pela API não é estável
+e trocar de subnet recriaria a instância (\path{infra/network.tf}). O balanceador exige duas
+zonas: ele ocupa a subnet das instâncias mais a próxima em ordem alfabética, e o filtro
+\texttt{default-for-az} impede que uma subnet criada à mão entre na lista e faça o mapa
+\texttt{az => id} colapsar (\path{infra/alb.tf}).
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{build/figuras/rede.pdf}
+  \caption{Rede: VPC padrão, as duas zonas do balanceador, a subnet das três instâncias e a cadeia de
+  \emph{security groups} com a porta de cada salto.}
+  \label{fig:rede}
+  {\small\itshape Fonte: elaboração própria a partir de \path{infra/network.tf} e \path{infra/alb.tf}.}
+\end{figure}
+
+O resultado é uma assimetria deliberada: o balanceador está em duas zonas, as instâncias em uma, como
+a Figura~\ref{fig:rede} mostra. É a assimetria que o serviço de balanceamento permite sem exigência
+de multi-AZ do lado do alvo, e ela é a razão de o capítulo 12 dizer que não há tolerância à perda de
+zona.
+
+\subsection{Endereçamento e security groups}
+
+Nenhuma regra de entrada das camadas internas usa bloco CIDR. Cada camada referencia o
+\emph{security group} que a chama, o que mantém a regra correta depois de qualquer
+\texttt{stop}/\texttt{start}, quando o endereço privado muda. A Tabela~\ref{tab:sg} lista as regras de
+entrada de cada um dos quatro grupos e as saídas de cada grupo.
+
+\begin{table}[tb]
+\caption{Security groups: entrada, saída e a razão de cada regra.}
+\label{tab:sg}
+\centering\small
+\begin{tabularx}{\textwidth}{p{1.6cm}p{4.6cm}p{4.2cm}X}
+\toprule
+\textbf{Grupo} & \textbf{Entrada} & \textbf{Saída} & \textbf{Razão} \\
+\midrule
+\texttt{sg-alb} & 80 de \texttt{0.0.0.0/0} & 80 para \texttt{sg-web}; 8000 e 3000 para \texttt{sg-api} &
+  única porta pública da conta; a saída é restrita às camadas que ele serve. \\
+\texttt{sg-web} & 80 de \texttt{sg-alb} & 80 e 443 para \texttt{0.0.0.0/0} &
+  o nginx só aceita do balanceador; \texttt{apt} no primeiro boot e Docker Hub no \emph{pull}. \\
+\texttt{sg-api} & 8000 e 3000 de \texttt{sg-alb}; 22 opcional &
+  80 e 443 para \texttt{0.0.0.0/0}; 5432 para \texttt{sg-db} & a API não tem porta pública; a regra 22 só existe com
+  \texttt{allowed\_ssh\_cidrs} preenchido. \\
+\texttt{sg-db} & 5432 de \texttt{sg-api} & 80 e 443 para \texttt{0.0.0.0/0} &
+  o banco não recebe nada da internet nem do balanceador. \\
+\bottomrule
+\end{tabularx}
+{\small\itshape Fonte: \path{infra/network.tf}.}
+\end{table}
+
+As regras ficam em recursos \texttt{aws\_\allowbreak{}vpc\_\allowbreak{}security\_\allowbreak{}group\_\allowbreak{}*\_\allowbreak{}rule}, e não em blocos
+\emph{inline}. A escolha não é estética: \texttt{alb} $\rightarrow$ \texttt{web} e
+\texttt{web} $\rightarrow$ \texttt{alb} se referenciam, e declarar os dois lados \emph{inline} fecha
+um ciclo que o Terraform recusa com \texttt{Cycle: aws\_\allowbreak{}security\_\allowbreak{}group.alb,
+aws\_\allowbreak{}security\_\allowbreak{}group.web}. A alternativa seria fixar CIDR, exatamente o que se quer evitar.
+
+\subsection{Fluxo de portas}
+
+A Tabela~\ref{tab:portas} fecha o planejamento de rede com o fluxo completo --- quem fala com quem,
+em que porta e com qual credencial. É a mesma informação que os \emph{security groups} codificam,
+lida na direção do tráfego.
+
+\begin{table}[tb]
+\caption{Fluxo de portas entre as camadas, com a credencial de cada salto.}
+\label{tab:portas}
+\centering\small
+\begin{tabularx}{\textwidth}{p{3.4cm}p{1.5cm}p{2.6cm}X}
+\toprule
+\textbf{Origem $\rightarrow$ destino} & \textbf{Porta} & \textbf{Protocolo} & \textbf{Credencial} \\
+\midrule
+Internet $\rightarrow$ balanceador & 80 & HTTP & nenhuma (público) \\
+Balanceador $\rightarrow$ nginx da borda & 80 & HTTP & \emph{security group} \texttt{sg-alb} \\
+Balanceador $\rightarrow$ API & 8000 & HTTP & \emph{security group} \texttt{sg-alb} \\
+Balanceador $\rightarrow$ painel & 3000 & HTTP & \emph{security group} \texttt{sg-alb} + login do Grafana \\
+API $\rightarrow$ PostgreSQL & 5432 & TCP & \emph{security group} \texttt{sg-api} + senha do cofre \\
+Instâncias $\rightarrow$ \texttt{apt} & 80 & HTTP & nenhuma \\
+Instâncias $\rightarrow$ Docker Hub & 443 & HTTPS & nenhuma (repositórios públicos) \\
+API $\rightarrow$ provedor do modelo & 443 & HTTPS & \texttt{LLM\_API\_KEY} \\
+Operador $\rightarrow$ instâncias & 443 & HTTPS & SSM Session Manager, sem chave SSH \\
+\bottomrule
+\end{tabularx}
+{\small\itshape Fonte: \path{infra/network.tf} e \path{infra/compute.tf}.}
+\end{table}
+
+% =====================================================================
+\section{Componentes da Arquitetura}
+% =====================================================================
+
+Este capítulo descreve os seis componentes com o mesmo molde de sete blocos: descrição, objetivo,
+configurações principais, dependências, justificativa da utilização, passos de criação e
+configuração, e validações realizadas. O molde é repetido de propósito: quem procura um dado sobre
+um componente sabe onde encontrá-lo em todos os outros.
+
+\subsection{Application Load Balancer}
+
+\textbf{Descrição.} Um \emph{Application Load Balancer} \texttt{internet-facing}, na porta 80, com
+três grupos de alvos --- \texttt{tg-web}, \texttt{tg-api} e \texttt{tg-obs} --- e quatro regras de
+caminho sobre o \emph{listener} padrão.
+
+\textbf{Objetivo.} Dar ao projeto um endereço externo estável e um ponto único de entrada, e
+rotear por caminho para as três camadas sem que o nginx da borda conheça o backend (ADR-014).
+
+\textbf{Configurações principais.} \texttt{idle\_timeout = 240}, porque a ingestão de
+\path{/admin/ingest} passa dos 60 segundos do padrão --- hipótese da ADR-014, não medida em
+tráfego real; \texttt{drop\_\allowbreak{}invalid\_\allowbreak{}header\_\allowbreak{}fields =
+true}; \texttt{xff\_\allowbreak{}header\_\allowbreak{}processing\_\allowbreak{}mode = "append"} e \texttt{enable\_\allowbreak{}xff\_\allowbreak{}client\_\allowbreak{}port =
+false}, que são as duas condições de que a ADR-015 depende; \emph{health check} com intervalo de
+30 s, \emph{timeout} de 5 s, dois sucessos para saudável e três falhas para retirar o alvo.
+
+\textbf{Dependências.} A VPC \emph{default} e duas subnets \emph{default} em zonas distintas; o
+\texttt{sg-alb}; as três instâncias já criadas, porque os anexos de grupo de alvos apontam para os
+identificadores delas.
+
+\textbf{Justificativa da utilização.} Sem o balanceador, o endereço do projeto seria o IP público de
+uma instância --- valor que muda a cada \texttt{apply} e morre no \texttt{destroy}. O balanceador é
+também o único lugar fora da instância onde terminar a conexão e separar as exposições, e é o que
+torna as três VMs úteis em vez de apenas mais caras.
+
+\textbf{Passos de criação e configuração.} \texttt{terraform -chdir=infra apply} cria o balanceador,
+os três grupos de alvos, os três anexos, o \emph{listener} e as quatro regras; o identificador de
+cada grupo de alvos vem do \texttt{for\_each} sobre \texttt{\{web, api, obs\}} --- e \texttt{obs}
+aponta para a instância \texttt{api}, não para uma quarta máquina. O nome DNS sai no
+\emph{output} \texttt{alb\_dns\_name}, que é o \texttt{BASE\_URL} do \texttt{smoke} e a URL da
+demonstração.
+
+\textbf{Validações realizadas.} \texttt{aws elbv2 describe-load-balancers} mostra
+\texttt{State.Code = active}; a prova de criação, estado ativo e remoção sem órfão está em
+\path{docs/evidencias/f7-alb-probe.txt} (ativo em 121 s, removido em 153 s); o job \texttt{smoke}
+sonda \path{/healthz}, \path{/readyz}, \texttt{/}, \path{/grafana/} e \path{/metrics} pelo
+DNS do balanceador e reprova o \emph{workflow} a qualquer desvio.
+
+\subsection{vm-web (nginx)}
+
+\textbf{Descrição.} Uma instância \texttt{t3.micro}, com 2 vCPU e 1 GiB de memória, sem volume de
+dados, que executa apenas o serviço \texttt{web} do compose --- o nginx que serve a página única.
+
+\textbf{Objetivo.} Servir a interface ao navegador e nada mais: sem banco, sem segredo, sem
+dependência do backend.
+
+\textbf{Configurações principais.} \emph{Profile} \texttt{web} do \texttt{compose.yaml}; a porta 80
+publicada; o \texttt{nginx.conf} da borda viaja no \emph{payload} do deploy e é montado em
+\path{/etc/nginx/nginx.conf}, porque o hospedeiro não tem \emph{checkout} e um \emph{bind mount}
+sem arquivo faria o Docker criar um diretório vazio no lugar.
+
+\textbf{Dependências.} \texttt{sg-web}; a imagem \path{emanuelr05/skill-finder-web} publicada pelo
+job \texttt{build}; o \texttt{tg-web} como destino padrão do \emph{listener}.
+
+\textbf{Justificativa da utilização.} É o tipo menor da família e o único papel que não precisa de
+estado: nada em disco na borda justifica volume, e a instância pode ser recriada a qualquer momento
+sem perda. Isolar a borda também impede que uma falha no backend derrube a página servida ao navegador.
+
+\textbf{Passos de criação e configuração.} O \texttt{user\_data} instala \texttt{docker.io} e
+\texttt{docker-compose-v2} com \texttt{DPkg::Lock::Timeout=300} e cria \path{/opt/app}; o job
+\texttt{deploy} envia o \emph{payload} e roda o \emph{profile} \texttt{web} por SSM, sem Infisical
+--- a imagem da borda não tem segredo (\path{infra/compute.tf}, ADR-016).
+
+\textbf{Validações realizadas.} O \texttt{smoke} exige \path{GET /} com 200 e
+\texttt{text/html}; o \emph{health check} do \texttt{tg-web} sonda \texttt{/} a cada 30 s; o
+\texttt{smoke} também confirma que \path{/metrics} responde 404 na borda, provando que o caminho
+não chega à API.
+
+\subsection{vm-api (NestJS)}
+
+\textbf{Descrição.} Uma instância \texttt{t3.small}, com 2 vCPU e 2 GiB de memória e volume EBS de
+20 GiB gp3, que executa o serviço \texttt{api} e, no \emph{profile} \texttt{obs}, os cinco
+contêineres de observabilidade.
+
+\textbf{Objetivo.} Executar a API NestJS, que interpreta a intenção com o modelo, aplica o
+\emph{ranking} determinístico e responde a busca; e hospedar a stack de observabilidade, porque só
+esta máquina alcança \texttt{api:8000} pela rede do compose.
+
+\textbf{Configurações principais.} Porta 8000 para a API e 3000 para o painel; no compose o
+\emph{bind} é \emph{loopback}, e o deploy exporta \texttt{API\_BIND=0.0.0.0} e
+\texttt{GRAFANA\_\allowbreak{}BIND=0.0.0.0} --- o filtro é o \emph{security group}; \path{/healthz} e
+\path{/readyz} como sondas; rate limit de 10
+buscas por minuto e 60 por dia por cliente, com teto global diário de chamadas ao modelo; a
+migração do Prisma roda antes do \texttt{compose up}, dentro do mesmo \texttt{ssm\_run}.
+
+\textbf{Dependências.} \texttt{sg-api}; a imagem \path{emanuelr05/skill-finder-api}; o PostgreSQL
+alcançável em \texttt{vm-db}:5432; os seis segredos no Infisical; a saída 443 para o provedor do
+modelo e para o Docker Hub.
+
+\textbf{Justificativa da utilização.} É a única camada que precisa de rede para fora em 443 durante
+a operação --- para o provedor do modelo --- e a que precisa de mais memória, porque carrega API e
+observabilidade. Concentrar as duas na mesma máquina é a consequência direta da ADR-009: o
+Prometheus precisa da rede do compose para raspar \path{/metrics}, que responde 404 na borda.
+
+\textbf{Passos de criação e configuração.} O \texttt{user\_data} monta o volume por
+\texttt{LABEL=docker-data} em \path{/var/lib/docker}; o \emph{payload} do deploy grava o compose,
+o \emph{override} e a configuração de \path{observability/} em \path{/opt/app}; o
+\texttt{ssm\_run} do papel \texttt{api} roda \texttt{prisma:deploy}, sobe o \emph{profile}
+\texttt{api}, ingere o catálogo em \texttt{127.0.0.1:8000} e, num quarto \texttt{ssm\_run}, sobe o
+\emph{profile} \texttt{obs}.
+
+\textbf{Validações realizadas.} \texttt{smoke} exige \path{/healthz} e \path{/readyz} com 200 e
+JSON de \texttt{status: "ok"}; \path{POST /api/v1/admin/ingest} sem token precisa responder 401; o
+run \texttt{45273346584} fechou verde com os cinco jobs, com o \texttt{provision} pulado por
+desenho; o ensaio da F6 mostra o deploy completo em
+0,8 minuto (\path{docs/evidencias/f6-ensaio.md}).
+
+\subsection{vm-db (PostgreSQL)}
+
+\textbf{Descrição.} Uma instância \texttt{t3.small}, com 2 vCPU e 2 GiB de memória e volume EBS de
+20 GiB gp3, que executa apenas o serviço \texttt{postgres}, na imagem
+\texttt{postgres:16-alpine}.
+
+\textbf{Objetivo.} Guardar o catálogo, o histórico de busca e as tabelas de cache, e responder à
+busca lexical com \texttt{tsvector} e \texttt{pg\_trgm} (ADR-002).
+
+\textbf{Configurações principais.} Volume EBS dedicado montado em \path{/var/lib/docker}, o que
+preserva o volume nomeado do PostgreSQL quando a instância é recriada; nenhuma porta pública; a
+senha vem de \texttt{POSTGRES\_PASSWORD} no cofre, e o \texttt{DATABASE\_URL} é montado no script do
+deploy a partir do IP privado do banco (ADR-016).
+
+\textbf{Dependências.} \texttt{sg-db}, que só aceita 5432 de \texttt{sg-api}; a imagem pública do
+PostgreSQL; a saída 80 para o \texttt{apt} e 443 para o Docker Hub.
+
+\textbf{Justificativa da utilização.} É o único componente com estado real. RDS está fora por
+medição --- zero DB \emph{subnet groups} na conta ---, e a alternativa de réplica em outra instância
+agregaria complexidade de replicação e \emph{failover} sem requisito que a pagasse (ADR-012). O
+banco é reconstruível pela ingestão; o que importa preservar é o histórico de busca.
+
+\textbf{Passos de criação e configuração.} O \texttt{user\_data} espera o disco por caminho
+\texttt{by-id} por até 600 s, formata com \texttt{mkfs.ext4 -L docker-data} e monta por
+\texttt{LABEL}; se o volume não aparecer, o hospedeiro segue no disco raiz e registra o aviso, em vez
+de abortar antes de subir o Docker (\path{infra/compute.tf}). O \emph{snapshot} do EBS é o único
+backup e é feito antes de todo \texttt{destroy} (\path{docs/runbook-operacao.md} §3.1).
+
+\textbf{Validações realizadas.} \path{/readyz} faz \texttt{SELECT 1} e responde 503 controlado
+quando o banco está fora --- o \texttt{smoke} lê esse código, e o \emph{health check} do balanceador
+deliberadamente não o usa; a migração roda no deploy e falha o job se o banco não responder; a
+varredura de órfãos confirma que o volume foi removido com a instância.
+
+\subsection{Stack de observabilidade}
+
+\textbf{Descrição.} Cinco contêineres no \emph{profile} \texttt{obs} do \texttt{compose.yaml}:
+Prometheus v2.55.1, Loki 3.3.2, Promtail 3.3.2, node-exporter v1.8.2 e Grafana 11.4.0, mais o
+contêiner da própria API como alvo.
+
+\textbf{Objetivo.} Tornar visível o que a aplicação faz --- taxa de requisição, erro, latência,
+chamadas ao modelo, degradação e idade do catálogo --- e dar ao operador um lugar único para
+investigar quando o \texttt{smoke} reprova.
+
+\textbf{Configurações principais.} Raspagem a cada 15 s em dois alvos (\path{api:8000/metrics} e
+\texttt{node-exporter:9100}); retenção de 7 dias ou 512 MB no Prometheus e de 168 h no Loki;
+Promtail lendo \path{/var/lib/docker/containers/*/*-json.log} por \emph{docker\_sd}, com
+\texttt{level} e \texttt{route} como rótulos de baixa cardinalidade; quatro painéis provisionados por
+arquivo; limites de memória somando 1,22 GiB.
+
+\textbf{Dependências.} A rede do compose da \texttt{vm-api}; o \emph{socket} do Docker montado
+somente para leitura no Promtail; a regra \path{/grafana/*} do balanceador para o \texttt{tg-obs};
+\texttt{GRAFANA\_PASSWORD} no cofre.
+
+\textbf{Justificativa da utilização.} Sem a stack, o único sinal de saúde seria o \texttt{smoke}, que
+roda uma vez por deploy. A ADR-009 manteve os cinco contêineres no mesmo compose e sem Telegraf e
+sem cAdvisor para não pagar memória em um hospedeiro de 2 GiB; a ADR-013 os levou para a VM da API
+porque é a única que alcança \texttt{api:8000}.
+
+\textbf{Passos de criação e configuração.} O \emph{payload} do deploy envia
+\path{observability/} e o \emph{override}; o quarto \texttt{ssm\_run} roda
+\texttt{compose --profile obs up -d --no-build} dentro de um
+\texttt{infisical secrets-manager run} próprio, de onde vem a senha do painel. Os arquivos viajam
+porque um \emph{bind mount} sem arquivo faria Prometheus, Loki e Promtail entrarem em
+\emph{restart loop} com \texttt{up -d} respondendo zero do mesmo jeito.
+
+\textbf{Validações realizadas.} O \texttt{smoke} aceita apenas 302 ou 401 em \path{/grafana/} ---
+200 significa painel aberto na internet, 404 significa painel sem
+\texttt{GF\_\allowbreak{}SERVER\_\allowbreak{}SERVE\_\allowbreak{}FROM\_\allowbreak{}SUB\_\allowbreak{}PATH} e 502 significa stack fora; o ensaio da F6 registra
+\texttt{::obs-ok::} e os cinco contêineres \texttt{Up}; \path{docs/evidencias/f5-seguranca.txt}
+transcreve as consultas de verificação.
+
+\subsection{Bucket de state (S3)}
+
+\textbf{Descrição.} Um bucket S3 versionado, com criptografia SSE-S3 e bloqueio total de acesso
+público, que guarda o \texttt{terraform.tfstate} do projeto. Nome:
+\texttt{bcc-cloud-tfstate-794399909334}.
+
+\textbf{Objetivo.} Guardar o \emph{state} fora das máquinas e fora do repositório, de modo que
+qualquer sessão nova consiga reconstruir o ambiente sem depender do que restou em disco.
+
+\textbf{Configurações principais.} Versionamento habilitado; \texttt{encrypt = true} no bloco
+\emph{backend}; \texttt{use\_\allowbreak{}lockfile = true}, que coloca o \emph{lock} no próprio S3 e dispensa
+tabela DynamoDB, exigindo Terraform 1.10 ou superior; chave
+\path{projeto2/terraform.tfstate}; \emph{backend} parcial, com o nome do bucket vindo de
+\texttt{-backend-config} e nunca versionado.
+
+\textbf{Dependências.} A conta do laboratório e a permissão de \texttt{s3api} que a sessão do
+Academy já tem; o script \path{scripts/bootstrap-state.sh}, executado uma vez por conta.
+
+\textbf{Justificativa da utilização.} É o único recurso do projeto que sobrevive ao \texttt{destroy}
+--- e é exatamente por isso que ele não é criado pelo Terraform: o \emph{state} não pode morar dentro
+do recurso que ele descreve. Sem ele, o \texttt{destroy} deixaria órfãos invisíveis e o
+\texttt{apply} seguinte não saberia o que já existe.
+
+\textbf{Passos de criação e configuração.} \path{bash scripts/bootstrap-state.sh} cria o bucket,
+habilita versionamento e SSE-S3 e bloqueia acesso público; o bloco \texttt{terraform} que ele imprime
+é colado em \path{infra/backend.tf}. O runbook proíbe apagar o bucket.
+
+\textbf{Validações realizadas.} O script confere o estado do versionamento e falha se não ficar
+\texttt{Enabled}; ao fim de cada janela, \texttt{terraform state list} precisa voltar vazio enquanto
+\texttt{aws s3 ls} continua listando o \texttt{terraform.tfstate} --- é a prova de que o
+\texttt{destroy} removeu os 38 recursos e preservou o registro.
+
+% =====================================================================
+\section{Controles de Segurança}
+% =====================================================================
+
+Os controles estão organizados por camada, do mais externo ao mais interno, e cada um deles é
+verificável em arquivo ou em evidência. O que não pôde ser controlado está no capítulo 17.
+
+\textbf{Superfície mínima.} Uma única porta aceita tráfego da internet: 80, no \texttt{sg-alb}. A
+porta 8000 da API só é alcançável do \texttt{sg-alb}; a 3000, idem; a 5432, apenas do
+\texttt{sg-api}. Nenhuma regra de entrada interna usa CIDR.
+
+\textbf{SSH fechado por padrão.} \texttt{allowed\_ssh\_cidrs} tem default
+\texttt{[]}, e o recurso da regra 22 usa \texttt{for\_each} sobre essa lista: com a lista vazia, a
+regra não existe, e nenhuma varredura de porta encontra \texttt{sshd} exposto. A ausência da regra é
+mais forte que uma regra restrita, porque não depende de o operador acertar o CIDR.
+
+\textbf{Metadados por IMDSv2.} \texttt{http\_\allowbreak{}tokens = "required"} e
+\texttt{http\_\allowbreak{}put\_\allowbreak{}response\_\allowbreak{}hop\_\allowbreak{}limit = 1} em todas as instâncias fecham o caminho clássico de
+\emph{SSRF} para credencial de instância (\path{infra/compute.tf}).
+
+\textbf{Segredo sem arquivo.} Os seis valores --- \texttt{ADMIN\_TOKEN},
+\texttt{POSTGRES\_PASSWORD}, \texttt{DATABASE\_URL}, \texttt{IP\_HASH\_SALT},
+\texttt{LLM\_API\_KEY} e \texttt{GRAFANA\_PASSWORD} --- vivem no Infisical e são injetados no
+ambiente do processo com \texttt{infisical secrets-manager run}, com um \emph{trap} que executa
+\texttt{logout} e apaga o script intermediário em sucesso, erro ou sinal. Não existe \texttt{.env}
+em disco no hospedeiro (\path{docs/seguranca.md}).
+
+\textbf{Borda de L7.} \texttt{drop\_\allowbreak{}invalid\_\allowbreak{}header\_\allowbreak{}fields = true} é o único controle de camada 7
+que o laboratório permite, já que não há WAF. O modo \texttt{append} do
+\texttt{X-Forwarded-For}, com a porta do cliente desligada, é o que impede o cliente de escolher o
+próprio \texttt{client\_hash} e, com ele, o próprio balde de rate limit (ADR-015).
+
+\textbf{Rate limit e orçamento do modelo.} Dez buscas por minuto e sessenta por dia por cliente
+identificado por \texttt{sha256(sal:ip)}; teto global diário de chamadas ao modelo em
+\texttt{LLM\_\allowbreak{}DAILY\_\allowbreak{}CALL\_\allowbreak{}BUDGET}, com reserva atômica em uma instrução SQL. A degradação é
+explícita: a resposta sai com \texttt{degraded: true}.
+
+\textbf{Texto externo como dado.} \texttt{SKILL.md}, resumo e consulta entram delimitados e apenas
+na mensagem de usuário, nunca no \emph{system prompt}; a saída é validada contra esquema e campo
+fora do esquema é descartado; a LLM nunca cita skill fora do conjunto recuperado (ADR-001 e ADR-004).
+
+% =====================================================================
+\section{Fluxo de Comunicação}
+% =====================================================================
+
+Há três fluxos distintos, e confundi-los é a origem da maior parte dos erros de operação deste
+projeto. O primeiro é o do usuário: navegador $\rightarrow$ balanceador $\rightarrow$ nginx ou API.
+O segundo é o interno: API $\rightarrow$ PostgreSQL, e Prometheus $\rightarrow$ API. O terceiro é o
+de controle: GitHub Actions $\rightarrow$ SSM $\rightarrow$ as três instâncias, e as instâncias
+$\rightarrow$ Docker Hub e provedor do modelo.
+
+No fluxo do usuário, o balanceador decide por caminho e não por conteúdo. \path{/api/*} vai para a
+API; \path{/healthz} e \path{/readyz} também, cada um com regra própria, para que a sonda não
+dependa da regra do prefixo; \path{/grafana/*} vai para o \texttt{tg-obs}; e todo o resto vai para
+a borda nginx. Uma consequência pouco intuitiva: \path{/metrics} não tem regra, cai no destino
+padrão e responde 404 no nginx --- é assim que a borda fecha a rota sem precisar de \emph{firewall}.
+
+No fluxo interno, a API abre conexão com o banco com a senha do cofre e o endereço privado montado no
+\emph{script} do deploy. O Prometheus raspa \path{api:8000/metrics} e
+\texttt{node-exporter:9100} pela rede do compose, nunca pela rede da VPC: é por isso que ele precisa
+estar na mesma máquina da API.
+
+No fluxo de controle, o \texttt{deploy} resolve um identificador por papel com
+\texttt{Name=tag:role}, espera o agente SSM ficar \texttt{Online} em cada instância, envia o
+\emph{payload} com o compose e a configuração de observabilidade e executa quatro comandos em série.
+Nenhum deles usa a porta 22.
+
+% =====================================================================
+\section{Controle de Acesso e Identidade}
+% =====================================================================
+
+A conta do AWS Academy não permite criar papel nem política: \texttt{iam:Create*} é negado, e o
+Terraform lê \texttt{LabRole} e \texttt{LabInstanceProfile} por \texttt{data}
+(\path{infra/data.tf}). Isso fixa o modelo de identidade da instância e explica por que o projeto
+não desenha uma política por recurso: onde o laboratório permite, o privilégio é mínimo; onde não
+permite, ele é o mínimo que a plataforma oferece, e está declarado.
+
+O acesso administrativo é por \textbf{SSM Session Manager}, não por SSH. A porta 22 nasce fechada, o
+agente SSM é o único canal, e a autorização vem da sessão do Academy --- não de um par de chaves
+distribuído. O par \texttt{vockey} continua declarado em \texttt{key\_name}, mas serve de reserva
+para um diagnóstico pontual, e a regra que o abriria não existe por padrão.
+
+O deploy usa uma \emph{machine identity} do Infisical com Universal Auth e papel \texttt{Viewer}:
+ela só lê o ambiente \texttt{prod} do projeto. O \emph{runner} do GitHub Actions nunca vê segredo de
+aplicação --- os seis nomes não existem como \emph{secret} do repositório ---, e a única exceção é o
+\emph{client secret} da identidade, que viaja no \emph{payload} do SSM e por isso está declarado como
+risco. O token dela morre no fim do comando.
+
+Quem lê o quê, em resumo: o \emph{runner} lê as seis credenciais de infraestrutura e publicação
+(AWS, Docker Hub, Infisical); o hospedeiro lê os seis valores de aplicação no momento do deploy; cada
+contêiner recebe apenas as variáveis que o compose lhe passa; e o histórico de invocações do SSM é
+legível por qualquer credencial com \texttt{ssm:ListCommands} na conta --- razão pela qual a
+identidade é revogada no fim da entrega (issue \#65, aberta de propósito).
+
+% =====================================================================
+\section{Rotas e Conectividade}
+% =====================================================================
+
+O \emph{listener} tem prioridade explícita por regra e um destino padrão. A
+Tabela~\ref{tab:rotas} repete a configuração de \path{infra/alb.tf} na forma como o operador a
+lê: caminho, prioridade, grupo de alvos e sonda.
+
+\begin{table}[tb]
+\caption{Rotas do balanceador: caminho, prioridade, destino e sonda de saúde.}
+\label{tab:rotas}
+\centering\small
+\begin{tabularx}{\textwidth}{p{2.6cm}cp{1.6cm}p{3.0cm}X}
+\toprule
+\textbf{Caminho} & \textbf{Prior.} & \textbf{Grupo} & \textbf{Sonda} & \textbf{Destino} \\
+\midrule
+\path{/api/*} & 10 & \texttt{tg-api} & \path{/healthz} & API NestJS, porta 8000 \\
+\path{/healthz} & 20 & \texttt{tg-api} & \path{/healthz} & sonda de vida da API \\
+\path{/readyz} & 30 & \texttt{tg-api} & \path{/healthz} & sonda de prontidão (banco) \\
+\path{/grafana/*} & 40 & \texttt{tg-obs} & \path{/grafana/api/health} & Grafana, porta 3000 \\
+\emph{padrão} & --- & \texttt{tg-web} & \texttt{/} & nginx da borda, porta 80 \\
+\bottomrule
+\end{tabularx}
+{\small\itshape Fonte: \path{infra/alb.tf}.}
+\end{table}
+
+Duas escolhas merecem nota. O \emph{health check} do \texttt{tg-api} usa \path{/healthz} e nunca
+\path{/readyz}: o \texttt{readyz} responde 503 com catálogo velho, e o balanceador tiraria do ar
+uma API sadia por causa de um dado desatualizado --- degradação é visível ao usuário, não motivo de
+drenagem. E a sonda do \texttt{tg-obs} usa \path{/grafana/api/health}, que é o caminho com o
+prefixo aplicado, coerente com \texttt{GF\_\allowbreak{}SERVER\_\allowbreak{}SERVE\_\allowbreak{}FROM\_\allowbreak{}SUB\_\allowbreak{}PATH}.
+
+\textbf{Conectividade de saída.} As três camadas saem em 80 para o repositório do \texttt{apt} no
+primeiro boot e em 443 para o Docker Hub; a API acrescenta 443 para o provedor do modelo e 5432 para
+o banco. Sem a saída em 80, o \texttt{apt-get update} falha inteiro, a lista de pacotes fica vazia e
+o \texttt{install docker.io} responde ``no installation candidate'' --- o hospedeiro sobe sem Docker
+e o sintoma aparece no deploy como ``daemon sem resposta''
+(\path{infra/network.tf}, comentário nas linhas 179--183).
+
+\textbf{O nome da borda.} O endereço do projeto é o \texttt{alb\_dns\_name}, o nome que o serviço
+de balanceamento gera: prefixo do projeto, sufixo do balanceador e o domínio
+\texttt{elb.amazonaws.com} na região. O formato é do serviço, não um endereço de janela aberta: a
+infraestrutura é destruída ao fim de cada janela, e o mesmo nome só volta a resolver depois de um
+novo \texttt{apply} com o balanceador criado e o alvo saudável. Até o primeiro \emph{health check}
+passar, a borda devolve 503 do próprio balanceador, sem chegar a instância nenhuma
+(\path{docs/runbook-operacao.md} §1.4).
+
+% =====================================================================
+\section{Escalabilidade e Disponibilidade}
+% =====================================================================
+
+O que escala hoje é vertical: trocar o tipo da instância em \texttt{local.roles}
+(\path{infra/compute.tf}) e aplicar. É uma operação de janela, com parada, e serve para absorver
+uma demonstração mais pesada --- não para atender carga variável.
+
+O que \emph{não} escala é horizontal, e a razão é estrutural, não uma omissão. O rate limit vive em
+memória do processo, o \emph{lock} da ingestão vive em uma tabela do banco e a sessão do painel vive
+no Grafana daquela máquina: três estados locais que pressupõem uma instância de API. Duas réplicas
+exigiriam mover o contador para o Postgres, o que a ADR-006 deixou registrado como o caminho.
+
+A arquitetura \textbf{não é de alta disponibilidade}, e vale dizer exatamente por quê. As três
+instâncias estão na mesma subnet, na mesma zona de disponibilidade: a perda da zona derruba as três
+juntas. O banco é ponto único de falha --- uma instância, um volume, sem réplica e sem
+\emph{failover}. O balanceador é ponto único de entrada: ele melhora endereço e roteamento, não
+oferece continuidade. E a janela termina com \texttt{destroy}, o que significa que a
+``disponibilidade'' do ambiente é a duração da demonstração, por desenho (ADR-017).
+
+O caminho honesto para mudar isso tem quatro passos, e nenhum deles é gratuito no orçamento do
+laboratório: distribuir as três instâncias em zonas distintas e acrescentar um segundo alvo por
+grupo; mover o rate limit e o \emph{lock} para o banco, permitindo duas réplicas de API; trocar o
+banco em instância por um serviço gerenciado com réplica, o que hoje está bloqueado por falta de DB
+\emph{subnet group}; e aceitar a cobrança de hora ociosa de todos esses recursos. O capítulo 18
+lista isso como melhoria futura, não como pendência.
+
+% =====================================================================
+\section{CI/CD e Implantação}
+% =====================================================================
+
+O pipeline tem cinco jobs em série e uma regra que governa todos eles: nada é implantado sem CI
+verde para o mesmo SHA. A Figura~\ref{fig:pipeline} mostra a cadeia; o texto explica as decisões que
+não são óbvias.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{build/figuras/pipeline.pdf}
+  \caption{Pipeline de entrega: do CI verde ao \texttt{smoke} pela borda, com o provisionamento
+  manual fora do caminho normal.}
+  \label{fig:pipeline}
+  {\small\itshape Fonte: elaboração própria a partir de \path{.github/workflows/deploy.yml} e
+  \path{docs/app/06-pipeline-deploy.md}.}
+\end{figure}
+
+\textbf{gate.} Confere a sessão do laboratório com \texttt{sts get-caller-identity}, resolve o SHA,
+exige as variáveis e os segredos de que o pipeline precisa e verifica que existe um run verde do CI
+para aquele SHA. Um \texttt{workflow\_dispatch} manual não fura o gate: o run \texttt{45273141415},
+disparado à mão, reprovou exatamente nesse passo, e \path{docs/evidencias/f4-gate.md} transcreve a
+saída. O disparo normal é por \texttt{workflow\_run}, quando o CI fecha verde no \texttt{main}.
+
+\textbf{build.} Constrói as duas imagens a partir do alvo \texttt{runtime} e publica no Docker Hub
+com \emph{tag} igual ao SHA do commit, conferindo com \texttt{docker manifest inspect} que a tag
+existe no registro antes de seguir. Não há ECR: o Academy nega escrita em IAM, e a decisão está
+registrada em \path{docs/app/06-pipeline-deploy.md}.
+
+\textbf{provision.} Roda \texttt{terraform init}, \texttt{validate}, \texttt{plan} e \texttt{apply}
+com as variáveis que o \texttt{tfvars} daria. Está desligado por padrão e só roda com
+\texttt{provision=true}: o caminho normal assume a stack de pé. O ensaio o exercitou uma vez, com
+oito recursos aplicados de dentro do \emph{workflow} (run \texttt{45289944441}).
+
+\textbf{deploy.} Resolve um identificador por papel com \texttt{Name=tag:role}, espera o agente SSM
+ficar \texttt{Online} nos três, envia o \emph{payload} e executa quatro \texttt{ssm\_run} em série:
+\texttt{db}, \texttt{api} (com \texttt{prisma:deploy} antes do \texttt{compose up} e a ingestão em
+\texttt{127.0.0.1:8000}), \texttt{web} e \texttt{obs}. O \emph{payload} vai em \texttt{tar.gz} e
+\texttt{base64} dentro do próprio comando, porque o parâmetro \texttt{commands} do \texttt{SendCommand}
+para em torno de 24 KB e o comando medido ficou em 21,2 KB, com 2,8 KB de folga.
+
+\textbf{smoke.} Sonda a borda pública, não o hospedeiro: \path{/healthz} com 200 e JSON,
+\path{/readyz} com 200, \texttt{/} com 200 e HTML, \path{POST /api/v1/admin/ingest} sem token
+com 401, \path{/grafana/} com 302 ou 401 e \path{/metrics} com 404. O job espera a borda
+responder por até 600 s antes das seis checagens, porque um balanceador recém-criado leva minutos
+entre o DNS propagar e o alvo passar no \emph{health check}.
+
+\textbf{Rollback.} É o mesmo caminho com a \emph{tag} do SHA anterior, na mesma ordem, e o
+\texttt{build} é pulado porque a imagem já existe no registro. A ordem \texttt{db} antes de
+\texttt{api} não é invertida nem no rollback: a migração é sempre para a frente.
+
+% =====================================================================
+\section{Observabilidade e Operação}
+% =====================================================================
+
+A stack de observabilidade responde a três perguntas de operação --- a API está atendendo, o modelo
+está respondendo, o catálogo está atualizado --- e a uma pergunta de diagnóstico: o que a aplicação
+registrou quando algo falhou. A Figura~\ref{fig:obs} mostra a topologia interna da máquina da API.
+
+\begin{figure}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{build/figuras/observabilidade.pdf}
+  \caption{Stack de observabilidade na máquina da API: dois alvos raspados, o caminho do log até o
+  Loki e o painel alcançado pela regra do balanceador.}
+  \label{fig:obs}
+  {\small\itshape Fonte: elaboração própria a partir de \texttt{compose.yaml},
+  \path{observability/prometheus/prometheus.yml} e \path{observability/promtail/promtail.yml}.}
+\end{figure}
+
+\textbf{Métricas.} O Prometheus raspa dois alvos a cada 15 s: \path{api:8000/metrics} e
+\texttt{node-exporter:9100}. Prometheus, Loki e Grafana não se raspam de propósito ---
+\emph{self-scrape} gastaria série sem responder pergunta de operação num hospedeiro de 2 GiB. O passo
+de 15 s mantém \texttt{rate(...[5m])} com folga suficiente para os painéis.
+
+\textbf{Logs.} O Promtail é o único componente com acesso aos logs dos contêineres: ele descobre cada
+contêiner por \emph{docker\_sd}, resolve \path{/var/lib/docker/containers/*/*-json.log} e empurra
+para o Loki em \texttt{:3100}. O filtro é por
+\texttt{com.docker.compose.project=skills-search}, senão o Loki receberia os logs de outros projetos
+da mesma máquina. Do JSON da aplicação ele extrai \texttt{level} e \texttt{route} como rótulos;
+\texttt{query}, \texttt{query\_hash} e \texttt{client\_hash} nunca viram rótulo, porque são entrada
+de usuário e explodiriam o índice.
+
+\textbf{Painéis.} Quatro quadros num único painel provisionado por arquivo
+(\texttt{main.json}): RED da API, pipeline de busca e LLM, catálogo e logs de erro. Edição no navegador não sobrevive ao
+\emph{restart}, e é assim de propósito --- o painel é código.
+
+\textbf{Retenção.} Sete dias no Prometheus (ou 512 MB, o que vier antes) e 168 h no Loki. É o mesmo
+horizonte da janela dos painéis e da demonstração; guardar mais custa disco sem responder pergunta
+nova. O teto de \texttt{json-file} por contêiner é o que impede os 20 GiB de EBS de encherem.
+
+\textbf{A borda não expõe métrica.} \path{/metrics} responde 404 na URL do balanceador, porque
+nenhuma regra de \emph{listener} o encaminha --- ele cai no destino padrão e morre no nginx. O painel
+é o único caminho público, e ele pede login.
+
+% =====================================================================
+\section{Custos e Janela de Operação}
+% =====================================================================
+
+A conta segue a tabela de preço de \texttt{us-east-1} e é referência, não fatura: o laboratório
+não expõe custo por recurso. Serve para decidir quantas horas a stack pode ficar no ar. A
+Tabela~\ref{tab:custo} abre o total de 0,1147 US\$ por hora.
+
+\begin{table}[tb]
+\caption{Custo por hora da stack de pé, por família de recurso.}
+\label{tab:custo}
+\centering\small
+\begin{tabularx}{\textwidth}{p{6.6cm}p{4.4cm}p{2.2cm}X}
+\toprule
+\textbf{Recurso} & \textbf{Conta} & \textbf{US\$/h} & \textbf{Peso} \\
+\midrule
+Compute --- \texttt{t3.micro} + 2 $\times$ \texttt{t3.small} & 0,0104 + 0,0208 + 0,0208 & 0,0520 & 45\% \\
+Balanceador + LCU & 0,0225 + 0,0080 & 0,0305 & 27\% \\
+IPv4 --- 3 instâncias + 2 nós do balanceador & 5 $\times$ 0,0050 & 0,0250 & 22\% \\
+EBS --- 64 GiB gp3 & 64 $\times$ 0,0001096 & 0,0070 & 6\% \\
+\midrule
+\textbf{Total} & & \textbf{0,1147} & \\
+\bottomrule
+\end{tabularx}
+{\small\itshape Fonte: \path{docs/runbook-operacao.md} §5.}
+\end{table}
+
+A Tabela~\ref{tab:cenarios} traduz a hora em decisões. O crédito de US\$ 50 compra 436 horas, ou
+18,2 dias --- menos que o semestre, o que torna ``deixar ligado'' inviável por aritmética, não por
+disciplina.
+
+\begin{table}[tb]
+\caption{Cenários de consumo do crédito de US\$ 50 do semestre.}
+\label{tab:cenarios}
+\centering\small
+\begin{tabularx}{\textwidth}{p{6.0cm}p{3.2cm}X}
+\toprule
+\textbf{Cenário} & \textbf{Horas} & \textbf{Custo} \\
+\midrule
+Crédito inteiro com a stack no ar & 436 h & 18,2 dias \\
+Uma demonstração & 4 h & 0,46 US\$ \\
+Uma semana esquecida & 168 h & 19,30 US\$ (39\% do crédito) \\
+\bottomrule
+\end{tabularx}
+{\small\itshape Fonte: \path{docs/runbook-operacao.md} §5.}
+\end{table}
+
+O balanceador, que a versão de uma única instância não tinha, responde por 0,0305 US\$ por hora ---
+cerca de 27\% do total --- e cobra hora ociosa. Parar as instâncias no meio da janela economiza só o
+compute: o relógio do balanceador e do EBS continua correndo.
+
+Por isso a operação é uma janela com começo e fim declarados (ADR-017): \texttt{apply} e deploy,
+\emph{snapshot} do volume do banco antes de qualquer remoção, demonstração e evidências,
+\texttt{destroy} e varredura de órfãos, e por fim a confirmação de \texttt{state list} vazio com o
+bucket intacto. A varredura confere seis categorias --- instâncias, volumes, \emph{security groups},
+\emph{load balancers}, \emph{target groups} e o \emph{state} local ---, e qualquer linha é órfão
+consumindo crédito. O plano B registrado na ADR-017, \texttt{var.enable\_\allowbreak{}alb=false} com volta ao IP
+público e Elastic IP, cortaria os 0,0305 US\$ por hora do balanceador, mas não está implementado em
+\path{infra/} e não é usado enquanto o balanceador estiver de pé.
+
+% =====================================================================
+\section{Rastreabilidade: Milestones e Issues}
+% =====================================================================
+
+O trabalho está organizado em nove milestones e 64 issues no GitHub. Sessenta e três estão fechadas;
+a única aberta é deliberada. A Tabela~\ref{tab:ms} mostra a distribuição, que é também a ordem em que
+a arquitetura foi construída.
+
+\begin{table}[tb]
+\caption{Milestones do projeto, escopo e quantidade de issues.}
+\label{tab:ms}
+\centering\small
+\begin{tabularx}{\textwidth}{p{1.2cm}Xcp{2.4cm}}
+\toprule
+\textbf{ID} & \textbf{Escopo} & \textbf{Issues} & \textbf{Estado} \\
+\midrule
+F0 & Pré-requisitos e validação do sandbox & 2 & fechada \\
+F1 & Proposta e decisões & 1 & fechada \\
+F2 & Aplicação (API, SPA, catálogo, ranking) & 19 & fechada \\
+F2.10 & Busca real: LLM, catálogo ao vivo, pt-BR e design & 13 & fechada \\
+F3 & Infraestrutura como código & 8 & fechada \\
+F4 & Pipeline CI/CD & 2 & fechada \\
+F5 & Observabilidade e segredos & 4 & fechada \\
+F6 & Entrega & 5 & \textbf{aberta} \\
+F7 & Arquitetura distribuída: balanceador, três VMs, janela & 10 & fechada \\
+\midrule
+ & \textbf{Total} & \textbf{64} & 63 fechadas \\
+\bottomrule
+\end{tabularx}
+{\small\itshape Fonte: GitHub Issues do repositório (\texttt{gh issue list --state all}),
+consulta de 26/11/2026.}
+\end{table}
+
+A issue aberta é a \#65, \texttt{chore(security): rotacionar a LLM\_\allowbreak{}API\_\allowbreak{}KEY e revogar a machine
+identity}. Ela fica aberta de propósito até depois da entrega: rotacionar a chave antes invalidaria a
+demonstração, e revogar a identidade antes do último deploy quebraria o pipeline. É a única dívida
+com prazo declarado no projeto.
+
+As dezessete ADRs do capítulo 5 são o registro das decisões que atravessaram essas milestones. A
+ligação entre as duas coisas é direta: uma issue que muda arquitetura produz uma ADR, e da ADR-010
+à ADR-017 nasceram justamente na F7, quando a aplicação já existia e o que faltava era a topologia.
+
+% =====================================================================
+\section{Limitações e Riscos Aceitos}
+% =====================================================================
+
+Este capítulo existe para que ninguém descubra sozinho, em produção, o que o projeto já sabia. A
+Tabela~\ref{tab:riscos} lista os riscos, o que os limita hoje e por que foram aceitos.
+
+\begin{table}[tb]
+\caption{Riscos aceitos e declarados, com o que limita cada um.}
+\label{tab:riscos}
+\centering\small
+\begin{tabularx}{\textwidth}{p{3.0cm}X}
+\toprule
+\textbf{Risco} & \textbf{O que limita hoje, e por que foi aceito} \\
+\midrule
+Sem tolerância a falha de zona & As três instâncias ficam na mesma zona, o banco é ponto único de
+falha e o balanceador é ponto único de entrada. A conta é de laboratório e a janela termina com
+\texttt{destroy}: comprar redundância seria pagar por disponibilidade que a demonstração não usa. \\
+Borda em HTTP puro, sem TLS & O Academy não oferece domínio próprio nem certificado. A partir da F7
+há credencial de usuário nesse caminho: o login do Grafana cruza a rede em claro. O que limita o dano
+é não ingerir pela borda e rotacionar \texttt{GRAFANA\_PASSWORD} e \texttt{ADMIN\_TOKEN} se algum
+tiver cruzado rede compartilhada. \\
+Painel publicado na internet & O Grafana é alcançável em \path{/grafana/} pela URL do
+balanceador, atrás de login, sem TLS. O que o limita é o login mais o \texttt{sg-api}, que só aceita
+3000 do \texttt{sg-alb} --- o \emph{bind} em \texttt{0.0.0.0} deixou de ser controle na F7. \\
+\texttt{LabRole} larga e compartilhada & O sandbox nega \texttt{iam:Create*}; a instância usa o
+perfil que a conta já tem. A conta é efêmera e sem dado real, e nada além do necessário é
+provisionado. \\
+\emph{Client secret} no payload do SSM & Não há outro canal: a porta 22 está fechada e a conta não
+cria IAM nem parâmetro com KMS. O segredo só lê o ambiente \texttt{prod}, o \emph{runner} o mascara
+e revogar a identidade invalida o valor no histórico. \\
+Sem autenticação de usuário e permalink aberto & Não há dado pessoal estruturado; o texto da busca é
+retido por 30 dias e o permalink não é autenticado. É decisão de escopo do produto, não da
+infraestrutura. \\
+Chave do modelo a rotacionar & É a issue \#65. O risco é de exposição acumulada, e o prazo é depois
+da entrega, para não invalidar a demonstração. \\
+Restauração de banco não medida & O runbook promete o comando de \emph{snapshot}, não um tempo de
+restauração. O catálogo é reconstruível pela ingestão; o histórico de busca é o que se perde. \\
+\bottomrule
+\end{tabularx}
+{\small\itshape Fonte: \path{docs/seguranca.md} §5 e \path{docs/app/02-arquitetura.md} §10.}
+\end{table}
+
+Três notas fecham o capítulo. A primeira é que \emph{não há} cache externo nem fila: cache, rate
+limit e agendador vivem na API, com Postgres, e isso é uma escolha de simplicidade registrada na
+ADR-006. A segunda é que a infraestrutura não está no ar entre sessões --- qualquer endereço citado
+neste documento é exemplo de janela encerrada. A terceira é que a arquitetura não usa serviço
+gerenciado de banco, de cache ou de escalonamento: nenhum deles existe na conta do laboratório, e a
+ausência está medida, não suposta.
+
+% =====================================================================
+\section{Possíveis Melhorias Futuras}
+% =====================================================================
+
+As melhorias abaixo estão em ordem de relação custo-benefício dentro do que o laboratório permite.
+Nenhuma delas é pendência da entrega: são caminhos, com o preço ao lado.
+
+\textbf{HTTPS na borda.} Exige domínio próprio e certificado --- o Academy não fornece nenhum dos
+dois. Com um domínio, o caminho é certificado gerenciado no balanceador e redirecionamento de 80 para
+443, o que resolve de uma vez o login do painel em claro e a ingestão pela borda. Alternativa sem
+custo: túnel SSM para o painel, que já é possível hoje e não depende de DNS.
+
+\textbf{Banco gerenciado com réplica.} Hoje bloqueado pela ausência de DB \emph{subnet group} na
+conta. Em uma conta com permissão de IAM, o banco gerenciado traria \emph{backup} automático, PITR e
+\emph{failover} --- e cobraria por hora ociosa, o que muda a conta do capítulo 15.
+
+\textbf{Duas réplicas de API com escalonamento (Auto Scaling).} Exige primeiro mover o rate limit e o \emph{lock} da
+ingestão para o banco (ADR-006), e depois distribuir as instâncias em zonas distintas com um segundo
+alvo por grupo. É o pré-requisito real de qualquer conversa sobre tolerância à falha de zona.
+
+\textbf{WAF na borda.} O único controle de camada 7 hoje é \texttt{drop\_invalid\_\allowbreak header\_fields}.
+Um WAF acrescentaria limitação de taxa por IP na borda e regras gerenciadas, com custo fixo mensal
+que o crédito do semestre não comporta.
+
+\textbf{Métricas de negócio.} Os painéis consultam as métricas que existem; etapa, token, fallback e
+total de skills estavam previstos e não existem no código. Quando nascerem, o painel ganha a série sem
+mudar de forma --- é a vantagem de ter provisionado o painel por arquivo.
+
+\textbf{Custo como métrica.} O projeto mede horas por tabela de preço, não por fatura. Um painel de
+custo por janela, alimentado pela duração do \texttt{apply} ao \texttt{destroy}, fecharia a última
+lacuna entre o que o runbook promete e o que o operador vê.
+
+% =====================================================================
+\section*{Apêndice A --- Evidências}
+\addcontentsline{toc}{section}{Apêndice A --- Evidências}
+% =====================================================================
+
+As afirmações deste documento se apoiam em arquivos versionados. A Tabela~\ref{tab:evid} diz o que
+cada um prova, sem transcrever o conteúdo --- a transcrição está no próprio arquivo, com o comando e
+a saída.
+
+\begin{table}[H]
+\caption{Arquivos de evidência e o que cada um prova.}
+\label{tab:evid}
+\centering\small
+\begin{tabularx}{\textwidth}{p{4.7cm}X}
+\toprule
+\textbf{Arquivo} & \textbf{O que prova} \\
+\midrule
+\path{docs/evidencias/f4-gate.md} & O pipeline em arquivo: um run verde
+(\texttt{45273346584}), dois vermelhos (\texttt{45273141415}, \texttt{44849868942}) e o gate
+bloqueando o disparo manual. \\
+\path{docs/evidencias/f6-ensaio.md} & O ensaio cronometrado: 2,0 min de ciclo no caminho normal e
+3,8 min com provisionamento, mais o defeito que o ensaio encontrou. \\
+\path{docs/evidencias/f7-alb-probe.txt} & O balanceador cria, fica \texttt{active} em 121 s e é
+removido em 153 s sem órfão. \\
+\path{docs/evidencias/f5-seguranca.txt} & Os seis segredos no cofre, o mascaramento no log e as
+consultas de verificação da stack de observabilidade. \\
+\path{docs/evidencias/f3-smoke.txt} & A infraestrutura da F3 aplicada e destruída: oito recursos,
+\texttt{Destroy complete! Resources: 8 destroyed.} \\
+\path{docs/evidencias/sandbox.md} & O checklist K1--K22 do que a conta do Academy permite e do que
+ela nega, medido comando a comando. \\
+\bottomrule
+\end{tabularx}
+{\small\itshape Fonte: \path{docs/evidencias/}.}
+\end{table}
+
+\end{document}
