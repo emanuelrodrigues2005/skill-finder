@@ -73,7 +73,6 @@ export const STR = {
   },
 
   search: {
-    heading: "Buscar",
     queryLabel: "O que você precisa que a skill faça?",
     /** Contador do texto aparado: `2/500 caracteres — mínimo de 3.` */
     queryCounter: (length: number, max: number, min: number): string =>

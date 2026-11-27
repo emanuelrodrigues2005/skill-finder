@@ -179,18 +179,6 @@ export default function SearchPage() {
 
   return (
     <section>
-      <h2
-        style={{
-          fontSize: font.size.heading,
-          fontWeight: font.weight.strong,
-          letterSpacing: font.tracking.tight,
-          lineHeight: font.leading.tight,
-          margin: `0 0 ${space.lg}`,
-        }}
-      >
-        {STR.search.heading}
-      </h2>
-
       {/* Aviso de categorias: irmão do formulário, porque o formulário sempre renderiza. */}
       {categoriesFailure ? (
         <div style={{ marginBottom: space.lg }}>
